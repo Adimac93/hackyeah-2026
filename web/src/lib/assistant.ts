@@ -1,6 +1,5 @@
-// AI security assistant: pure logic + the provider seam. No framework imports, so it's unit-testable.
-// Today the provider is a deterministic mock; swap `getAssistant()` for a real LLM call later —
-// `buildSystemPrompt` already produces the policy-grounded prompt a real model would get.
+// AI security assistant: pure logic shared by every model. No framework imports, so it's unit-testable.
+// Real model calls live in `lib/llm/providers.ts`; `mockProvider` is the offline fallback.
 
 export type ChatRole = "user" | "assistant";
 export interface ChatTurn {
@@ -18,6 +17,7 @@ export interface ChatConversation {
   id: string;
   user_id: string;
   title: string;
+  model: string;
   created_at: string;
   updated_at: string;
 }
@@ -25,6 +25,8 @@ export type ChatMessage = ChatTurn & {
   id: number;
   conversation_id: string;
   created_at: string;
+  /** which model wrote an assistant reply; null for the user's messages */
+  model: string | null;
 };
 
 export type AssistantProvider = (input: {
@@ -217,8 +219,3 @@ export function mockReply(
 // async like a real, network-bound provider would be
 export const mockProvider: AssistantProvider = async ({ history, policies }) =>
   await Promise.resolve(mockReply(history, policies));
-
-/** The provider seam. Replace with a real LLM client (using `buildSystemPrompt`) when one is chosen. */
-export function getAssistant(): AssistantProvider {
-  return mockProvider;
-}

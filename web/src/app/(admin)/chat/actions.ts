@@ -3,15 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import {
-  conversationTitle,
-  getAssistant,
-  parseChatMessage,
-} from "@/lib/assistant";
+import { conversationTitle, parseChatMessage } from "@/lib/assistant";
 import type { ChatTurn, PolicySnippet } from "@/lib/assistant";
 import { requireChatUser } from "@/lib/auth";
 import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
+import { availableModels, findModel } from "@/lib/llm/models";
+import { ProviderError, getAssistant } from "@/lib/llm/providers";
+
+/** Longest stored message; matches the chat_messages check constraint. */
+const MAX_STORED_LENGTH = 32_000;
 
 /** Send a message (starting a new conversation when `conversationId` is null) and store the assistant's reply. */
 export async function sendChatMessage(
@@ -29,12 +30,20 @@ export async function sendChatMessage(
     return { error: parsed.error };
   }
 
+  const model = findModel(
+    formString(formData, "model"),
+    availableModels(process.env),
+  );
+  if (model === null) {
+    return { error: "Pick one of the available models." };
+  }
+
   const { supabase } = session;
   let id = conversationId;
   if (id === null) {
     const { data, error } = await supabase
       .from("chat_conversations")
-      .insert({ title: conversationTitle(parsed.value) })
+      .insert({ title: conversationTitle(parsed.value), model: model.id })
       .select("id")
       .single();
     if (error !== null) {
@@ -64,27 +73,31 @@ export async function sendChatMessage(
 
   let reply: string;
   try {
-    reply = await getAssistant()({
+    reply = await getAssistant(model)({
       history: (history ?? []) as ChatTurn[],
       policies: (policies ?? []) as PolicySnippet[],
     });
-  } catch {
+  } catch (error) {
     return {
-      error: "The assistant is unavailable right now. Try again in a moment.",
+      error:
+        error instanceof ProviderError
+          ? error.message
+          : "The assistant is unavailable right now. Try again in a moment.",
     };
   }
 
   const { error: replyError } = await supabase.from("chat_messages").insert({
     conversation_id: id,
     role: "assistant",
-    content: reply.slice(0, 8000),
+    content: reply.slice(0, MAX_STORED_LENGTH),
+    model: model.id,
   });
   if (replyError !== null) {
     return { error: replyError.message };
   }
   await supabase
     .from("chat_conversations")
-    .update({ updated_at: new Date().toISOString() })
+    .update({ updated_at: new Date().toISOString(), model: model.id })
     .eq("id", id);
 
   revalidatePath("/chat");
