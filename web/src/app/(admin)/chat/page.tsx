@@ -2,13 +2,19 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ActionForm } from "@/components/action-form";
+import { ConfirmButton } from "@/components/confirm-button";
+import { TrashIcon } from "@/components/icons";
 import { Card, Field, PageHeader, Select, inputClass } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import { availableModels, defaultModel, modelLabel } from "@/lib/llm/models";
 
-import { deleteConversation, sendChatMessage } from "./actions";
+import {
+  deleteAllConversations,
+  deleteConversation,
+  sendChatMessage,
+} from "./actions";
 
 const SUGGESTIONS = [
   "What are the password requirements for a new service?",
@@ -55,31 +61,55 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
         <Card
           title="Conversations"
           actions={
-            <Link
-              href="/chat"
-              className="text-xs text-emerald-400 hover:underline"
-            >
-              New chat
-            </Link>
+            <div className="flex items-center gap-3">
+              {conversations.length > 0 && (
+                <form action={deleteAllConversations}>
+                  <ConfirmButton confirmLabel="Delete all?">
+                    Delete all
+                  </ConfirmButton>
+                </form>
+              )}
+              <Link
+                href="/chat"
+                className="text-xs text-emerald-400 hover:underline"
+              >
+                New chat
+              </Link>
+            </div>
           }
           className="h-fit"
         >
           <ul className="-mx-2 space-y-0.5">
             {conversations.map((conv) => (
-              <li key={conv.id}>
+              <li
+                key={conv.id}
+                className={`group flex items-center gap-1 rounded-lg pr-2 ${
+                  conv.id === activeId
+                    ? "bg-zinc-800 text-zinc-50"
+                    : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
+                }`}
+              >
                 <Link
                   href={`/chat?c=${conv.id}`}
-                  className={`block rounded-lg px-2 py-1.5 text-sm ${
-                    conv.id === activeId
-                      ? "bg-zinc-800 text-zinc-50"
-                      : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
-                  }`}
+                  className="min-w-0 flex-1 px-2 py-1.5 text-sm"
                 >
                   <span className="block truncate">{conv.title}</span>
                   <span className="text-xs text-zinc-500">
                     {timeAgo(conv.updated_at)}
                   </span>
                 </Link>
+                <form
+                  action={deleteConversation.bind(null, conv.id, activeId)}
+                  className="shrink-0"
+                >
+                  <ConfirmButton
+                    title="Delete conversation"
+                    confirmLabel="Delete?"
+                    className="opacity-60 group-hover:opacity-100"
+                  >
+                    <TrashIcon className="h-3.5 w-3.5" />
+                  </ConfirmButton>
+                </form>
               </li>
             ))}
             {conversations.length === 0 && (
@@ -94,10 +124,10 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
           title={active?.title ?? "New chat"}
           actions={
             active === null ? null : (
-              <form action={deleteConversation.bind(null, active.id)}>
-                <button className="text-xs text-red-400 hover:text-red-300">
+              <form action={deleteConversation.bind(null, active.id, null)}>
+                <ConfirmButton confirmLabel="Delete this chat?">
                   Delete
-                </button>
+                </ConfirmButton>
               </form>
             )
           }
