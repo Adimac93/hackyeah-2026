@@ -1,6 +1,6 @@
 // Server-only: fetches live state from the gateway. Never import from a client
-// component — the admin key must not reach the browser.
-import { gatewayAdmin } from "./gateway-admin";
+// component — the user's access token must not be logged or echoed.
+import { gatewayAsUser, gatewayUrl } from "./gateway-admin";
 import { liveError } from "./gateway-live";
 import type {
   GatewayHealth,
@@ -13,19 +13,27 @@ import type {
 const TIMEOUT_MS = 8000;
 
 async function get<T>(path: string, auth: boolean): Promise<Live<T>> {
-  const gateway = gatewayAdmin();
-  if (gateway === null) {
-    return {
-      ok: false,
-      error: "GATEWAY_URL / GATEWAY_ADMIN_KEY not configured.",
-    };
+  let base: string;
+  let token: string | null = null;
+  if (auth) {
+    const gateway = await gatewayAsUser();
+    if ("error" in gateway) {
+      return { ok: false, error: gateway.error };
+    }
+    ({ base, token } = gateway);
+  } else {
+    const url = gatewayUrl();
+    if (url === null) {
+      return { ok: false, error: "GATEWAY_URL not configured." };
+    }
+    base = url;
   }
   let response: Response;
   try {
-    response = await fetch(`${gateway.base}${path}`, {
+    response = await fetch(`${base}${path}`, {
       headers: {
         Accept: "application/json",
-        ...(auth ? { Authorization: `Bearer ${gateway.key}` } : {}),
+        ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
       },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -35,7 +43,8 @@ async function get<T>(path: string, auth: boolean): Promise<Live<T>> {
     return { ok: false, error: "The gateway is unreachable." };
   }
   if (!response.ok) {
-    return { ok: false, error: liveError(response.status) };
+    const body: unknown = await response.json().catch(() => null);
+    return { ok: false, error: liveError(response.status, body) };
   }
   try {
     return { ok: true, data: (await response.json()) as T };
@@ -52,5 +61,5 @@ export async function gatewayLive() {
     get<LivePolicy>("/policy", true),
     get<MetricsReport>("/metrics", true),
   ]);
-  return { base: gatewayAdmin()?.base ?? null, info, health, policy, metrics };
+  return { base: gatewayUrl(), info, health, policy, metrics };
 }

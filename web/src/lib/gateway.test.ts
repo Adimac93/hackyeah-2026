@@ -194,7 +194,7 @@ void test("describePolicyUpload maps gateway answers", () => {
 
   const forbidden = describePolicyUpload(403, {});
   assert.equal(forbidden.ok, false);
-  assert.match(forbidden.error, /GATEWAY_ADMIN_KEY/);
+  assert.match(forbidden.error, /session or role/);
 
   assert.equal(describePolicyUpload(500, null).ok, false);
 });

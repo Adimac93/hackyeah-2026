@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
 import type { FormState } from "@/lib/domain";
 import { checkPolicyUpload, describePolicyUpload } from "@/lib/gateway";
+import { gatewayAsUser } from "@/lib/gateway-admin";
 
 const UPLOAD_TIMEOUT_MS = 15_000;
 
@@ -22,13 +23,9 @@ export async function importPolicy(
     return { error: "Only admins can import gateway policies." };
   }
 
-  const gatewayUrl = (process.env.GATEWAY_URL ?? "").trim().replace(/\/+$/, "");
-  const adminKey = (process.env.GATEWAY_ADMIN_KEY ?? "").trim();
-  if (gatewayUrl === "" || adminKey === "") {
-    return {
-      error:
-        "Set GATEWAY_URL and GATEWAY_ADMIN_KEY on the server to import policies.",
-    };
+  const gateway = await gatewayAsUser();
+  if ("error" in gateway) {
+    return { error: gateway.error };
   }
 
   // a chosen file wins over pasted text
@@ -50,11 +47,11 @@ export async function importPolicy(
 
   let response: Response;
   try {
-    response = await fetch(`${gatewayUrl}/admin/policy`, {
+    response = await fetch(`${gateway.base}/admin/policy`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${adminKey}`,
+        authorization: `Bearer ${gateway.token}`,
       },
       body: JSON.stringify({ catalog_toml: checked.value }),
       signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
