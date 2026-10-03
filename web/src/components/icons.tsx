@@ -94,3 +94,7 @@ export function ChipIcon(p: IconProps) {
 export function ServerIcon(p: IconProps) {
   return <Icon {...p} d="M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01M12 10v4" />;
 }
+
+export function ArrowUpIcon(p: IconProps) {
+  return <Icon {...p} d="M12 19V5M5 12l7-7 7 7" />;
+}
