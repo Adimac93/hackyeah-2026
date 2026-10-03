@@ -20,10 +20,14 @@ Target length: **3 minutes.**
 ## What it depends on
 
 - Seeded data: `just seed` — two gateway principals with public demo keys:
-  `demo-agent` (key `demo-agent-dev-key`, `security_admin`, tools `docs__read` and
-  `docs__search`) and `red-team` (key `red-team-dev-key`, `member`, `docs__search` only).
-  Budgets come from `policy/control-catalog.toml`: global 2M tokens / $25 a day,
-  `demo-agent` 50k tokens/hour hard, `red-team` 10k tokens/hour soft.
+  `demo-agent` (key `demo-agent-dev-key`, tools `docs__read` and `docs__search`) and
+  `red-team` (key `red-team-dev-key`, `docs__search` only). Budgets are `budgets` rows:
+  global 2M tokens / $25 a day, `demo-agent` 50k tokens/hour hard, `red-team` 10k
+  tokens/hour soft.
+- The policy lives in the database. On first start the gateway seeds the sample in
+  `policy/`; to change it live, upload an edited catalog (console policy page, or
+  `POST /admin/policy` with an admin's Supabase access token). Every instance picks it
+  up within 5 s.
 - Services that must be up:
   - locally: `just dev` (gateway + console) or `just demo` (gateway + `mcp-demo` on
     :9310 for the MCP path). Dev uses the mock upstream and mock judge — no model needed.
