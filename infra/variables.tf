@@ -30,3 +30,8 @@ variable "backend_service_account" {
   description = "Identity the gateway runs as on Cloud Run; it calls the judge."
   default     = "764037494890-compute@developer.gserviceaccount.com"
 }
+
+variable "judge_image" {
+  type        = string
+  description = "Ollama serving image for the judge (built from sentinel/ollama/ outside Terraform), e.g. europe-west1-docker.pkg.dev/<project>/<repo>/ollama-judge:<tag>."
+}

@@ -5,8 +5,9 @@ endpoint with one L4 GPU, reachable **only inside the `default` VPC** through Pr
 Service Connect. Nothing outside the VPC can resolve or route to it, and calls still need
 an OAuth token, which the gateway takes from the metadata server.
 
-Everything is in Terraform except the image build, which `image.tf` runs through
-`gcloud builds submit` whenever `sentinel/ollama/` changes.
+Terraform does not build the image: it deploys whatever `judge_image` points at (an
+image built from `sentinel/ollama/` on Google Cloud). Set it in `terraform.tfvars`
+(git-ignored) or pass `-var judge_image=…`.
 
 ## Cost
 

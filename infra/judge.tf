@@ -9,7 +9,7 @@ resource "google_vertex_ai_endpoint_with_model_garden_deployment" "judge" {
     accept_eula = true
 
     container_spec {
-      image_uri     = local.image
+      image_uri     = var.judge_image
       predict_route = "/api/generate"
       health_route  = "/"
 
@@ -47,10 +47,7 @@ resource "google_vertex_ai_endpoint_with_model_garden_deployment" "judge" {
     }
   }
 
-  depends_on = [
-    terraform_data.judge_image,
-    google_network_connectivity_service_connection_policy.vertex,
-  ]
+  depends_on = [google_network_connectivity_service_connection_policy.vertex]
 }
 
 locals {
