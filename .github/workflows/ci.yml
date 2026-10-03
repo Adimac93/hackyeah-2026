@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# a newer push supersedes an in-flight run — keeps the queue short on a hackathon day
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # `just` from the Ubuntu archive — no third-party action in the supply chain
+      - run: sudo apt-get update && sudo apt-get install -y just
+
+      # Add the language setup step here (actions/setup-node, dtolnay/rust-toolchain, …)
+      # at the same time you wire up the justfile. Nothing else in this file changes.
+
+      - run: just setup
+      - run: just check

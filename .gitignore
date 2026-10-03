@@ -1,0 +1,19 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# agent / editor local state
+.claude/settings.local.json
+.delta/
+.DS_Store
+
+# build output + deps (pre-emptive; stack not chosen yet)
+node_modules/
+dist/
+build/
+.next/
+target/
+.venv/
+__pycache__/
+*.pyc
