@@ -14,6 +14,7 @@
 //! Every request is self-contained, so enforcement is per-request.
 
 pub mod federation;
+pub mod native;
 
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::approvals::Approvals;
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
 use crate::policy::{Hook, Policy, PolicyHandle};
@@ -47,6 +49,7 @@ pub struct McpState {
     pub auditor: Arc<Auditor>,
     pub http: reqwest::Client,
     pub detectors: Arc<Registry>,
+    pub approvals: Arc<Approvals>,
 }
 
 pub async fn endpoint(
@@ -118,6 +121,43 @@ async fn tools_list(
     principal: Option<&crate::audit::Principal>,
     id: &Value,
 ) -> Response {
+    let mut tools = federated_tools(state, policy).await;
+
+    // A tool the caller may not invoke is a tool they should not be shown —
+    // unless a human granted it for now.
+    if let Some(principal) = principal
+        && !principal.allowed_tools.is_empty()
+    {
+        let grants = state.approvals.active_grants(principal.id);
+        tools.retain(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    principal.allowed_tools.iter().any(|t| t == name)
+                        || grants.iter().any(|g| g.tool == name)
+                })
+        });
+    }
+
+    // The gateway's own tools are always listed: an agent must be able to see
+    // its policy and ask for more.
+    tools.extend(native::descriptors());
+
+    result(
+        id,
+        json!({
+            "resultType": "complete",
+            "tools": tools,
+            "ttlMs": 30_000,
+            // The listing is filtered per principal, so a shared intermediary
+            // must never serve one caller's list to another.
+            "cacheScope": "private",
+        }),
+    )
+}
+
+/// Every tool on every enabled upstream, under its qualified name.
+pub(crate) async fn federated_tools(state: &McpState, policy: &Policy) -> Vec<Value> {
     let mut tools = Vec::new();
 
     for server in policy.mcp.enabled_servers() {
@@ -138,29 +178,7 @@ async fn tools_list(
             Err(problem) => tracing::warn!(%problem, "an upstream could not be listed"),
         }
     }
-
-    // A tool the caller may not invoke is a tool they should not be shown.
-    if let Some(principal) = principal
-        && !principal.allowed_tools.is_empty()
-    {
-        tools.retain(|tool| {
-            tool.get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| principal.allowed_tools.iter().any(|t| t == name))
-        });
-    }
-
-    result(
-        id,
-        json!({
-            "resultType": "complete",
-            "tools": tools,
-            "ttlMs": 30_000,
-            // The listing is filtered per principal, so a shared intermediary
-            // must never serve one caller's list to another.
-            "cacheScope": "private",
-        }),
-    )
+    tools
 }
 
 async fn tools_call(
@@ -182,11 +200,27 @@ async fn tools_call(
         return error(id, POLICY_DENIED, "tools/call requires a tool name");
     };
 
+    if native::is_native(qualified) {
+        let Some(principal) = principal else {
+            return error(
+                id,
+                PRINCIPAL_DENIED,
+                "gateway tools need an identified caller",
+            );
+        };
+        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        return match native::call(state, policy, principal, qualified, &arguments).await {
+            Ok(payload) => result(id, payload),
+            Err(message) => error(id, POLICY_DENIED, &message),
+        };
+    }
+
     // Checked again here, not only at list time: a client can call a tool it
-    // was never shown.
+    // was never shown. A live human-approved grant counts as permission.
     if let Some(principal) = principal
         && !principal.allowed_tools.is_empty()
         && !principal.allowed_tools.iter().any(|t| t == qualified)
+        && !state.approvals.has_grant(principal.id, qualified)
     {
         tracing::warn!(%slug, tool = %qualified, "tool not permitted for this principal");
         return error(
