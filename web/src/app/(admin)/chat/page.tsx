@@ -26,7 +26,7 @@ const SUGGESTIONS = [
 ];
 
 export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
-  const { supabase } = await requireAnyMember();
+  const { supabase, member } = await requireAnyMember();
   const { c } = await searchParams;
   const activeId = typeof c === "string" ? c : null;
 
@@ -187,6 +187,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                 key={active?.id ?? "new"}
                 name="model"
                 defaultValue={selected.id}
+                showDetails={member.role === "admin"}
                 options={models.map((o) => ({
                   value: o.id,
                   label: o.label,

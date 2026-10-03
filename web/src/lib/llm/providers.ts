@@ -219,3 +219,100 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     }
   };
 }
+
+const CHECK_TIMEOUT_MS = 10_000;
+
+/** Outcome of a model check; `reason` is safe to show (no keys, no response bodies). */
+export type ModelCheck = { ok: true } | { ok: false; reason: string };
+
+/** Ids the provider lists, or why it couldn't list them. Spends no tokens. */
+async function listedModels(
+  option: ModelOption,
+  credentials: Credentials,
+): Promise<string[]> {
+  if (option.provider === "anthropic") {
+    const client = new Anthropic({
+      apiKey: credentials.apiKey,
+      timeout: CHECK_TIMEOUT_MS,
+      maxRetries: 0,
+    });
+    const page = await client.models.list({ limit: 1000 });
+    return page.data.map((m) => m.id);
+  }
+  const page = await openAIClient(credentials).models.list({
+    timeout: CHECK_TIMEOUT_MS,
+    maxRetries: 0,
+  });
+  return page.data.map((m) => m.id);
+}
+
+/**
+ * Cheap pre-flight for the chat's model picker: can this model answer right now?
+ * Providers list their models (no tokens spent) and must include this one; the
+ * gateway must be up with its audit database and have an API key configured.
+ */
+export async function checkModel(option: ModelOption): Promise<ModelCheck> {
+  if (option.provider === "mock") {
+    return { ok: true };
+  }
+  if (option.provider === "gateway") {
+    if ((process.env.GATEWAY_API_KEY ?? "").trim() === "") {
+      return { ok: false, reason: "GATEWAY_API_KEY is not set." };
+    }
+    const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
+    try {
+      const response = await fetch(`${base}/health`, {
+        signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+        cache: "no-store",
+      });
+      const body = (await response.json().catch(() => null)) as {
+        status?: string;
+        database?: string;
+      } | null;
+      if (!response.ok || body?.status !== "ok") {
+        return { ok: false, reason: "The gateway is not healthy." };
+      }
+      if (body.database !== "connected") {
+        return { ok: false, reason: "The gateway's audit database is down." };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: "The gateway is unreachable." };
+    }
+  }
+
+  try {
+    const credentials =
+      option.connectionId === undefined
+        ? envCredentials(option)
+        : await connectionCredentials(option.connectionId);
+    const models = await listedModels(option, credentials);
+    // some OpenAI-compatible servers return an empty list; don't fail on that
+    if (models.length > 0 && !models.includes(option.model)) {
+      return {
+        ok: false,
+        reason: `The provider doesn't offer ${option.model}.`,
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      return { ok: false, reason: error.message };
+    }
+    const status = statusOf(error);
+    console.error(
+      `[assistant] check ${option.id} failed`,
+      status ?? (error instanceof Error ? error.name : "unknown"),
+    );
+    if (status === 401 || status === 403) {
+      return { ok: false, reason: "The provider rejected the API key." };
+    }
+    return {
+      ok: false,
+      reason:
+        status === undefined
+          ? "The provider is unreachable."
+          : `The provider answered HTTP ${String(status)}.`,
+    };
+  }
+}

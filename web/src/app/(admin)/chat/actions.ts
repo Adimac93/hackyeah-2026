@@ -10,7 +10,8 @@ import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
 import { loadModels } from "@/lib/llm/catalog";
 import { findModel } from "@/lib/llm/models";
-import { ProviderError, getAssistant } from "@/lib/llm/providers";
+import { ProviderError, checkModel, getAssistant } from "@/lib/llm/providers";
+import type { ModelCheck } from "@/lib/llm/providers";
 
 /** Longest stored message; matches the chat_messages check constraint. */
 const MAX_STORED_LENGTH = 32_000;
@@ -107,6 +108,19 @@ export async function sendChatMessage(
     redirect(`/chat?c=${id}`);
   }
   return {};
+}
+
+/** Pre-flight for the model picker: does the chosen model's configuration work? */
+export async function checkChatModel(modelId: string): Promise<ModelCheck> {
+  const session = await requireChatUser();
+  if (session.error) {
+    return { ok: false, reason: session.error };
+  }
+  const model = findModel(modelId, await loadModels(session.supabase));
+  if (model === null) {
+    return { ok: false, reason: "This model is no longer available." };
+  }
+  return checkModel(model);
 }
 
 /** Delete one conversation (messages cascade). Stays on `activeId` unless that's the one deleted. */
