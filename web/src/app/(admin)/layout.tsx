@@ -63,7 +63,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
                   </form>
                 )}
               </div>
-              <div className="-mx-1 max-h-64 overflow-y-auto px-1 md:max-h-none md:flex-1">
+              <div className="scrollbar-subtle -mx-1 max-h-64 overflow-y-auto px-1 md:max-h-none md:flex-1">
                 <Suspense>
                   <ChatHistory conversations={conversations} />
                 </Suspense>
