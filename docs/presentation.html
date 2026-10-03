@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Cogut - governing agent actions while enabling AI adoption.">
+  <meta name="color-scheme" content="light">
+  <title>Cogut | HackYeah 2026</title>
+  <style>
+    :root { --navy:#102c42; --blue:#6e9fbd; --sky:#c8dce8; --ink:#19384c; --muted:#526575; --line:#cbd5d9; --paper:#fafaf7; --sand:#f0eee7; --serif:Georgia,'Times New Roman',serif; --sans:'Avenir Next',Avenir,'Trebuchet MS',sans-serif; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; width:100%; height:100%; }
+    body { background:#e4e8e9; color:var(--ink); font-family:var(--sans); overflow:hidden; }
+    button,select,a { -webkit-tap-highlight-color:transparent; }
+    button,select { font:inherit; }
+    button { cursor:pointer; }
+    button:focus-visible,a:focus-visible { outline:3px solid #3575a0; outline-offset:4px; }
+    [hidden] { display:none !important; }
+    #viewport { position:absolute; inset:0 0 62px; display:grid; place-items:center; overflow:hidden; }
+    #frame { position:relative; width:1600px; height:900px; }
+    #deck { position:absolute; width:1600px; height:900px; transform-origin:top left; }
+    .slide { width:1600px; height:900px; position:absolute; inset:0; overflow:hidden; background:var(--paper); padding:70px 104px 80px; }
+    .slide::before { content:''; position:absolute; top:0; bottom:0; left:0; width:10px; background:var(--blue); }
+    .masthead { display:flex; justify-content:space-between; align-items:center; font-size:19px; line-height:1.4; letter-spacing:.075em; }
+    .brand { font-weight:600; }
+    .context { color:var(--muted); font-size:17px; letter-spacing:.06em; }
+    .footer { position:absolute; bottom:38px; left:104px; right:104px; display:flex; justify-content:space-between; color:var(--muted); font-size:16px; letter-spacing:.02em; }
+    .footer span:last-child { font-variant-numeric:tabular-nums; }
+    h1,h2,h3,p { margin:0; }
+    h1,h2 { font-family:var(--serif); font-weight:400; letter-spacing:-.035em; }
+    h2 { font-size:74px; line-height:1.12; }
+    h3 { font-weight:500; font-size:33px; line-height:1.3; }
+    .body { margin-top:90px; }
+    .subtitle { color:var(--muted); font-size:29px; line-height:1.5; }
+    .eyebrow { font-size:18px; text-transform:uppercase; letter-spacing:.14em; font-weight:600; }
+    .soft { color:var(--blue); }
+    .sand { background:var(--sand); }
+    .navy { background:var(--navy); color:var(--paper); }
+    .navy .context,.navy .footer,.navy .subtitle { color:#c2d3de; }
+    .navy .soft { color:#a8cada; }
+    .sky { background:var(--sky); }
+    .sky::before { background:var(--navy); }
+
+    .opening .body { margin-top:140px; max-width:1300px; }
+    .opening h1 { font-size:108px; line-height:1.12; }
+    .opening h1 em { display:inline-block; margin-top:34px; font-style:normal; color:#537d99; }
+    .opening-line { margin-top:58px; width:98px; height:4px; background:var(--blue); }
+
+    .risks .body { margin-top:70px; display:grid; grid-template-columns:minmax(0,1fr) 450px; gap:80px; align-items:center; }
+    .risks h2 { font-size:72px; }
+    .incident-summary { max-width:760px; margin-top:32px; color:var(--muted); font-size:28px; line-height:1.45; }
+    .incident-impact { display:flex; align-items:center; gap:32px; margin-top:52px; padding-top:28px; border-top:1px solid #aabcc7; }
+    .incident-number { font-family:var(--serif); font-size:128px; line-height:1; color:#a94d3f; font-variant-numeric:tabular-nums; }
+    .incident-description { font-size:27px; line-height:1.4; max-width:265px; }
+    .risks .footer a { color:inherit; text-underline-offset:4px; }
+    .risk-meme { margin:0; }
+    .risk-meme img { display:block; width:450px; height:auto; aspect-ratio:4 / 5; object-fit:contain; }
+    .risk-meme figcaption { margin-top:10px; color:var(--muted); font-size:16px; text-align:right; }
+
+    .control-gap .body { margin-top:86px; }
+    .gap-intro { margin-top:27px; max-width:1140px; font-size:29px; line-height:1.5; color:var(--muted); }
+    .gap-comparison { display:grid; grid-template-columns:1fr 1fr; gap:96px; margin-top:65px; }
+    .gap-side { border-top:1px solid #aabcc7; padding-top:27px; }
+    .gap-side .eyebrow { color:#557d96; margin-bottom:25px; }
+    .gap-side h3 { font-family:var(--serif); font-size:46px; line-height:1.2; margin-bottom:21px; }
+    .gap-side p { max-width:555px; font-size:27px; line-height:1.5; color:var(--muted); }
+    .gap-side.exposure h3 { color:#a94d3f; }
+    .gap-takeaway { position:absolute; bottom:132px; padding-left:24px; border-left:4px solid var(--blue); font-size:30px; line-height:1.4; }
+
+    .intro-center { position:absolute; inset:0; display:grid; place-items:center; padding:130px 104px; text-align:center; }
+    .intro-question h2 { font-size:92px; line-height:1.15; }
+    .intro-answer h2 { font-size:112px; line-height:1.1; }
+    .intro-value { margin-top:38px; font-size:38px; line-height:1.55; color:#38586d; }
+    .hero-pillars { position:absolute; inset:190px 120px 112px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:96px; align-items:start; }
+    .hero-pillar-title { margin:0; font-family:var(--serif); font-weight:400; font-size:54px; line-height:1.15; letter-spacing:-.035em; transform:translateY(230px); transition:transform .6s cubic-bezier(.22,1,.36,1); }
+    .pillar-details { margin-top:34px; padding-top:26px; border-top:1px solid #7695a8; }
+    .pillar-area + .pillar-area { margin-top:35px; padding-top:26px; border-top:1px solid #9bb6c6; }
+    .pillar-area h3 { font-size:33px; line-height:1.25; font-weight:600; }
+    .pillar-highlights { margin:15px 0 0; padding-left:25px; font-size:26px; line-height:1.4; color:#38586d; }
+    .pillar-highlights li + li { margin-top:9px; }
+    .pillar-highlights li::marker { color:#557d96; font-size:.75em; }
+    .hero-expanded .hero-pillar-title { transform:translateY(0); }
+    .hero-expanded .pillar-details:not([hidden]) { animation:hero-reveal .45s ease-out .3s both; }
+    .intro-question,.intro-answer:not([hidden]) { animation:hero-reveal .4s ease-out both; }
+    @keyframes hero-reveal { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @media (prefers-reduced-motion:reduce) { .hero-pillar-title { transition:none; } .intro-question,.intro-answer,.hero-expanded .pillar-details:not([hidden]) { animation:none; } }
+
+    .solution .body { margin-top:54px; }
+    .solution h2 { font-size:74px; line-height:1.12; }
+    .architecture-diagram { margin:26px 0 0; }
+    .architecture-diagram svg { display:block; width:1392px; height:550px; }
+    .flow-arrow { text-align:center; font-size:43px; color:#a8cada; }
+
+    .ownership .body { margin-top:80px; }
+    .ownership-grid { margin-top:67px; display:grid; grid-template-columns:1fr 1fr; column-gap:96px; }
+    .owner { border-top:1px solid #aabcc7; padding-top:28px; }
+    .owner .eyebrow { color:#577b93; margin-bottom:23px; }
+    .owner h3 { font-size:38px; margin-bottom:15px; }
+    .owner p { font-size:27px; line-height:1.5; color:var(--muted); }
+    .owner .eyebrow { font-size:18px; color:#577b93; }
+    .developer-line { display:flex; align-items:baseline; gap:38px; border-top:1px solid #aabcc7; padding-top:28px; margin-top:53px; }
+    .developer-line strong { font-size:28px; font-weight:500; }
+    .developer-line span { font-size:26px; color:var(--muted); }
+
+    .recovery .body { margin-top:86px; }
+    .recovery-flow { display:grid; grid-template-columns:1fr 60px 1fr 60px 1fr; margin-top:68px; align-items:start; }
+    .recovery-step { border-top:1px solid #aabcc7; padding-top:22px; }
+    .step-number { font-size:18px; color:#557d96; letter-spacing:.1em; margin-bottom:27px; }
+    .recovery-step h3 { font-size:40px; margin-bottom:18px; }
+    .recovery-step p { font-size:26px; color:var(--muted); line-height:1.5; max-width:345px; }
+    .recovery-flow .flow-arrow { color:#66899f; padding-top:86px; font-size:36px; }
+    .recovery .recheck { position:absolute; bottom:145px; font-size:27px; }
+    .recheck span { display:inline-block; width:34px; height:2px; background:var(--blue); vertical-align:middle; margin-right:15px; }
+
+    .team .body { margin-top:54px; }
+    .team h2 { font-size:52px; line-height:1.12; max-width:none; white-space:nowrap; }
+    .team-orbit { position:absolute; left:104px; top:306px; width:1392px; height:520px; margin:0; padding:0; list-style:none; }
+    .team-connections { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+    .team-center { position:absolute; left:696px; top:243px; transform:translate(-50%,-50%); text-align:center; }
+    .team-center h3 { font-family:var(--serif); font-size:58px; font-weight:400; }
+    .team-person { position:absolute; left:calc(var(--person-x) - 49px); top:calc(var(--person-y) - 49px); width:98px; height:98px; color:#c2d3de; text-align:center; }
+    .team-avatar { width:98px; height:98px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; border:2px dashed #8cb0c6; border-radius:50%; background:#193e55; }
+    .team-avatar svg { width:44px; height:44px; }
+    .team-caption { position:absolute; top:112px; left:-116px; width:330px; pointer-events:none; }
+    .team-caption strong { display:block; font-size:30px; font-weight:500; line-height:1.2; color:#fafaf7; }
+    .team-caption small { display:block; font-size:20px; line-height:1.35; margin-top:6px; color:#c2d3de; }
+    .team-person.caption-top .team-caption { top:-90px; }
+    .team-person.caption-right .team-caption { top:18px; left:126px; text-align:left; }
+    .team-person.caption-left .team-caption { top:18px; left:auto; right:126px; text-align:right; }
+    .team-person.caption-bottom-right .team-caption { left:-56px; }
+    .team-person.caption-bottom-left .team-caption { left:-176px; }
+
+    .closing .body { margin-top:112px; }
+    .closing h2 { font-size:99px; line-height:1.1; max-width:1200px; }
+    .closing .subtitle { margin-top:40px; color:#38586d; font-size:31px; max-width:910px; }
+    .closing-rule { width:98px; height:4px; background:#537d99; margin-top:48px; }
+    .closing .discussion { font-size:22px; margin-top:27px; color:#38586d; }
+
+    .controls { position:fixed; bottom:0; left:0; width:100%; height:62px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; font-size:13px; color:#344f61; gap:18px; }
+    .controls-left,.controls-right,.navigation { display:flex; align-items:center; gap:15px; }
+    .controls button,.controls a { border:0; padding:8px 10px; border-radius:3px; background:transparent; color:inherit; text-decoration:none; white-space:nowrap; }
+    .controls button:hover,.controls a:hover { background:#ccd7dc; }
+    .controls button:disabled { opacity:.3; cursor:default; }
+    .controls .arrow-button { font-size:23px; line-height:1; min-width:36px; }
+    #counter { font-variant-numeric:tabular-nums; min-width:47px; text-align:center; font-size:13px; }
+    .controls .shortcuts { color:#5b7281; font-size:12px; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    #notice { position:fixed; bottom:72px; left:50%; transform:translateX(-50%); background:var(--navy); color:white; padding:12px 20px; border-radius:4px; font-size:14px; z-index:5; max-width:85vw; }
+    dialog { width:min(640px,calc(100vw - 32px)); max-height:calc(100vh - 48px); padding:35px; border:0; background:var(--paper); color:var(--ink); box-shadow:0 20px 90px #102c4240; }
+    dialog::backdrop { background:#102c428c; }
+    dialog h2 { font-size:36px; margin:0 0 22px; }
+    .dialog-top { display:flex; justify-content:space-between; align-items:start; }
+    .dialog-top button { background:transparent; border:0; color:var(--ink); font-size:25px; }
+    #slide-list { list-style:none; margin:0; padding:0; }
+    #slide-list button { border:0; border-top:1px solid var(--line); padding:15px 0; background:transparent; width:100%; text-align:left; color:var(--ink); font-size:16px; display:flex; gap:17px; }
+    #slide-list button:hover { color:#477b9c; }
+    #slide-list button[aria-current="true"] { font-weight:600; }
+    #slide-list button span { color:#63859b; font-variant-numeric:tabular-nums; }
+    .dialog-help { font-size:13px; color:var(--muted); line-height:1.7; margin-top:20px; }
+    @media (max-width:680px) { .controls { padding:0 12px; gap:5px; } .controls-left,.controls-right { gap:2px; } .controls .shortcuts,.controls .print-button { display:none; } .navigation { gap:3px; } }
+    @media print {
+      @page { size:1600px 900px; margin:0; }
+      html,body { width:1600px; height:auto; overflow:visible; background:white; }
+      #viewport { position:static; display:block; overflow:visible; }
+      #frame,#deck { position:static; width:1600px !important; height:auto !important; transform:none !important; }
+      .slide,.slide[hidden] { display:block !important; position:relative; break-after:page; page-break-after:always; animation:none !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .intro-question { display:none !important; }
+      .intro-answer,.intro-answer[hidden] { display:block !important; animation:none !important; }
+      .hero-pillars { position:absolute; inset:190px 120px 112px !important; display:grid !important; grid-template-columns:1fr 1fr !important; align-items:start !important; gap:96px !important; text-align:left !important; }
+      .hero-pillar-title,.hero-expanded .hero-pillar-title { font-size:54px !important; transform:none !important; transition:none !important; }
+      .hero-pillars .pillar-details,.hero-pillars .pillar-details[hidden] { display:block !important; animation:none !important; }
+      .slide:last-child { break-after:auto; page-break-after:auto; }
+      .controls,dialog,#notice,#announcer { display:none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main id="viewport" aria-label="Cogut presentation">
+    <div id="frame"><div id="deck">
+      <section class="slide opening active" id="slide-1" role="group" aria-roledescription="slide" aria-label="1 of 10: Is my agent safe?" data-title="Is my agent safe?" data-duration="15">
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">HackYeah 2026</span></header>
+        <div class="body">
+          <h1>“Of course my agent<br>is safe…<br><em>it is, right?”</em></h1>
+          <div class="opening-line" aria-hidden="true"></div>
+        </div>
+        <footer class="footer"><span>Governing agent actions</span><span>01 / 10</span></footer>
+      </section>
+      <section class="slide risks sand" id="slide-2" role="group" aria-roledescription="slide" aria-label="2 of 10: The Replit incident" data-title="The Replit incident" data-duration="15" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">Replit · July 2025</span></header>
+        <div class="body">
+          <div class="risk-copy">
+            <h2>An AI agent deleted<br>a live database</h2>
+            <p class="incident-summary">Replit’s agent deleted SaaStr’s live application database during an explicit code freeze, despite instructions to make no changes.</p>
+            <div class="incident-impact">
+              <strong class="incident-number">1,206</strong>
+              <p class="incident-description">executive records deleted</p>
+            </div>
+          </div>
+          <figure class="risk-meme">
+            <img src="assets/agent-sign-meme.png" width="1122" height="1402" alt="Two-panel cartoon meme: a sign says DO NOT MODIFY THE PRODUCTION DATABASE. A character labelled AI coding agent shrugs: This sign can’t stop me because I treat it as a suggestion.">
+            <figcaption>Meme illustration, not an actual agent quote.</figcaption>
+          </figure>
+        </div>
+        <footer class="footer"><span>Source: <a href="https://www.saastr.com/replits-new-release-address-most-of-the-challenges-we-hit-vibe-coding-but-is-prosumer-vibe-coding-really-ready-for-commercial-apps-yet/" target="_blank" rel="noopener noreferrer">SaaStr’s firsthand incident account</a></span><span>02 / 10</span></footer>
+      </section>
+      <section class="slide control-gap" id="slide-3" role="group" aria-roledescription="slide" aria-label="3 of 10: The control gap" data-title="The control gap" data-duration="10" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">The missing boundary</span></header>
+        <div class="body">
+          <h2>The control gap</h2>
+          <p class="gap-intro">An agent can use valid credentials and still act outside the scope of its task.</p>
+          <div class="gap-comparison">
+            <div class="gap-side">
+              <p class="eyebrow">Task boundary</p>
+              <h3>No production changes</h3>
+              <p>The user’s instruction restricts what the agent should do.</p>
+            </div>
+            <div class="gap-side exposure">
+              <p class="eyebrow">System permissions</p>
+              <h3>Production writes allowed</h3>
+              <p>The tools and credentials still let the agent perform the prohibited action.</p>
+            </div>
+          </div>
+          <p class="gap-takeaway">Enforce task policy before the tool executes.</p>
+        </div>
+        <footer class="footer"><span>The same gap can affect data disclosure and resource spending</span><span>03 / 10</span></footer>
+      </section>
+      <section class="slide intro sky" id="slide-4" role="group" aria-roledescription="slide" aria-label="4 of 10: Our answer" data-title="Our answer" data-duration="10" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">HackYeah 2026</span></header>
+        <div class="intro-center">
+          <div class="intro-question" id="intro-question"><h2>How do we secure AI<br>and keep developers moving?</h2></div>
+          <div class="intro-answer" id="intro-answer" hidden>
+            <h2>Cogut</h2>
+            <p class="intro-value">Secure non-deterministic workflows<br>Keep developers focused on building.</p>
+          </div>
+        </div>
+        <footer class="footer"><span>Security that supports development</span><span>04 / 10</span></footer>
+      </section>
+      <section class="slide hero sky" id="slide-5" role="group" aria-roledescription="slide" aria-label="5 of 10: The two pillars" data-title="The two pillars" data-duration="15" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">Security and visibility</span></header>
+        <div class="hero-pillars" id="hero-pillars">
+          <section class="hero-pillar">
+            <h2 class="hero-pillar-title">Security and control</h2>
+            <div class="pillar-details" id="pillar-security" hidden>
+              <section class="pillar-area">
+                <h3>Central policy</h3>
+                <ul class="pillar-highlights">
+                  <li>One policy for models and tools</li>
+                  <li>Validated updates without a restart</li>
+                </ul>
+              </section>
+              <section class="pillar-area">
+                <h3>Hybrid guardrails</h3>
+                <ul class="pillar-highlights">
+                  <li>Fast checks for PII, secrets and attacks</li>
+                  <li>Semantic checks on suspicious requests</li>
+                </ul>
+              </section>
+            </div>
+          </section>
+          <section class="hero-pillar">
+            <h2 class="hero-pillar-title">Visibility</h2>
+            <div class="pillar-details" id="pillar-visibility" hidden>
+              <section class="pillar-area">
+                <h3>Budget governance</h3>
+                <ul class="pillar-highlights">
+                  <li>Token and spend limits per user/model</li>
+                  <li>Soft limits warn; hard limits block</li>
+                </ul>
+              </section>
+              <section class="pillar-area">
+                <h3>Monitoring</h3>
+                <ul class="pillar-highlights">
+                  <li>Decisions traced to policy versions</li>
+                  <li>Tamper-evident audit and latency metrics</li>
+                </ul>
+              </section>
+            </div>
+          </section>
+        </div>
+        <footer class="footer"><span>Security that supports development</span><span>05 / 10</span></footer>
+      </section>
+      <section class="slide solution navy" id="slide-6" role="group" aria-roledescription="slide" aria-label="6 of 10: How Cogut works" data-title="How Cogut works" data-duration="25" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">Architecture</span></header>
+        <div class="body">
+          <h2>How Cogut works</h2>
+          <figure class="architecture-diagram">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1392 550" role="img" aria-labelledby="cogut-architecture-title cogut-architecture-desc">
+              <title id="cogut-architecture-title">How Cogut governs model and resource interactions</title>
+              <desc id="cogut-architecture-desc">A central policy configures hybrid guardrails and the security gateway. User prompts and model responses pass through deterministic and semantic checks. Models request tools through MCP; the gateway checks identity, access and budgets before reaching protected databases and files. A resource processing path filters data and delivers it to the user, outside the model context. Governance records decisions, policy versions, usage and latency. Guardrails also apply controls to the resource processing path.</desc>
+              <style>
+                .arch-wire { fill:none; stroke:#91b5cb; stroke-width:2.5; }
+                .arch-policy-wire { fill:none; stroke:#91b5cb; stroke-width:2; stroke-dasharray:6 6; }
+                .arch-data-wire { fill:none; stroke:#aed5ca; stroke-width:2.5; }
+                .arch-external { fill:#143348; stroke:#567a92; stroke-width:1.5; }
+                .arch-core { fill:#c8dce8; stroke:#c8dce8; stroke-width:2; }
+                .arch-support { fill:#20455c; stroke:#8cb0c6; stroke-width:1.5; }
+                .arch-text { font-family:'Avenir Next',Avenir,'Trebuchet MS',sans-serif; fill:#fafaf7; }
+                .arch-heading { font-size:28px; font-weight:600; }
+                .arch-note { font-size:21px; fill:#c2d3de; }
+                .arch-kicker { font-size:16px; letter-spacing:1.3px; fill:#a8cada; }
+                .arch-core-text { fill:#102c42; }
+                .arch-edge-label { font-size:19px; fill:#c2d3de; paint-order:stroke; stroke:#102c42; stroke-width:7px; stroke-linejoin:round; }
+              </style>
+              <defs>
+                <marker id="cogut-arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#91b5cb" stroke-width="1.6"/></marker>
+                <marker id="cogut-data-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#aed5ca" stroke-width="1.6"/></marker>
+              </defs>
+              <g class="arch-text">
+                <path class="arch-policy-wire" d="M390 94V178" marker-end="url(#cogut-arch-arrow)"/>
+                <path class="arch-policy-wire" d="M980 94V178" marker-end="url(#cogut-arch-arrow)"/>
+                <text x="409" y="140" class="arch-edge-label">controls</text>
+                <text x="999" y="140" class="arch-edge-label">permissions + limits</text>
+                <rect x="280" y="8" width="830" height="86" rx="5" class="arch-support"/>
+                <text x="695" y="43" text-anchor="middle" class="arch-heading">Central policy</text>
+                <text x="695" y="76" text-anchor="middle" class="arch-note">Profiles · permissions · budgets · thresholds</text>
+                <rect x="1154" y="34" width="15" height="15" class="arch-core"/>
+                <text x="1184" y="48" class="arch-note">Core enforcement</text>
+
+                <path class="arch-wire" d="M202 250H268" marker-end="url(#cogut-arch-arrow)"/>
+                <path class="arch-wire" d="M512 250H578" marker-end="url(#cogut-arch-arrow)"/>
+                <path class="arch-wire" d="M782 250H848" marker-end="url(#cogut-arch-arrow)"/>
+                <path class="arch-wire" d="M1112 250H1178" marker-start="url(#cogut-arch-arrow)" marker-end="url(#cogut-arch-arrow)"/>
+                <text x="545" y="233" text-anchor="middle" class="arch-edge-label">allow</text>
+                <text x="815" y="233" text-anchor="middle" class="arch-edge-label">MCP</text>
+                <text x="1145" y="233" text-anchor="middle" class="arch-edge-label">tools</text>
+
+                <rect x="1" y="180" width="198" height="140" rx="5" class="arch-external"/>
+                <text x="100" y="241" text-anchor="middle" class="arch-heading">User / agent</text>
+                <text x="100" y="275" text-anchor="middle" class="arch-note">UI + agent clients</text>
+
+                <rect x="270" y="180" width="240" height="140" rx="5" class="arch-core"/>
+                <text x="390" y="227" text-anchor="middle" class="arch-heading arch-core-text">Hybrid guardrails</text>
+                <text x="390" y="262" text-anchor="middle" class="arch-note arch-core-text">Rules + semantics</text>
+                <text x="390" y="288" text-anchor="middle" class="arch-note arch-core-text">Inspect both ways</text>
+
+                <rect x="580" y="180" width="200" height="140" rx="5" class="arch-external"/>
+                <text x="680" y="241" text-anchor="middle" class="arch-heading">LLM / models</text>
+                <text x="680" y="275" text-anchor="middle" class="arch-note">Generate + plan</text>
+
+                <rect x="850" y="180" width="260" height="140" rx="5" class="arch-core"/>
+                <text x="980" y="227" text-anchor="middle" class="arch-heading arch-core-text">Security gateway</text>
+                <text x="980" y="262" text-anchor="middle" class="arch-note arch-core-text">Identity + access</text>
+                <text x="980" y="288" text-anchor="middle" class="arch-note arch-core-text">Budget enforcement</text>
+
+                <rect x="1180" y="180" width="211" height="140" rx="5" class="arch-external"/>
+                <text x="1285" y="241" text-anchor="middle" class="arch-heading">Resources</text>
+                <text x="1285" y="275" text-anchor="middle" class="arch-note">Databases + files</text>
+
+                <path class="arch-wire" d="M390 322V356H458" marker-end="url(#cogut-arch-arrow)"/>
+                <path class="arch-data-wire" d="M980 322V378H762" marker-end="url(#cogut-data-arrow)"/>
+                <path class="arch-data-wire" d="M458 378H100V322" marker-end="url(#cogut-data-arrow)"/>
+                <text x="876" y="364" text-anchor="middle" class="arch-note">Results</text>
+                <text x="280" y="364" text-anchor="middle" class="arch-note">Filtered data</text>
+                <rect x="460" y="340" width="300" height="76" rx="5" class="arch-support"/>
+                <text x="610" y="371" text-anchor="middle" class="arch-heading" style="font-size:26px">Resource processing</text>
+                <text x="610" y="399" text-anchor="middle" class="arch-note">Filter + deliver to user</text>
+                <text x="695" y="449" text-anchor="middle" class="arch-note">Raw resource data stays outside the model context.</text>
+
+                <rect x="280" y="476" width="830" height="70" rx="5" class="arch-support"/>
+                <text x="306" y="504" class="arch-kicker">EVERY DECISION</text>
+                <text x="306" y="532" class="arch-heading" style="font-size:26px">Governance</text>
+                <text x="594" y="518" class="arch-note">Policy version · decisions · usage · latency</text>
+              </g>
+            </svg>
+          </figure>
+        </div>
+        <footer class="footer"><span>Prompt and response checks · Authorized tools · Filtered data delivery</span><span>06 / 10</span></footer>
+      </section>
+      <section class="slide recovery sand" id="slide-7" role="group" aria-roledescription="slide" aria-label="7 of 10: Recovery within policy" data-title="Recovery within policy" data-duration="20" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">Keeping work moving</span></header>
+        <div class="body">
+          <h2>Block the action.<br>Help the agent recover.</h2>
+          <div class="recovery-flow">
+            <div class="recovery-step"><div class="step-number">01 / ENFORCE</div><h3>Block</h3><p>The gateway rejects an unauthorized request.</p></div><div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="recovery-step"><div class="step-number">02 / EXPLAIN</div><h3>Guide</h3><p>An LLM explains the actual policy violation.</p></div><div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="recovery-step"><div class="step-number">03 / RECHECK</div><h3>Retry</h3><p>The agent can propose a permitted alternative.</p></div>
+          </div>
+          <p class="recheck"><span aria-hidden="true"></span>Every revised request faces the same controls.</p>
+        </div>
+        <footer class="footer"><span>Feedback guides recovery; policy controls permission</span><span>07 / 10</span></footer>
+      </section>
+      <section class="slide ownership" id="slide-8" role="group" aria-roledescription="slide" aria-label="8 of 10: Policy ownership" data-title="Policy ownership" data-duration="25" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">How teams use it</span></header>
+        <div class="body">
+          <h2>Shared protections.<br>Profiles that fit the work.</h2>
+          <div class="ownership-grid">
+            <div class="owner"><p class="eyebrow">Security leadership</p><h3>Set the boundaries</h3><p>Mandatory controls across<br>security categories.</p></div>
+            <div class="owner"><p class="eyebrow">Principal engineers &amp; team leads</p><h3>Configure the profiles</h3><p>Tailor permissions and limits<br>within those boundaries.</p></div>
+          </div>
+          <div class="developer-line"><strong>Developers</strong><span>Build with approved profiles.</span></div>
+        </div>
+        <footer class="footer"><span>Proposed operating model</span><span>08 / 10</span></footer>
+      </section>
+      <section class="slide team navy" id="slide-9" role="group" aria-roledescription="slide" aria-label="9 of 10: The Great Five" data-title="The Great Five" data-duration="25" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">The team</span></header>
+        <div class="body">
+          <h2>The Fantastic Four is the past. <span class="soft">The Great Five is the future.</span></h2>
+          <div class="team-orbit" role="group" aria-label="Five team members connected in a circle">
+            <svg class="team-connections" viewBox="0 0 1392 520" aria-hidden="true"><circle cx="696" cy="243" r="185" fill="none" stroke="#64869d" stroke-width="2"/></svg>
+            <div class="team-center"><h3>Cogut</h3></div>
+            <div class="team-person caption-top" style="--person-x:696px;--person-y:58px">
+              <span class="team-avatar"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 55v-5c0-10 8-17 20-17s20 7 20 17v5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></span>
+              <span class="team-caption"><strong>Hubert</strong><small>Agentic operations</small></span>
+            </div>
+            <div class="team-person caption-right" style="--person-x:872px;--person-y:186px">
+              <span class="team-avatar"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 55v-5c0-10 8-17 20-17s20 7 20 17v5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></span>
+              <span class="team-caption"><strong>Adam</strong><small>Agentic operations</small></span>
+            </div>
+            <div class="team-person caption-bottom-right" style="--person-x:805px;--person-y:393px">
+              <span class="team-avatar"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 55v-5c0-10 8-17 20-17s20 7 20 17v5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></span>
+              <span class="team-caption"><strong>Michał</strong><small>Deployment &amp; reliability</small></span>
+            </div>
+            <div class="team-person caption-bottom-left" style="--person-x:587px;--person-y:393px">
+              <span class="team-avatar"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 55v-5c0-10 8-17 20-17s20 7 20 17v5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></span>
+              <span class="team-caption"><strong>Stanisław</strong><small>Interface &amp; experience</small></span>
+            </div>
+            <div class="team-person caption-left" style="--person-x:520px;--person-y:186px">
+              <span class="team-avatar"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="20" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 55v-5c0-10 8-17 20-17s20 7 20 17v5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></span>
+              <span class="team-caption"><strong>Jakub</strong><small>Business &amp; sales</small></span>
+            </div>
+          </div>
+        </div>
+        <footer class="footer"><span>5 people · Engineering, operations and business</span><span>09 / 10</span></footer>
+      </section>
+      <section class="slide closing sky" id="slide-10" role="group" aria-roledescription="slide" aria-label="10 of 10: The business value" data-title="The business value" data-duration="20" hidden>
+        <header class="masthead"><span class="brand">COGUT</span><span class="context">HackYeah 2026</span></header>
+        <div class="body">
+          <h2>Confidence to give AI<br>more responsibility.</h2>
+          <p class="subtitle">Your organization defines the boundaries.<br>Our control layer enforces them.</p>
+          <div class="closing-rule" aria-hidden="true"></div>
+          <p class="discussion">Let's discuss where this fits in your AI workflows.</p>
+        </div>
+        <footer class="footer"><span>Consistent protection. Room to build.</span><span>10 / 10</span></footer>
+      </section>
+    </div></div>
+  </main>
+  <nav class="controls" aria-label="Presentation controls">
+    <div class="controls-left"><button id="overview-button" type="button" aria-haspopup="dialog">Slides</button><span class="shortcuts">← → navigate &nbsp;·&nbsp; F fullscreen</span></div>
+    <div class="navigation"><button class="arrow-button" id="previous" type="button" aria-label="Previous slide">←</button><span id="counter" aria-hidden="true">01 / 10</span><button class="arrow-button" id="next" type="button" aria-label="Next slide">→</button></div>
+    <div class="controls-right"><a href="speaker-script.md" download>Script</a><button class="print-button" id="print" type="button">Print</button><button id="fullscreen" type="button" aria-label="Enter fullscreen">Fullscreen</button></div>
+  </nav>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="notice" role="status" hidden></div>
+  <dialog id="overview" aria-labelledby="overview-title">
+    <div class="dialog-top"><h2 id="overview-title">Presentation</h2><button id="close-overview" type="button" aria-label="Close slide overview">×</button></div>
+    <ol id="slide-list"></ol>
+    <p class="dialog-help">Arrow keys or Space to advance. Home / End for first / last.<br>F for fullscreen. O for this overview. Esc to close.</p>
+  </dialog>
+  <script>
+    (() => {
+      'use strict';
+      const slides=Array.from(document.querySelectorAll('.slide'));
+      const viewport=document.getElementById('viewport'), frame=document.getElementById('frame'), deck=document.getElementById('deck');
+      const previous=document.getElementById('previous'), next=document.getElementById('next'), counter=document.getElementById('counter');
+      const announcer=document.getElementById('announcer'), overview=document.getElementById('overview'), slideList=document.getElementById('slide-list'), fullButton=document.getElementById('fullscreen');
+      const introIndex=slides.findIndex(slide=>slide.classList.contains('intro'));
+      const introQuestion=document.getElementById('intro-question'), introAnswer=document.getElementById('intro-answer');
+      const heroIndex=slides.findIndex(slide=>slide.classList.contains('hero'));
+      const securityDetails=document.getElementById('pillar-security'), visibilityDetails=document.getElementById('pillar-visibility');
+      let current=0, noticeTimer, introStage=0, heroStage=0;
+
+      function renderIntro(stage) {
+        introStage=stage;
+        const onIntro=current===introIndex;
+        introQuestion.hidden=onIntro&&stage>0;
+        introAnswer.hidden=!onIntro||stage===0;
+        next.setAttribute('aria-label',onIntro&&stage===0?'Reveal Cogut':'Next slide');
+        previous.setAttribute('aria-label',onIntro&&stage===1?'Show the question':'Previous slide');
+        if(onIntro) announcer.textContent=stage===0
+          ?'How do we secure AI and keep developers moving?'
+          :'Cogut. Secure non-deterministic workflows. Keep developers focused on building.';
+      }
+      function renderHero(stage) {
+        heroStage=stage;
+        const onHero=current===heroIndex;
+        securityDetails.hidden=!onHero||stage===0;
+        visibilityDetails.hidden=!onHero||stage===0;
+        slides[heroIndex].classList.toggle('hero-expanded',onHero&&stage===1);
+        next.setAttribute('aria-label',onHero&&stage===0?'Reveal pillar highlights':'Next slide');
+        previous.setAttribute('aria-label',onHero&&stage===1?'Show both pillars':'Previous slide');
+        if(onHero) announcer.textContent=stage===0?'Security and control. Visibility.'
+          :'Security and control: Central policy, Hybrid guardrails. Visibility: Budget governance, Monitoring.';
+      }
+      function advance() {
+        if(current===introIndex&&introStage===0) { renderIntro(1); return; }
+        if(current===heroIndex&&heroStage===0) { renderHero(1); return; }
+        show(current+1);
+      }
+      function retreat() {
+        if(current===introIndex&&introStage>0) { renderIntro(0); return; }
+        if(current===heroIndex&&heroStage>0) { renderHero(0); return; }
+        show(current-1);
+      }
+      function fit() {
+        const padding=window.innerWidth<680?12:40;
+        const scale=Math.max(.05,Math.min((viewport.clientWidth-padding)/1600,(viewport.clientHeight-padding)/900));
+        frame.style.width=(1600*scale)+'px'; frame.style.height=(900*scale)+'px'; deck.style.transform='scale('+scale+')';
+      }
+      function indexFromHash() {
+        const match=/^#slide-(\d+)$/.exec(window.location.hash);
+        return match?Math.max(0,Math.min(slides.length-1,Number(match[1])-1)):0;
+      }
+      function show(index,updateHash=true) {
+        current=Math.max(0,Math.min(slides.length-1,index));
+        slides.forEach((slide,i)=>{slide.hidden=i!==current;slide.classList.toggle('active',i===current);});
+        previous.disabled=current===0; next.disabled=current===slides.length-1;
+        previous.setAttribute('aria-label','Previous slide'); next.setAttribute('aria-label','Next slide');
+        counter.textContent=String(current+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+        announcer.textContent='Slide '+(current+1)+' of '+slides.length+': '+slides[current].dataset.title;
+        document.title='Cogut | '+slides[current].dataset.title;
+        if(current===introIndex) renderIntro(introStage);
+        if(current===heroIndex) renderHero(heroStage);
+        slideList.querySelectorAll('button').forEach((button,i)=>button.setAttribute('aria-current',String(i===current)));
+        if(updateHash){try{window.history.replaceState(null,'','#slide-'+(current+1));}catch{window.location.hash='slide-'+(current+1);}}
+      }
+      function notify(message) {
+        const notice=document.getElementById('notice'); clearTimeout(noticeTimer); notice.textContent=message; notice.hidden=false;
+        noticeTimer=setTimeout(()=>{notice.hidden=true;},5000);
+      }
+      async function toggleFullscreen() {
+        try { if(document.fullscreenElement) await document.exitFullscreen(); else if(document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); else notify('Use your browser\'s fullscreen command to present.'); }
+        catch { notify('Use your browser\'s fullscreen command to present.'); }
+      }
+      slides.forEach((slide,i)=>{
+        const item=document.createElement('li'),button=document.createElement('button'),number=document.createElement('span');
+        button.type='button';number.textContent=String(i+1).padStart(2,'0');button.append(number,document.createTextNode(slide.dataset.title));
+        button.addEventListener('click',()=>{overview.close();show(i);});item.append(button);slideList.append(item);
+      });
+      previous.addEventListener('click',retreat);next.addEventListener('click',advance);
+      document.getElementById('overview-button').addEventListener('click',()=>overview.showModal());
+      document.getElementById('close-overview').addEventListener('click',()=>overview.close());
+      overview.addEventListener('click',(event)=>{if(event.target===overview)overview.close();});
+      document.getElementById('print').addEventListener('click',()=>window.print());fullButton.addEventListener('click',toggleFullscreen);
+      document.addEventListener('fullscreenchange',()=>{fullButton.textContent=document.fullscreenElement?'Exit fullscreen':'Fullscreen';fullButton.setAttribute('aria-label',document.fullscreenElement?'Exit fullscreen':'Enter fullscreen');fit();});
+      document.addEventListener('keydown',(event)=>{
+        if(event.repeat||event.altKey||event.ctrlKey||event.metaKey||overview.open)return;
+        if(event.target instanceof Element&&event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+        if((event.key===' '||event.key==='Enter')&&event.target instanceof Element&&event.target.closest('button,a'))return;
+        if(['ArrowRight','ArrowDown','PageDown',' '].includes(event.key)){event.preventDefault();advance();}
+        else if(['ArrowLeft','ArrowUp','PageUp'].includes(event.key)){event.preventDefault();retreat();}
+        else if(event.key==='Home'){event.preventDefault();show(0);}
+        else if(event.key==='End'){event.preventDefault();show(slides.length-1);}
+        else if(event.key.toLowerCase()==='f'){event.preventDefault();toggleFullscreen();}
+        else if(event.key.toLowerCase()==='o'){event.preventDefault();overview.showModal();}
+      });
+      window.addEventListener('resize',fit);window.addEventListener('hashchange',()=>show(indexFromHash(),false));
+      if('ResizeObserver' in window)new ResizeObserver(fit).observe(viewport);
+      show(indexFromHash());fit();
+    })();
+  </script>
+</body>
+</html>

@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { ActionForm } from "@/components/action-form";
 import { ConfirmButton } from "@/components/confirm-button";
 import { TrashIcon } from "@/components/icons";
 import { ProviderIcon } from "@/components/provider-icon";
-import { Card, Field, PageHeader, inputClass } from "@/components/ui";
+import { Card, Field, PageHeader } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
@@ -17,6 +16,7 @@ import {
   deleteConversation,
   sendChatMessage,
 } from "./actions";
+import { ChatComposer } from "./chat-composer";
 import { ModelSelect } from "./model-select";
 
 const SUGGESTIONS = [
@@ -177,19 +177,10 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
             ))}
           </div>
 
-          <ActionForm
+          <ChatComposer
             action={sendChatMessage.bind(null, active?.id ?? null)}
-            submitLabel="Send"
-            pendingLabel="Thinking…"
-            className="mt-6 space-y-3 border-t border-zinc-800 pt-5"
+            placeholder="Ask anything… (never paste real secrets)"
           >
-            <textarea
-              name="message"
-              rows={3}
-              required
-              className={inputClass}
-              placeholder="Ask the security assistant… (never paste real secrets)"
-            />
             <Field label="Model">
               <ModelSelect
                 // remount when switching conversations so the default follows
@@ -203,7 +194,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                 }))}
               />
             </Field>
-          </ActionForm>
+          </ChatComposer>
         </Card>
       </div>
     </>

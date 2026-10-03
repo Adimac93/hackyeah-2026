@@ -89,7 +89,6 @@ we lose an hour to merge conflicts at 3am.
 ## Hard rules
 
 - **Never commit secrets.** New secret → add the key to `.env.example` with an empty value.
-- **Never push to `main`.** Branch (`just wt`) → PR. Merge your own PR; no review gate.
 - **Never work in the primary checkout.** One agent, one worktree.
 - **`just check` must be green before you say you're done.** Paste the output.
 - **New dependency → tell the team first.** Lockfile conflicts are expensive.
