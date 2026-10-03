@@ -124,6 +124,54 @@ severity = "high"
 action = "redact"
 pattern = '(?i)\b(bearer|api[_-]?key|authorization)\s*[:=]\s*[A-Za-z0-9._\-]{20,}'
 
+# OWASP LLM02 secrets. They run before the pii.* redactors on purpose:
+# controls apply in catalog order, and a PII pattern that redacts a token's
+# digit run first would leave the rest of the secret in the text.
+
+[[controls.deterministic]]
+id = "secret.github-token"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "redact"
+pattern = '\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b'
+
+[[controls.deterministic]]
+id = "secret.slack-token"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\bxox[abposr]-[A-Za-z0-9-]{10,}\b'
+
+[[controls.deterministic]]
+id = "secret.google-api-key"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\bAIza[0-9A-Za-z_\-]{35}\b'
+
+[[controls.deterministic]]
+id = "secret.llm-api-key"
+# OpenAI- and Anthropic-style keys.
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "redact"
+pattern = '\bsk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}'
+
+[[controls.deterministic]]
+id = "secret.stripe-key"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "redact"
+pattern = '\b[rs]k_live_[0-9A-Za-z]{20,}\b'
+
+[[controls.deterministic]]
+id = "secret.password-assignment"
+# `password: hunter2`, `DB_PASSWORD="..."`. Redacts the value with its key.
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '''(?i)\b(?:[a-z0-9_]*pass(?:word|wd)?|pwd|[a-z0-9_]*secret|hasło|haslo)\s*[:=]\s*["']?[^\s"'`]{6,}'''
+
 [[controls.deterministic]]
 id = "pii.email"
 hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
@@ -177,10 +225,14 @@ pattern = '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s:@/]+:[
 
 [[controls.deterministic]]
 id = "obfuscation.invisible-unicode"
+# OWASP LLM01. Zero-width characters, bidi overrides (text that renders in a
+# different order than the model reads it) and Unicode tag characters, which
+# smuggle invisible ASCII instructions. Flag, not block: tag characters also
+# spell subdivision flag emoji.
 hooks = ["prompt_in", "tool_call", "tool_result"]
 severity = "high"
 action = "flag"
-pattern = '[\u{200B}-\u{200F}\u{2060}\u{FEFF}]'
+pattern = '[\u{200B}-\u{200F}\u{202A}-\u{202E}\u{2060}-\u{2064}\u{2066}-\u{2069}\u{FEFF}\u{E0000}-\u{E007F}]'
 
 [[controls.deterministic]]
 id = "exploit.code-execution"
@@ -205,7 +257,143 @@ id = "injection.instruction-override"
 hooks = ["prompt_in", "tool_call", "tool_result"]
 severity = "medium"
 action = "flag"
-pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
+# OWASP LLM01. English and Polish phrasings.
+pattern = '(?i)\b(?:(?:ignore|disregard|forget|override|bypass)\s+(?:(?:all|any|the|your|of|my)\s+)*(?:previous|prior|above|earlier|preceding|original|initial|system)\s+(?:instructions?|prompts?|rules|directions|guidelines|context)|(?:zignoruj|pomiń|zapomnij|olej)\s+(?:o\s+)?(?:wszystkie\s+|wszystkich\s+|twoje\s+)?(?:poprzednie|wcześniejsze|powyższe|poprzednich|wcześniejszych|powyższych)\s+(?:instrukcje|instrukcji|polecenia|poleceń|zasady|zasad|reguły|reguł))'
+
+# ---------------------------------------------------------------- tier 1: OWASP
+# Static guardrails mapped to the OWASP Top 10 for LLM Applications (2025).
+# Same rules as above: one cheap regex each, no model. Where a pattern has a
+# plausible benign reading the action is `flag`, which only escalates to the
+# semantic tier (and adds to the identity's risk score); `block` and `redact`
+# are kept for shapes with no legitimate use at that hook.
+#
+# Not covered statically, by design: LLM03/LLM04 supply chain and poisoning
+# live in signatures.toml; LLM08 (vector stores) and LLM09 (misinformation)
+# have no regex shape; LLM10's spend and loop limits are budgets and [runaway].
+
+# --- LLM01 Prompt injection ----------------------------------------------
+
+[[controls.deterministic]]
+id = "injection.role-hijack"
+# Persona jailbreaks: DAN, "developer mode", "act as an unrestricted AI".
+hooks = ["prompt_in", "tool_result"]
+severity = "medium"
+action = "flag"
+pattern = '(?i)\b(?:do\s+anything\s+now|you\s+are\s+(?:now\s+)?(?:DAN|in\s+developer\s+mode|jailbroken|unrestricted|unfiltered|uncensored)\b|developer\s+mode\s+(?:enabled|activated|on)\b|jailbreak(?:ed)?\s+mode|(?:act|pretend|behave|roleplay)\s+(?:as|like)\s+(?:an?\s+)?(?:unrestricted|unfiltered|uncensored|jailbroken|evil)\b|(?:without|ignoring|no)\s+(?:any\s+)?(?:ethical\s+|safety\s+|content\s+)?(?:restrictions|filters|guardrails|guidelines)\s+(?:from\s+now|anymore|whatsoever))'
+
+[[controls.deterministic]]
+id = "injection.fake-delimiter"
+# Chat-template and role markers inside user text or tool output: an attempt
+# to make injected text look like a system or assistant turn.
+hooks = ["prompt_in", "tool_result"]
+severity = "high"
+action = "flag"
+pattern = '(?im)(?:<\|(?:im_start|im_end|system|endoftext|start_header_id|end_header_id|eot_id)\|>|\[/?INST\]|<</?SYS>>|</?(?:system|system_prompt)>|^\s*#{2,}\s*(?:system|instruction)s?\s*:|^\s*system\s*:\s)'
+
+[[controls.deterministic]]
+id = "injection.agent-directive"
+# Indirect injection (also OWASP agentic T6): content returned by a tool that
+# addresses the model and tells it to act.
+hooks = ["tool_result"]
+severity = "high"
+action = "flag"
+pattern = '(?i)\b(?:(?:important|attention|note|instructions?|message)\s+(?:for|to)\s+(?:the\s+)?(?:ai|assistant|llm|language\s+model|agent|chatbot)\b|(?:ai|assistant|llm|agent|model)\s*[,:]\s*(?:(?:you\s+must|you\s+should|please|now|immediately)\s+)+(?:call|run|execute|invoke|send|forward|email|upload|post|delete)\b)'
+
+[[controls.deterministic]]
+id = "obfuscation.encoded-payload"
+# A long base64 run is how instructions are hidden from both people and
+# keyword filters. Low severity: it is also how files travel.
+hooks = ["prompt_in", "tool_call"]
+severity = "low"
+action = "flag"
+pattern = '[A-Za-z0-9+/]{200,}={0,2}'
+
+# --- LLM02 Sensitive information disclosure --------------------------------
+# The secret.* controls for LLM02 sit with the other secrets above, ahead of
+# the pii.* redactors.
+
+[[controls.deterministic]]
+id = "consumption.divergence-attack"
+# "Repeat the word X forever": the training-data extraction attack. Also an
+# unbounded-output request (LLM10).
+hooks = ["prompt_in"]
+severity = "medium"
+action = "flag"
+pattern = '''(?i)\b(?:repeat|say|print|write|output)\s+(?:the\s+)?(?:(?:word|phrase|token|letter)\s+)?["']?[\p{L}\p{N}]+["']?\s+(?:forever|infinitely|endlessly|indefinitely|non-?stop|\d{4,}\s+times)'''
+
+# --- LLM05 Improper output handling ----------------------------------------
+
+[[controls.deterministic]]
+id = "output.markdown-exfiltration"
+# A rendered image whose URL carries data: the client fetches it and leaks the
+# query string with no click. Text links are left alone; images render
+# unprompted.
+hooks = ["response_out", "tool_result"]
+severity = "high"
+action = "block"
+pattern = '''(?i)(?:!\[[^\]]*\]\(\s*https?://[^)\s]*\?[^)\s]*=[^)\s]*\)|<img\b[^>]*\bsrc\s*=\s*["']?https?://[^"'\s>]*\?[^"'\s>]*=)'''
+
+[[controls.deterministic]]
+id = "output.script-injection"
+# Executable markup in model output (stored XSS in whatever renders it).
+# Redacted rather than blocked so the rest of the answer survives. Switch to
+# `flag` if your users need HTML examples verbatim.
+hooks = ["response_out", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '''(?i)(?:<\s*script\b[^>]*>|<\s*iframe\b[^>]*>|\b(?:href|src|action|formaction)\s*=\s*["']?\s*javascript\s*:|\bon(?:error|load|click|mouseover|focus|toggle)\s*=\s*["']?)'''
+
+[[controls.deterministic]]
+id = "output.sql-injection"
+# Injection shapes in model-written SQL or tool arguments. Plain SELECTs, joins
+# and ordinary UNIONs pass: resources__query takes model-written SQL.
+hooks = ["tool_call"]
+severity = "high"
+action = "block"
+pattern = '''(?i)(?:\bunion\s+(?:all\s+)?select\s+(?:null|\d+)\s*,|'\s*or\s+'?\d+'?\s*=\s*'?\d+|;\s*(?:drop|truncate|alter|grant)\s+|\bxp_cmdshell\b|\b(?:pg_)?sleep\s*\(\s*\d+\s*\)|\binto\s+(?:out|dump)file\b)'''
+
+[[controls.deterministic]]
+id = "output.path-traversal"
+hooks = ["tool_call"]
+severity = "high"
+action = "block"
+pattern = '(?i)(?:(?:\.\./){2,}|(?:\.\.\\){2,}|%2e%2e(?:%2f|%5c|/)|/etc/(?:passwd|shadow|sudoers)\b|c:\\windows\\system32)'
+
+# --- LLM06 Excessive agency ------------------------------------------------
+
+[[controls.deterministic]]
+id = "agency.destructive-command"
+# Irreversible actions an agent should never take on its own.
+hooks = ["tool_call"]
+severity = "critical"
+action = "block"
+pattern = '(?i)(?:\brm\s+-[a-z]*r[a-z]*\s+(?:/|~|\*|\$HOME)(?:\s|$|\*)|\bmkfs(?:\.\w+)?\s|\bdd\s+if=\S+\s+of=/dev/|:\(\)\s*\{\s*:\|:&\s*\};:|\bchmod\s+(?:-R\s+)?777\s+/|\bgit\s+push\s+(?:--force\b|-f\b)|\bdrop\s+(?:database|schema)\b|\btruncate\s+table\b|\bdelete\s+from\s+\w+\s*(?:;|$))'
+
+[[controls.deterministic]]
+id = "agency.credential-access"
+# Tool calls that read credential stores.
+hooks = ["tool_call"]
+severity = "high"
+action = "block"
+pattern = '''(?i)(?:\.ssh/(?:id_[a-z0-9]+|authorized_keys)|\.aws/credentials|\.kube/config|\.docker/config\.json|\.git-credentials|\.netrc|\.npmrc|\.pypirc|/etc/shadow|(?:^|[/\s"'])\.env(?:\.local|\.prod|\.production)?(?:["'\s,;)\]}]|$))'''
+
+[[controls.deterministic]]
+id = "exfiltration.known-endpoint"
+# Request-capture and paste services: the usual drop points for stolen data.
+# Escalates to exfiltration.intent below.
+hooks = ["tool_call", "response_out"]
+severity = "high"
+action = "flag"
+pattern = '(?i)\b(?:pastebin\.com|paste\.ee|hastebin\.com|transfer\.sh|webhook\.site|requestbin\.(?:com|net)|pipedream\.net|[a-z0-9-]+\.ngrok(?:-free)?\.(?:io|app)|interact\.sh|oast\.(?:fun|live|me|pro|site)|burpcollaborator\.net)\b'
+
+# --- LLM07 System prompt leakage -------------------------------------------
+
+[[controls.deterministic]]
+id = "leak.system-prompt-request"
+hooks = ["prompt_in", "tool_result"]
+severity = "medium"
+action = "flag"
+pattern = '(?i)(?:\b(?:reveal|show|print|repeat|output|display|dump|leak|tell\s+me|what\s+(?:is|are|was|were))\s+(?:me\s+)?(?:your|the)\s+(?:(?:full|exact|original|initial|hidden|secret|entire)\s+)*(?:system\s+prompt|system\s+message|initial\s+instructions|hidden\s+instructions|instructions\s+above|developer\s+message)|\b(?:pokaż|wypisz|powtórz|podaj|zdradź)\s+(?:mi\s+)?(?:sw[oó]j\s+|swoje\s+|tw[oó]j\s+|twoje\s+)?(?:prompt\s+systemowy|instrukcje\s+systemowe|ukryte\s+instrukcje))'
 
 # ---------------------------------------------------------------- tier 2
 # Semantic controls. Model-backed, tens of milliseconds. `escalate_when`

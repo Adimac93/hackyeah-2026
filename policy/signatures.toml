@@ -35,3 +35,47 @@ title = "Base64 blob followed by a decode-and-execute pattern"
 kind = "deterministic"
 severity = "critical"
 pattern = '(?i)(base64\s*(-d|--decode)|b64decode)[^\n]{0,40}\|\s*(sh|bash|python)'
+
+# --- OWASP LLM03 supply chain / LLM04 data and model poisoning ---------------
+
+[[signature]]
+external_id = "AIS-0005"
+title = "Hugging Face model loaded with trust_remote_code=True"
+kind = "deterministic"
+severity = "high"
+pattern = '(?i)\btrust_remote_code\s*=\s*True\b'
+
+[[signature]]
+external_id = "AIS-0006"
+title = "NumPy array loaded with allow_pickle=True"
+kind = "deterministic"
+severity = "critical"
+pattern = '(?i)\bnp\.load\s*\([^)]*allow_pickle\s*=\s*True'
+
+[[signature]]
+external_id = "AIS-0007"
+title = "Pickle-based loader (joblib, dill, cloudpickle) on an artifact"
+kind = "deterministic"
+severity = "high"
+pattern = '(?i)\b(?:joblib|dill|cloudpickle)\.loads?\s*\('
+
+[[signature]]
+external_id = "AIS-0008"
+title = "Remote script piped straight into a shell or interpreter"
+kind = "deterministic"
+severity = "critical"
+pattern = '(?i)\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?)\b'
+
+[[signature]]
+external_id = "AIS-0009"
+title = "pip install with an extra index URL (dependency confusion)"
+kind = "deterministic"
+severity = "high"
+pattern = '(?i)\bpip3?\s+install\b[^\n]*--extra-index-url\b'
+
+[[signature]]
+external_id = "AIS-0010"
+title = "Keras model loaded with safe_mode=False (Lambda layer code execution)"
+kind = "deterministic"
+severity = "critical"
+pattern = '(?i)\bload_model\s*\([^)]*safe_mode\s*=\s*False'
