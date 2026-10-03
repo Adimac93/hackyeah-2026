@@ -3,11 +3,11 @@ import OpenAI from "openai";
 
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
-import { createAdminClient } from "@/lib/supabase/admin";
 
 import { interpretGatewayResponse } from "./gateway";
 import { describeProviderError, normalizeHistory } from "./models";
 import type { ModelOption } from "./models";
+import { loadConnectionSecret } from "./secrets";
 
 const TIMEOUT_MS = 60_000;
 const MAX_TOKENS = 16_000;
@@ -31,31 +31,22 @@ interface Credentials {
   baseUrl: string | undefined;
 }
 
-/** Read a console connection's key with the service client — it's never exposed to browsers. */
+/** A console connection's settings, with its key decrypted from Vault (server only). */
 async function connectionCredentials(
   connectionId: string,
 ): Promise<Credentials> {
-  const admin = createAdminClient();
-  if (admin === null) {
+  const connection = await loadConnectionSecret(connectionId);
+  if (connection === "no-service-key") {
     throw new ProviderError(
       "Console-managed models need SUPABASE_SECRET_KEY on the server.",
     );
   }
-  const { data } = await admin
-    .from("llm_providers")
-    .select("api_key, base_url, enabled")
-    .eq("id", connectionId)
-    .maybeSingle<{
-      api_key: string | null;
-      base_url: string | null;
-      enabled: boolean;
-    }>();
-  if (data?.enabled !== true) {
+  if (connection?.enabled !== true) {
     throw new ProviderError("This model was removed or disabled by an admin.");
   }
   return {
-    apiKey: data.api_key ?? undefined,
-    baseUrl: data.base_url ?? undefined,
+    apiKey: connection.apiKey ?? undefined,
+    baseUrl: connection.baseUrl ?? undefined,
   };
 }
 

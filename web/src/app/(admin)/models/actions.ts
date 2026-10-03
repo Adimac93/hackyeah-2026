@@ -6,8 +6,8 @@ import { redirect } from "next/navigation";
 
 import { getSession } from "@/lib/auth";
 import type { FormState } from "@/lib/domain";
-import { keyHint, parseProviderInput } from "@/lib/llm/presets";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { parseProviderInput } from "@/lib/llm/presets";
+import { loadConnectionSecret } from "@/lib/llm/secrets";
 
 const TEST_TIMEOUT_MS = 10_000;
 
@@ -35,6 +35,23 @@ function fieldsOf(formData: FormData): Record<string, string | undefined> {
   return fields;
 }
 
+type Supabase = Awaited<ReturnType<typeof getSession>>["supabase"];
+
+/** Encrypt the key into Vault; the table only gets a reference, last-4 hint and fingerprint. */
+async function storeKey(
+  supabase: Supabase,
+  id: string,
+  key: string,
+): Promise<string | null> {
+  const { error } = await supabase.rpc("set_llm_provider_key", {
+    provider_id: id,
+    new_key: key,
+  });
+  return error === null
+    ? null
+    : `Couldn't store the API key (${error.message}).`;
+}
+
 function refresh() {
   revalidatePath("/models");
   revalidatePath("/chat");
@@ -54,19 +71,29 @@ export async function createConnection(
   }
   const input = parsed.value;
 
-  const { error } = await session.supabase.from("llm_providers").insert({
-    name: input.name,
-    preset: input.preset,
-    kind: input.kind,
-    base_url: input.baseUrl,
-    api_key: input.apiKey,
-    api_key_hint: input.apiKey === null ? null : keyHint(input.apiKey),
-    models: input.models,
-    enabled: input.enabled,
-    created_by: session.user.id,
-  });
+  const { data, error } = await session.supabase
+    .from("llm_providers")
+    .insert({
+      name: input.name,
+      preset: input.preset,
+      kind: input.kind,
+      base_url: input.baseUrl,
+      models: input.models,
+      enabled: input.enabled,
+      created_by: session.user.id,
+    })
+    .select("id")
+    .single<{ id: string }>();
   if (error !== null) {
     return { error: error.message };
+  }
+  if (input.apiKey !== null) {
+    const keyError = await storeKey(session.supabase, data.id, input.apiKey);
+    if (keyError !== null) {
+      // don't leave a connection behind that silently has no key
+      await session.supabase.from("llm_providers").delete().eq("id", data.id);
+      return { error: keyError };
+    }
   }
   refresh();
   redirect("/models");
@@ -96,14 +123,17 @@ export async function updateConnection(
       base_url: input.baseUrl,
       models: input.models,
       enabled: input.enabled,
-      // blank key field = keep the stored one
-      ...(input.apiKey === null
-        ? {}
-        : { api_key: input.apiKey, api_key_hint: keyHint(input.apiKey) }),
     })
     .eq("id", id);
   if (error !== null) {
     return { error: error.message };
+  }
+  // blank key field = keep the stored one
+  if (input.apiKey !== null) {
+    const keyError = await storeKey(session.supabase, id, input.apiKey);
+    if (keyError !== null) {
+      return { error: keyError };
+    }
   }
   refresh();
   redirect("/models");
@@ -140,27 +170,18 @@ export async function testConnection(
   if (session.error) {
     return { error: session.error };
   }
-  const admin = createAdminClient();
-  if (admin === null) {
+  const connection = await loadConnectionSecret(id);
+  if (connection === "no-service-key") {
     return { error: "Testing needs SUPABASE_SECRET_KEY on the server." };
   }
-  const { data } = await admin
-    .from("llm_providers")
-    .select("kind, base_url, api_key")
-    .eq("id", id)
-    .maybeSingle<{
-      kind: string;
-      base_url: string | null;
-      api_key: string | null;
-    }>();
-  if (data === null) {
+  if (connection === null) {
     return { error: "Connection not found." };
   }
 
   try {
-    if (data.kind === "anthropic") {
+    if (connection.kind === "anthropic") {
       const client = new Anthropic({
-        apiKey: data.api_key ?? undefined,
+        apiKey: connection.apiKey ?? undefined,
         timeout: TEST_TIMEOUT_MS,
         maxRetries: 0,
       });
@@ -168,15 +189,15 @@ export async function testConnection(
       return { ok: `Connected · ${String(page.data.length)} models visible` };
     }
 
-    const base = (data.base_url ?? "https://api.openai.com/v1").replace(
+    const base = (connection.baseUrl ?? "https://api.openai.com/v1").replace(
       /\/+$/,
       "",
     );
     const response = await fetch(`${base}/models`, {
       headers:
-        data.api_key === null
+        connection.apiKey === null
           ? {}
-          : { authorization: `Bearer ${data.api_key}` },
+          : { authorization: `Bearer ${connection.apiKey}` },
       signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
       redirect: "error",
     });
