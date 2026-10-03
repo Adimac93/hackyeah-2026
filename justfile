@@ -37,6 +37,10 @@ dev:
 fmt:
     cargo fmt
 
+# prove the audit log has not been edited (exit 1 if it has)
+verify-audit:
+    cargo run --quiet -p gateway --bin verify-audit
+
 # new schema migration: just db-new add_something
 db-new NAME:
     supabase migration new {{NAME}}

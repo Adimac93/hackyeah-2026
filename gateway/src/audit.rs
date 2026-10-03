@@ -269,15 +269,41 @@ impl Auditor {
 
 /// `sha256(prev_hash || the fields a tamperer would want to change)`.
 fn next_hash(prev: &[u8], record: &EventRecord<'_>) -> Vec<u8> {
+    let detections: Vec<_> = record
+        .detections
+        .iter()
+        .map(|d| (d.control_id.as_str(), action_name(d.action)))
+        .collect();
+    chain_hash(
+        prev,
+        record.trace_id,
+        hook_name(record.hook),
+        verdict_name(record.verdict),
+        &record.payload_sha256,
+        &detections,
+    )
+}
+
+/// The chain function, expressed over plain values so the verifier can
+/// recompute a hash from database rows alone. Changing this invalidates every
+/// existing chain, which is the point.
+pub fn chain_hash(
+    prev: &[u8],
+    trace_id: Uuid,
+    hook: &str,
+    verdict: &str,
+    payload_sha256: &str,
+    detections: &[(&str, &str)],
+) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(prev);
-    hasher.update(record.trace_id.as_bytes());
-    hasher.update(hook_name(record.hook).as_bytes());
-    hasher.update(verdict_name(record.verdict).as_bytes());
-    hasher.update(record.payload_sha256.as_bytes());
-    for detection in record.detections {
-        hasher.update(detection.control_id.as_bytes());
-        hasher.update(action_name(detection.action).as_bytes());
+    hasher.update(trace_id.as_bytes());
+    hasher.update(hook.as_bytes());
+    hasher.update(verdict.as_bytes());
+    hasher.update(payload_sha256.as_bytes());
+    for (control_id, action) in detections {
+        hasher.update(control_id.as_bytes());
+        hasher.update(action.as_bytes());
     }
     hasher.finalize().to_vec()
 }
@@ -286,7 +312,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(out, "{byte:02x}");
