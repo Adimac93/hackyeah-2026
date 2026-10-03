@@ -10,6 +10,16 @@ import {
   tdClass,
   thClass,
 } from "@/components/ui";
+import {
+  ACTIVITY_SELECT,
+  activityQueryString,
+  applyActivityFilters,
+  distinctUsers,
+  hasActivityFilters,
+  parseActivityFilters,
+  worstSeverity,
+} from "@/lib/activity";
+import type { ActivityRow } from "@/lib/activity";
 import { requireMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import {
@@ -19,83 +29,86 @@ import {
   fmtMicros,
   overheadUs,
 } from "@/lib/gateway";
-import type {
-  ControlSeverity,
-  Detection,
-  GatewayEvent,
-  Principal,
-  SecurityStatus,
-} from "@/lib/gateway";
+import type { Principal } from "@/lib/gateway";
 import { supabaseEnv } from "@/lib/supabase/env";
 
 const FILTER_CLASS =
   "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 focus:border-emerald-500 focus:outline-none";
 
-const SEVERITY_RANK: Record<ControlSeverity, number> = {
-  info: 0,
-  low: 1,
-  medium: 2,
-  high: 3,
-  critical: 4,
-};
-
-type EventRow = GatewayEvent & {
-  status: SecurityStatus;
-  principals: Pick<Principal, "slug" | "display_name"> | null;
-  detections: Pick<Detection, "id" | "severity" | "control_id">[];
-};
-
 export default async function ActivityPage({
   searchParams,
 }: PageProps<"/activity">) {
   const { supabase } = await requireMember();
-  const sp = await searchParams;
-  const verdict = typeof sp.verdict === "string" ? sp.verdict : "";
-  const channel = typeof sp.channel === "string" ? sp.channel : "";
-  const principal = typeof sp.principal === "string" ? sp.principal : "";
-  const status = typeof sp.status === "string" ? sp.status : "";
+  const filters = parseActivityFilters(await searchParams);
+  const { verdict, channel, principal, status, user } = filters;
 
-  let query = supabase
-    .from("activity")
-    .select(
-      "*, principals(slug, display_name), detections(id, severity, control_id)",
-    )
-    .order("ts", { ascending: false })
-    .limit(200);
-  if ((VERDICTS as readonly string[]).includes(verdict)) {
-    query = query.eq("verdict", verdict);
-  }
-  if ((CHANNELS as readonly string[]).includes(channel)) {
-    query = query.eq("channel", channel);
-  }
-  if (principal) {
-    query = query.eq("principal_id", principal);
-  }
-  if ((SECURITY_STATUSES as readonly string[]).includes(status)) {
-    query = query.eq("status", status);
-  }
+  const query = applyActivityFilters(
+    supabase
+      .from("activity")
+      .select(ACTIVITY_SELECT)
+      .order("ts", { ascending: false })
+      .limit(200),
+    filters,
+  );
 
-  const [{ data }, { data: principalRows }] = await Promise.all([
-    query,
-    supabase.from("principals").select("id, slug, display_name").order("slug"),
-  ]);
-  const events = (data ?? []) as EventRow[];
+  const [{ data }, { data: principalRows }, { data: userRows }] =
+    await Promise.all([
+      query,
+      supabase
+        .from("principals")
+        .select("id, slug, display_name")
+        .order("slug"),
+      // recent attributions are enough to fill the user picker
+      supabase
+        .from("events")
+        .select("end_user")
+        .not("end_user", "is", null)
+        .order("ts", { ascending: false })
+        .limit(5000),
+    ]);
+  const events = (data ?? []) as ActivityRow[];
   const { url, key } = supabaseEnv();
   const liveEnv = { url, anonKey: key };
   const principals = (principalRows ?? []) as Pick<
     Principal,
     "id" | "slug" | "display_name"
   >[];
+  const users = distinctUsers(
+    (userRows ?? []) as { end_user: string | null }[],
+  );
+  // keep a filtered user selectable even if they fell out of the recent window
+  if (user !== "" && !users.includes(user)) {
+    users.unshift(user);
+  }
+  const exportHref = `/activity/export${activityQueryString(filters)}`;
 
   return (
     <>
       <PageHeader
         title="Activity"
         subtitle="Every request the AI gateway intercepted, newest first and live. Append-only and hash-chained."
+        actions={
+          <a
+            href={exportHref}
+            download
+            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+            title="PDF of the events matching the current filters (up to 5000)"
+          >
+            Export PDF
+          </a>
+        }
       />
 
       <LiveRefresh {...liveEnv} />
       <form className="mb-4 flex flex-wrap items-center gap-2">
+        <select name="user" defaultValue={user} className={FILTER_CLASS}>
+          <option value="">All users</option>
+          {users.map((u) => (
+            <option key={u} value={u}>
+              {u}
+            </option>
+          ))}
+        </select>
         <select name="status" defaultValue={status} className={FILTER_CLASS}>
           <option value="">Any security status</option>
           {SECURITY_STATUSES.map((s) => (
@@ -135,7 +148,7 @@ export default async function ActivityPage({
         <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
           Filter
         </button>
-        {verdict || channel || principal || status ? (
+        {hasActivityFilters(filters) ? (
           <Link
             href="/activity"
             className="text-sm text-zinc-500 hover:text-zinc-300"
@@ -166,14 +179,7 @@ export default async function ActivityPage({
               </EmptyRow>
             )}
             {events.map((event) => {
-              const worst = event.detections.reduce<ControlSeverity | null>(
-                (worstSoFar, d) =>
-                  worstSoFar === null ||
-                  SEVERITY_RANK[d.severity] > SEVERITY_RANK[worstSoFar]
-                    ? d.severity
-                    : worstSoFar,
-                null,
-              );
+              const worst = worstSeverity(event.detections);
               return (
                 <tr key={event.id} className="hover:bg-zinc-800/40">
                   <td className={tdClass}>
