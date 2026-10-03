@@ -115,9 +115,16 @@ gcloud compute networks subnets update default --region="$REGION" \
   --enable-private-ip-google-access
 gcloud run services add-iam-policy-binding ollama --region="$REGION" \
   --member=allUsers --role=roles/run.invoker
+# all-traffic: a run.app URL is a public address, so private-ranges-only sends
+# it around the VPC and internal ingress answers 404. That routes Supabase
+# through the VPC too, so the VPC needs Cloud NAT or the gateway can't start.
+gcloud compute routers create nat-router --network=default --region="$REGION"
+gcloud compute routers nats create nat --router=nat-router --region="$REGION" \
+  --auto-allocate-nat-external-ips --nat-all-subnet-ip-ranges
+# UPSTREAM_URL is the server root: the gateway appends /v1/chat/completions
 gcloud run services update backend --region="$REGION" \
-  --network=default --subnet=default --vpc-egress=private-ranges-only \
-  --update-env-vars=OLLAMA_URL=https://<ollama-url>,UPSTREAM_URL=https://<ollama-url>/v1,SEMANTIC_MODEL=llama3.1:8b
+  --network=default --subnet=default --vpc-egress=all-traffic \
+  --update-env-vars=OLLAMA_URL=https://<ollama-url>,UPSTREAM_URL=https://<ollama-url>,SEMANTIC_MODEL=llama3.1:8b
 ```
 
 Never set `ingress=all` on `ollama` while `allUsers` can invoke it.
@@ -130,7 +137,7 @@ Never set `ingress=all` on `ollama` while `allUsers` can invoke it.
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | how the admin API verifies console users' access tokens. Unset, every admin route answers 503; enforcement is unaffected |
 | `METRICS_TOKEN` | Bearer token for `GET /metrics/prometheus`. Unset disables it. Put it in Secret Manager |
 | `RESOURCES_DATABASE_URL` | read-only connection for the `resources__query` MCP tool (a role with `SELECT` on schema `resources` only). Unset disables the resource tools |
-| `UPSTREAM_URL` | where chat traffic goes: any OpenAI-compatible server (e.g. Ollama's `/v1`). Defaults to `mock`, which prod refuses |
+| `UPSTREAM_URL` | where chat traffic goes: the root of any OpenAI-compatible server, without `/v1` (the gateway appends `/v1/chat/completions`). Defaults to `mock`, which prod refuses |
 | `OLLAMA_URL` | the semantic judge (Ollama). Defaults to `mock`, which prod refuses |
 | `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |
 | `DATABASE_URL` | from Secret Manager. Required in every environment: the policy, identities, grants and budgets live there. An empty database is seeded with the built-in sample policy on first start |
