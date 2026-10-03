@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/ui";
 import { requireAnyMember } from "@/lib/auth";
 import { canAccessConsole } from "@/lib/domain";
 
+import pkg from "../../../package.json";
 import { signOut } from "../login/actions";
 
 export default async function AdminLayout({ children }: LayoutProps<"/">) {
@@ -51,6 +52,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
             </form>
           </div>
         </div>
+        <p className="px-2 text-xs text-zinc-600">v{pkg.version}</p>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-8 md:px-10">{children}</main>
     </div>
