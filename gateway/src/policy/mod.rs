@@ -105,6 +105,8 @@ pub enum PolicyError {
     SchemaVersion { found: u32, expected: u32 },
     #[error("active profile {name:?} is not defined")]
     Profile { name: String },
+    #[error("MCP server name {name:?} is reserved for the gateway's own tools")]
+    ReservedServer { name: String },
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -353,6 +355,14 @@ impl Policy {
                 })?,
             None => (raw.defaults.on_detect, raw.defaults.fail_mode),
         };
+
+        // `control__*` tools are served by the gateway; an upstream with that
+        // name would let it impersonate them.
+        if let Some(server) = raw.mcp.servers.iter().find(|s| s.name == "control") {
+            return Err(PolicyError::ReservedServer {
+                name: server.name.clone(),
+            });
+        }
 
         let mut seen = HashSet::new();
         let mut deterministic = Vec::with_capacity(raw.controls.deterministic.len());

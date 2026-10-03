@@ -90,6 +90,12 @@ every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
 | `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |
 | `DATABASE_URL` | from Secret Manager. Required in prod; the gateway refuses to start without it |
 
+**One instance.** `cloudbuild.yaml` deploys with `--max-instances=1`: a pending
+access approval (`control__request_access`) lives in the gateway's memory, so the
+agent's blocked call and the console's decision must land on the same instance.
+Cloud Run's request timeout (default 300 s) also closes the console's SSE stream
+periodically; the browser reconnects and the gateway replays what is pending.
+
 ## Troubleshooting
 
 **"container failed to start and listen on PORT"** — the gateway loads its
@@ -122,4 +128,5 @@ path needs an upstream MCP server too: the catalog's `docs` server is the local
 - **`mcp-demo`** — serves poisoned documents by design. Run it locally.
 - **`just report`** — needs the `typst` binary, which is not in the runtime image.
 - **The web console** — not deployed by this repo; set its `GATEWAY_URL` to the
-  service URL and add its origin to `CORS_ORIGINS`.
+  service URL and add its origin to `CORS_ORIGINS`. Set `GATEWAY_ADMIN_KEY` (server
+  side only) to a `security_admin` principal's key so the access-request popup works.

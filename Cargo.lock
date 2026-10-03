@@ -589,6 +589,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "dotenvy",
+ "futures-util",
  "notify",
  "regex",
  "reqwest",
