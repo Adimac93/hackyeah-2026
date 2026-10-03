@@ -147,7 +147,7 @@ pub fn evaluate(policy: &Policy, hook: Hook, text: &str) -> Evaluation {
 ///
 /// Only the controls that `escalate_when` admits actually run, so a clean
 /// request pays nothing here. A detector that fails or times out is resolved by
-/// the catalog's `fail_mode`: closed means an unavailable detector blocks, which
+/// the control's `fail_mode`: closed means an unavailable detector blocks, which
 /// is the only safe reading — a control that cannot run has not passed.
 pub async fn escalate(
     policy: &Policy,
@@ -188,7 +188,7 @@ pub async fn escalate(
             Ok(score) => {
                 tracing::debug!(control = %control.id, score, "below threshold");
             }
-            Err(error) => match policy.fail_mode {
+            Err(error) => match control.fail_mode {
                 FailMode::Closed => {
                     tracing::error!(control = %control.id, %error, "detector unavailable — failing closed");
                     evaluation.verdict = evaluation.verdict.merge(Verdict::Block);

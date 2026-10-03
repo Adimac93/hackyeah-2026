@@ -114,6 +114,8 @@ pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(in
 #   always     — every request through this hook
 #   suspicious — only when tier 1 flagged something (default; keeps p50 low)
 #   never      — disabled without deleting the config
+#
+# `fail_mode` on a control overrides [defaults] for that control only.
 
 [[controls.semantic]]
 id = "injection.prompt-guard"
