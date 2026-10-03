@@ -7,9 +7,11 @@
 
 mod budget;
 mod feed;
+mod mcp;
 mod watch;
 
 pub use budget::{Budget, Budgets, Price};
+pub use mcp::{McpServer, McpSettings, UnknownPrincipal};
 pub use watch::{PolicyHandle, spawn_watcher};
 
 use feed::compile_feed;
@@ -233,44 +235,6 @@ pub struct Models {
 
 fn default_true() -> bool {
     true
-}
-
-/// What to do with a caller we have no `principals` row for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnknownPrincipal {
-    /// Refuse tool access. The right default for a control layer.
-    #[default]
-    Deny,
-    Allow,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpServer {
-    pub name: String,
-    pub url: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpSettings {
-    #[serde(default)]
-    pub unknown_principal: UnknownPrincipal,
-    #[serde(default, rename = "server")]
-    pub servers: Vec<McpServer>,
-}
-
-impl McpSettings {
-    pub fn enabled_servers(&self) -> impl Iterator<Item = &McpServer> {
-        self.servers.iter().filter(|s| s.enabled)
-    }
-
-    pub fn server(&self, name: &str) -> Option<&McpServer> {
-        self.enabled_servers().find(|s| s.name == name)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
