@@ -1,11 +1,12 @@
-# Cloud Build for the gateway. Used by `just deploy` and by the push-to-main
-# trigger.
+# Cloud Build for the console. Used by the frontend trigger; run by hand with
+#   gcloud builds submit --config web/cloudbuild.yaml
+# from the repo root.
 #
-# Where the time used to go: the classic `docker build --cache-from` caches only
-# the final stage, so `cargo chef cook` recompiled every dependency on every
-# push. That took 4 minutes on the default 2-vCPU machine. buildx with a registry
-# cache in mode=max keeps every stage, so a source-only change rebuilds just the
-# gateway crate.
+# This replaces the buildpack trigger, which spent its time in two places: about
+# a minute pulling the buildpack builder, then four minutes on a
+# `docker pull --all-tags` that downloaded every frontend image ever pushed only
+# to push them back. Here buildx pushes the one new image itself and reuses the
+# dependency install from the registry cache.
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -23,7 +24,7 @@ steps:
         docker buildx build $$tags \
           --cache-from=type=registry,ref=${_IMAGE}:buildcache \
           --cache-to=type=registry,ref=${_IMAGE}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true \
-          --push .
+          --push web
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: deploy
@@ -31,37 +32,28 @@ steps:
     args:
       - -euc
       - |
-        # An existing service only gets the new image: `run deploy` with flags
-        # would also rewrite settings someone changed by hand (DATABASE_URL is a
-        # literal on the live service, not the secret below).
+        # Only the image changes. The service's env (Supabase keys, GATEWAY_URL,
+        # demo login) is set on the service and kept as it is.
         if gcloud run services describe ${_SERVICE} --region=${_REGION} >/dev/null 2>&1; then
           gcloud run services update ${_SERVICE} --region=${_REGION} \
             --image=${_IMAGE}:${BUILD_ID} --quiet
         else
-          # Pending access approvals live in process memory: the agent's blocked
-          # tools/call and the console's decision must reach the same instance.
-          # DATABASE_URL holds a password, so it comes from Secret Manager rather
-          # than from this file or a flag that lands in build logs.
           gcloud run deploy ${_SERVICE} --region=${_REGION} \
-            --image=${_IMAGE}:${BUILD_ID} --platform=managed --port=8080 \
-            --max-instances=1 \
-            --update-env-vars=ENVIRONMENT=prod \
-            --update-secrets=DATABASE_URL=gateway-database-url:latest --quiet
+            --image=${_IMAGE}:${BUILD_ID} --platform=managed --port=8080 --quiet
         fi
 
 substitutions:
-  _SERVICE: backend
+  _SERVICE: frontend
   _REGION: europe-west1
   _AR_REPO: cloud-run-source-deploy
   _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE}
 
 options:
-  # 8 vCPUs instead of the default 2: a cold dependency build (new Cargo.lock)
-  # is CPU-bound and finishes several times faster
+  # `next build` compiles and type-checks on every core it gets
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
   dynamicSubstitutions: true
   # COMMIT_SHA is empty for `gcloud builds submit`; do not fail on it
   substitutionOption: ALLOW_LOOSE
 
-timeout: 1800s
+timeout: 1200s
