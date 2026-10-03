@@ -119,7 +119,9 @@ export default async function TeamPage() {
                           submitLabel={u.role === null ? "Assign" : "Set"}
                           className="flex items-center gap-2"
                         >
+                          {/* keyed by role: the form resets after the action, and a select only picks up a new defaultValue when it remounts */}
                           <select
+                            key={u.role ?? ""}
                             name="role"
                             defaultValue={u.role ?? ""}
                             required
