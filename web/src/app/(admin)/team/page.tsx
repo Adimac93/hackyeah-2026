@@ -1,5 +1,6 @@
 import { ActionForm } from "@/components/action-form";
 import { ConfirmButton } from "@/components/confirm-button";
+import { InlineAction } from "@/components/inline-action";
 import {
   Card,
   Field,
@@ -23,7 +24,6 @@ import {
   removeMember,
   sendPasswordReset,
 } from "./actions";
-import { ResetPasswordButton } from "./reset-password-button";
 
 const ROLE_HELP: Record<string, string> = {
   admin: "Everything, including team management",
@@ -151,8 +151,11 @@ export default async function TeamPage() {
                     {isAdmin ? (
                       <td className={`${tdClass} text-right`}>
                         <div className="flex flex-col items-end gap-1.5">
-                          <ResetPasswordButton
+                          <InlineAction
                             action={sendPasswordReset.bind(null, u.email)}
+                            label="Send reset link"
+                            pendingLabel="Sending…"
+                            showOk={false}
                           />
                           {!self && u.role !== null && (
                             <form action={removeMember.bind(null, u.user_id)}>

@@ -3,6 +3,7 @@ import OpenAI from "openai";
 
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 import { interpretGatewayResponse } from "./gateway";
 import { describeProviderError, normalizeHistory } from "./models";
@@ -24,13 +25,61 @@ const REFUSAL_REPLY =
 /** Thrown for provider failures; `message` is safe to show to the user. */
 export class ProviderError extends Error {}
 
+/** Where to send a request: env config, or a console-managed connection's stored settings. */
+interface Credentials {
+  apiKey: string | undefined;
+  baseUrl: string | undefined;
+}
+
+/** Read a console connection's key with the service client — it's never exposed to browsers. */
+async function connectionCredentials(
+  connectionId: string,
+): Promise<Credentials> {
+  const admin = createAdminClient();
+  if (admin === null) {
+    throw new ProviderError(
+      "Console-managed models need SUPABASE_SECRET_KEY on the server.",
+    );
+  }
+  const { data } = await admin
+    .from("llm_providers")
+    .select("api_key, base_url, enabled")
+    .eq("id", connectionId)
+    .maybeSingle<{
+      api_key: string | null;
+      base_url: string | null;
+      enabled: boolean;
+    }>();
+  if (data?.enabled !== true) {
+    throw new ProviderError("This model was removed or disabled by an admin.");
+  }
+  return {
+    apiKey: data.api_key ?? undefined,
+    baseUrl: data.base_url ?? undefined,
+  };
+}
+
+function envCredentials(option: ModelOption): Credentials {
+  if (option.provider === "anthropic") {
+    return { apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: undefined };
+  }
+  if (option.provider === "openai") {
+    return { apiKey: process.env.OPENAI_API_KEY, baseUrl: undefined };
+  }
+  return {
+    apiKey: process.env.LLM_COMPATIBLE_API_KEY,
+    baseUrl: process.env.LLM_COMPATIBLE_BASE_URL,
+  };
+}
+
 async function callAnthropic(
+  credentials: Credentials,
   model: string,
   system: string,
   messages: ChatTurn[],
 ): Promise<string> {
   const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
+    apiKey: credentials.apiKey,
     timeout: TIMEOUT_MS,
     maxRetries: 1,
   });
@@ -111,20 +160,15 @@ async function callGateway(
   return outcome.reply;
 }
 
-function openAIClient(option: ModelOption): OpenAI {
-  return option.provider === "openai"
-    ? new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        timeout: TIMEOUT_MS,
-        maxRetries: 1,
-      })
-    : new OpenAI({
-        baseURL: process.env.LLM_COMPATIBLE_BASE_URL,
-        // local servers like Ollama ignore the key but the SDK requires one
-        apiKey: process.env.LLM_COMPATIBLE_API_KEY ?? "not-needed",
-        timeout: TIMEOUT_MS,
-        maxRetries: 1,
-      });
+function openAIClient(credentials: Credentials): OpenAI {
+  return new OpenAI({
+    // undefined = api.openai.com
+    baseURL: credentials.baseUrl,
+    // local servers like Ollama ignore the key but the SDK requires one
+    apiKey: credentials.apiKey ?? "not-needed",
+    timeout: TIMEOUT_MS,
+    maxRetries: 1,
+  });
 }
 
 function statusOf(error: unknown): number | undefined {
@@ -148,15 +192,20 @@ export function getAssistant(option: ModelOption): AssistantProvider {
       let reply: string;
       if (option.provider === "gateway") {
         reply = await callGateway(option.model, system, messages, principal);
-      } else if (option.provider === "anthropic") {
-        reply = await callAnthropic(option.model, system, messages);
       } else {
-        reply = await callOpenAICompatible(
-          openAIClient(option),
-          option.model,
-          system,
-          messages,
-        );
+        const credentials =
+          option.connectionId === undefined
+            ? envCredentials(option)
+            : await connectionCredentials(option.connectionId);
+        reply =
+          option.provider === "anthropic"
+            ? await callAnthropic(credentials, option.model, system, messages)
+            : await callOpenAICompatible(
+                openAIClient(credentials),
+                option.model,
+                system,
+                messages,
+              );
       }
       if (reply === "") {
         throw new ProviderError(`${option.label} returned an empty reply.`);
