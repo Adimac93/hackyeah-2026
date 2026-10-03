@@ -3,7 +3,8 @@
 // so the demo never depends on a third-party API.
 import type { ChatTurn } from "../assistant.ts";
 
-export type ProviderId = "anthropic" | "openai" | "compatible" | "mock";
+export type ProviderId =
+  "gateway" | "anthropic" | "openai" | "compatible" | "mock";
 
 export interface ModelOption {
   /** stable id stored in the DB: `<provider>:<model>` */
@@ -23,6 +24,8 @@ const DEFAULT_ANTHROPIC_MODELS = [
   "claude-haiku-4-5",
 ];
 const DEFAULT_OPENAI_MODELS = ["gpt-5", "gpt-5-mini"];
+/** first entry of the gateway's `[models] allowed` list in policy/control-catalog.toml */
+const DEFAULT_GATEWAY_MODELS = ["llama3.1:8b"];
 
 const ANTHROPIC_LABELS: Record<string, string> = {
   "claude-fable-5-1": "Claude Fable 5.1",
@@ -50,6 +53,22 @@ function configured(value: string | undefined): value is string {
 /** Every selectable model, best default first. */
 export function availableModels(env: Env): ModelOption[] {
   const options: ModelOption[] = [];
+
+  // through the AI Control Layer gateway: every prompt and answer is policed and audited.
+  // First, so the demo default is the protected path.
+  if (configured(env.GATEWAY_URL)) {
+    for (const model of parseModelList(
+      env.GATEWAY_MODELS,
+      DEFAULT_GATEWAY_MODELS,
+    )) {
+      options.push({
+        id: `gateway:${model}`,
+        provider: "gateway",
+        model,
+        label: `Gateway ${model} (protected)`,
+      });
+    }
+  }
 
   if (configured(env.ANTHROPIC_API_KEY)) {
     for (const model of parseModelList(

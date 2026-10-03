@@ -75,6 +75,7 @@ export async function sendChatMessage(
   try {
     reply = await getAssistant(model)({
       history: (history ?? []) as ChatTurn[],
+      principal: session.user.email ?? session.user.id,
       policies: (policies ?? []) as PolicySnippet[],
     });
   } catch (error) {

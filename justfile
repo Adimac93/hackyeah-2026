@@ -2,18 +2,23 @@
 #
 # RULE: agents and teammates call `just <recipe>`. Never the underlying tool.
 # When you add a toolchain, wire it into the matching recipe below instead of
-# teaching the team a new command. The stack plugs in here and nowhere else.
+# teaching the team a new command.
+#
+# Two apps live here: the Rust gateway at the root and the Next.js web app in
+# web/. The core recipes cover both, because "done" has to mean both are green.
 
 set shell := ["bash", "-uc"]
-set dotenv-load
+# Load `.env` for local-only values such as DATABASE_URL. `.env` is gitignored.
+set dotenv-load := true
 
 repo := justfile_directory()
 
 default:
     @just --list --unsorted
 
-# install dependencies
+# install dependencies for both apps
 setup:
+    cargo fetch --locked
     cd web && pnpm install --frozen-lockfile
 
 # the one gate: `just check` green == done. Nothing else counts.
@@ -21,35 +26,92 @@ check: typecheck lint test
     @echo "check: OK"
 
 typecheck:
+    cargo check --workspace --all-targets
     cd web && pnpm typecheck
 
-# eslint + prettier (@solvro/config); `pnpm format` in web/ fixes formatting
+# clippy + rustfmt for the gateway; eslint + prettier (@solvro/config) for web.
+# `just fmt` fixes what is fixable.
 lint:
+    cargo fmt --check
+    cargo clippy --workspace --all-targets -- -D warnings
     cd web && pnpm lint && pnpm format:check
 
 test:
+    cargo test --workspace --all-targets
     cd web && pnpm test
 
-# run the app locally
+# gateway and web app together — what you want for the demo
 dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p gateway --bin gateway
+    ./target/debug/gateway &
+    api_pid=$!
+    trap 'kill $api_pid 2>/dev/null || true' EXIT
     cd web && pnpm dev
 
-# load deterministic demo data
-seed:
-    psql "${SUPABASE_DB_URL:?set SUPABASE_DB_URL (Supabase → Connect → connection string)}" -v ON_ERROR_STOP=1 -f web/supabase/seed.sql
+# just the gateway; set UPSTREAM_URL/POLICY_PATH in .env to override defaults
+dev-api:
+    cargo run -p gateway --bin gateway
 
-# apply new web/supabase/migrations to the database: just migrate (preview: just migrate --dry-run)
+# just the web app
+dev-web:
+    cd web && pnpm dev
+
+# apply formatting to both
+fmt:
+    cargo fmt
+    cd web && pnpm format
+
+# render the management/security report; requires DATABASE_URL and typst
+report:
+    cargo run --quiet -p gateway --bin report
+
+# prove the audit log has not been edited; requires DATABASE_URL
+verify-audit:
+    cargo run --quiet -p gateway --bin verify-audit
+
+# new schema migration: just db-new add_something
+db-new NAME:
+    supabase migration new {{NAME}}
+
+# One migration directory for one database: the gateway's schema and the web
+# app's share a timeline, so a single ordering is the only one that can be
+# correct.
+#
+# apply pending supabase/migrations: just migrate (preview: just migrate --dry-run)
 migrate *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd web
     # the URL may live in web/.env.local next to the other Supabase settings
-    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
-    pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL in .env or web/.env.local (Supabase → Connect → connection string)}" {{FLAGS}}
+    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f web/.env.local ]; then set -a; . ./web/.env.local; set +a; fi
+    url="${SUPABASE_DB_URL:-${DATABASE_URL:-}}"
+    : "${url:?set DATABASE_URL or SUPABASE_DB_URL (Supabase → Connect → connection string)}"
+    pnpm dlx supabase@2.119.0 db push --db-url "$url" {{FLAGS}}
 
-# ship to the demo URL. Wire this up on day one, not at hour 23.
-deploy:
-    @echo "deploy: no stack yet"
+# load demo data: gateway identities and budgets, then the web fixtures
+seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url="${DATABASE_URL:-${SUPABASE_DB_URL:-}}"
+    : "${url:?set DATABASE_URL (or SUPABASE_DB_URL) in .env}"
+    psql "$url" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+
+# run the gateway and the deliberately vulnerable demo MCP server together
+demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p gateway --bin gateway -p mcp-demo --bin mcp-demo
+    ./target/debug/mcp-demo &
+    demo_pid=$!
+    trap 'kill $demo_pid 2>/dev/null || true' EXIT
+    ./target/debug/gateway
+
+# ship the gateway to Cloud Run. See docs/DEPLOY.md for first-time setup.
+deploy region="europe-west1" service="backend": check
+    gcloud builds submit \
+      --config cloudbuild.yaml \
+      --substitutions=_REGION={{region}},_SERVICE={{service}}
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:

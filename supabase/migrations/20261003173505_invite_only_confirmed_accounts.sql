@@ -1,6 +1,10 @@
--- Invite emails create the auth user up front (unconfirmed). Only grant immediately to
--- confirmed accounts; an unconfirmed one keeps a pending invite, so re-inviting resends
--- the email and the role is still claimed on confirmation (claim_team_invite).
+-- Recovered from the database: applied directly, never committed.
+--
+-- Invite emails create the auth user up front (unconfirmed). Only grant
+-- immediately to confirmed accounts; an unconfirmed one keeps a pending invite,
+-- so re-inviting resends the email and the role is still claimed on
+-- confirmation (claim_team_invite).
+
 create or replace function public.invite_team_member(member_email text, member_role public.team_role)
 returns text
 language plpgsql security definer set search_path = '' as $$

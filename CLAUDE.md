@@ -8,8 +8,34 @@ rather than invent.
 
 ## Stack
 
-**UNDECIDED.** Do not pick one unilaterally. When the team decides, record it here,
-wire the tools into the `justfile`, and add the language setup step to CI.
+- **Gateway** — Rust workspace: `axum`, `tokio`, `sqlx`, `dotenvy`. Deployed from a
+  `cargo-chef` based Dockerfile. See `docs/backend-scaffold.md`.
+- **Storage** — Supabase Postgres, project ref `wkxhfzjknxdyfwhnwogn`. Schema lives in
+  `supabase/migrations/`; the gateway reaches it through `sqlx` with `DATABASE_URL`, the
+  dashboard through the Data API.
+- **Semantic tier** — an `llm_judge` detector. Runs only when a deterministic control
+  flags the traffic (`escalate_when`), so clean requests pay nothing. In `dev` it is a
+  deterministic mock (`OLLAMA_URL=mock`, scores from each control's `mock_keywords`) and
+  chat goes to a mock upstream (`UPSTREAM_URL=mock`), so no Ollama is needed. In `prod`
+  both point at Ollama on a Cloud Run GPU service; prod refuses to start with a mock.
+  With no reachable detector the controls fail closed and suspicious traffic is refused.
+  A Presidio sidecar for contextual PII is still unbuilt; that control ships disabled.
+
+### Database rules
+
+- **One migration directory: `supabase/migrations/`.** The gateway's schema and
+  the web app's share a database, so they share a timeline — two directories
+  cannot express a single correct ordering. `just migrate` applies them,
+  `just db-new <name>` creates one.
+- **Change the schema with a migration, never in the Supabase console.** `supabase
+  migration new <name>`, edit the file, apply, commit. A console edit is invisible to
+  everyone else's checkout.
+- **RLS is on for every table and must stay on.** Public-schema tables are reachable
+  through the Data API. Only the gateway's privileged connection writes; the dashboard
+  reads. There is no authenticated write path — the audit log must not be rewritable by
+  the thing that displays it.
+- **Run the advisors after any schema change** (`supabase db advisors`, or the MCP
+  `get_advisors`). It was clean when the schema landed; keep it that way.
 
 ## Commands
 
@@ -36,7 +62,12 @@ we lose an hour to merge conflicts at 3am.
 
 | path | owner |
 |---|---|
-| _(fill in as the tree appears)_ | |
+| `gateway/` — Rust proxy, deterministic tier, policy engine, audit writer | |
+| `sentinel/` — semantic tier (pending the stack decision above) | |
+| `dashboard/` — admin UI, reads the Data API | |
+| `policy/` — TOML control catalog, thresholds, budgets | |
+| `tests/` — scenario cases, positive and negative | |
+| `supabase/migrations/` — schema | |
 
 ## Hard rules
 

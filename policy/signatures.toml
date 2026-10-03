@@ -1,0 +1,37 @@
+# Attack signature feed (task.md §4.4).
+#
+# Deliberately separate from the control catalog: a feed refresh is an
+# operational event, not a policy change. In production this is pulled from an
+# external system on `refresh_secs`; here it is a file so judges can edit it and
+# watch the effect immediately.
+
+source = "local-demo-feed"
+version = 1
+
+[[signature]]
+external_id = "AIS-0001"
+title = "Pickle deserialization in model checkpoint load"
+kind = "deterministic"
+severity = "critical"
+pattern = '(?i)torch\.load\s*\([^)]*weights_only\s*=\s*False'
+
+[[signature]]
+external_id = "AIS-0002"
+title = "Model pulled from an unpinned third-party repository"
+kind = "deterministic"
+severity = "high"
+pattern = '''(?i)from_pretrained\s*\(\s*["'][^"']+["']\s*\)'''
+
+[[signature]]
+external_id = "AIS-0003"
+title = "Shell metacharacters in a tool argument"
+kind = "deterministic"
+severity = "high"
+pattern = '[;&|`]\s*(curl|wget|nc|bash|sh)\b'
+
+[[signature]]
+external_id = "AIS-0004"
+title = "Base64 blob followed by a decode-and-execute pattern"
+kind = "deterministic"
+severity = "critical"
+pattern = '(?i)(base64\s*(-d|--decode)|b64decode)[^\n]{0,40}\|\s*(sh|bash|python)'
