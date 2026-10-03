@@ -13,32 +13,41 @@ default:
 
 # install dependencies
 setup:
-    @echo "setup: no stack yet — wire dependency install here"
+    cargo fetch
 
 # the one gate: `just check` green == done. Nothing else counts.
 check: typecheck lint test
     @echo "check: OK"
 
 typecheck:
-    @echo "typecheck: no stack yet"
+    cargo check --workspace --all-targets
 
 lint:
-    @echo "lint: no stack yet"
+    cargo fmt --check
+    cargo clippy --workspace --all-targets -- -D warnings
 
 test:
-    @echo "test: no stack yet"
+    cargo test --workspace
 
 # run the app locally
 dev:
-    @echo "dev: no stack yet"
+    cargo run -p gateway
+
+# apply formatting
+fmt:
+    cargo fmt
+
+# new schema migration: just db-new add_something
+db-new NAME:
+    supabase migration new {{NAME}}
 
 # load deterministic demo data
 seed:
-    @echo "seed: no stack yet"
+    @echo "seed: TODO — demo principals, budgets and attack signatures"
 
 # ship to the demo URL. Wire this up on day one, not at hour 23.
 deploy:
-    @echo "deploy: no stack yet"
+    @echo "deploy: TODO — docker build + push. Do this before building features."
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:
