@@ -4,7 +4,8 @@ The thing the judges actually see. Written now, updated as we build — not at h
 
 ## Demo URL
 
-**TBD** — deploy a hello-world the hour the stack lands, then put the link here.
+**TBD** — the gateway deploys with `just deploy` (Cloud Run service `backend`,
+`docs/DEPLOY.md`); put its URL and the console's URL here once they are live.
 
 ## Script
 
@@ -18,9 +19,17 @@ Target length: **3 minutes.**
 
 ## What it depends on
 
-- Seeded data: `just seed` — _(describe the accounts/records the script relies on)_
-- Services that must be up: the Vertex judge (`just deploy`, then the cert capture in
-  `infra/README.md`). Without it semantic controls fail closed. _(TBD: the rest)_
+- Seeded data: `just seed` — two gateway principals with public demo keys:
+  `demo-agent` (key `demo-agent-dev-key`, `security_admin`, tools `docs__read` and
+  `docs__search`) and `red-team` (key `red-team-dev-key`, `member`, `docs__search` only).
+  Budgets come from `policy/control-catalog.toml`: global 2M tokens / $25 a day,
+  `demo-agent` 50k tokens/hour hard, `red-team` 10k tokens/hour soft.
+- Services that must be up:
+  - locally: `just dev` (gateway + console) or `just demo` (gateway + `mcp-demo` on
+    :9310 for the MCP path). Dev uses the mock upstream and mock judge — no model needed.
+  - prod: the gateway (`just deploy`) and the Vertex judge (`just infra`, then the cert
+    capture in `infra/README.md`). Without the judge, semantic controls fail closed.
+    Prod chat also needs a real `UPSTREAM_URL` (TASKS.md `chat-upstream-prod`).
 - Anything manual: _(TBD — ideally nothing)_
 
 ## Fallback
@@ -35,4 +44,8 @@ Live demos fail on conference wifi. Before the final hour:
 
 Be honest with yourself here so nothing surprises you on stage.
 
-- _(TBD)_
+- Console chat through the gateway returns 401: the web app still sends `x-principal`,
+  the gateway only accepts `Authorization: Bearer` (TASKS.md `web-gateway-auth`). Demo
+  the gateway with `curl` and a seeded key until that lands.
+- `pii.contextual` ships disabled (no Presidio sidecar yet).
+- The Vertex judge bills ~$25/day while deployed; tear it down after the demo.

@@ -73,8 +73,15 @@ and that failure looks like a code problem when it is not.
 
 ```bash
 gcloud run services update backend --region="$REGION" \
-  --set-env-vars=ENVIRONMENT=prod,CORS_ORIGINS=https://<dashboard-origin>,UPSTREAM_URL=<ollama-service-url>,OLLAMA_URL=<ollama-service-url>
+  --update-env-vars=CORS_ORIGINS=https://<dashboard-origin>,UPSTREAM_URL=<openai-compatible-model-url>
+
+# the semantic judge: VPC egress, SEMANTIC_BACKEND=vertex, VERTEX_JUDGE_* (infra/README.md)
+gcloud run services update backend --region="$REGION" \
+  $(terraform -chdir=infra output -raw backend_deploy_flags)
 ```
+
+`cloudbuild.yaml` already sets `ENVIRONMENT=prod` and the `DATABASE_URL` secret on
+every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
 
 | variable | effect |
 |---|---|
@@ -82,8 +89,11 @@ gcloud run services update backend --region="$REGION" \
 | `CORS_ORIGINS` | comma-separated origins, or `*` for any. **Unset in prod means no browser may call the API.** Set it to the dashboard's origin, not `*` |
 | `PORT` | injected by Cloud Run. A malformed value aborts startup rather than binding something else |
 | `POLICY_PATH` | defaults to `policy/control-catalog.toml`, shipped inside the image |
-| `UPSTREAM_URL` | where model traffic goes: the Ollama GPU service. Defaults to `mock`, which prod refuses |
-| `OLLAMA_URL` | the semantic judge: the same Ollama GPU service. Defaults to `mock`, which prod refuses |
+| `UPSTREAM_URL` | where chat traffic goes: any OpenAI-compatible server (e.g. Ollama's `/v1`). Defaults to `mock`, which prod refuses |
+| `SEMANTIC_BACKEND` | `vertex` sends the judge to the VPC-internal Vertex endpoint; set by `backend_deploy_flags` |
+| `VERTEX_JUDGE_URL` / `VERTEX_JUDGE_IP` / `VERTEX_JUDGE_CA` | the judge's address and self-signed CA; set by `backend_deploy_flags` (CA from Secret Manager) |
+| `OLLAMA_URL` | the judge when `SEMANTIC_BACKEND` is not `vertex`. Defaults to `mock`, which prod refuses |
+| `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |
 | `DATABASE_URL` | from Secret Manager. Required in prod; the gateway refuses to start without it |
 
 ## Troubleshooting
@@ -99,9 +109,18 @@ gcloud run services logs read backend --region="$REGION" --limit=50
 
 **Builds time out** — raise `timeout` in `cloudbuild.yaml`.
 
-**Chat requests return 502** — `UPSTREAM_URL` points at nothing. Models run on
-a separate Ollama Cloud Run GPU service (not provisioned by this repo yet, see
-TASKS.md `ollama-gpu`); point `UPSTREAM_URL` and `OLLAMA_URL` at it. The MCP
+**"ENVIRONMENT=prod refuses a mock"** — `UPSTREAM_URL` is unset, or the judge is
+neither `SEMANTIC_BACKEND=vertex` nor a real `OLLAMA_URL`. The very first
+`just deploy` fails this way because the service has no settings yet; step 6
+sets them, and later deploys keep them.
+
+**Semantic controls refuse everything** — the judge is unreachable and the
+controls fail closed. Check the Vertex endpoint is deployed (`just infra`) and
+re-run the CA capture job after it is recreated (`infra/README.md`).
+
+**Chat requests return 502** — `UPSTREAM_URL` points at nothing. This repo does
+not provision a chat model (TASKS.md `chat-upstream-prod`); the Vertex endpoint
+serves only the semantic judge. The MCP
 path needs an upstream MCP server too: the catalog's `docs` server is the local
 `mcp-demo`, which is not deployed.
 
@@ -109,3 +128,5 @@ path needs an upstream MCP server too: the catalog's `docs` server is the local
 
 - **`mcp-demo`** — serves poisoned documents by design. Run it locally.
 - **`just report`** — needs the `typst` binary, which is not in the runtime image.
+- **The web console** — not deployed by this repo; set its `GATEWAY_URL` to the
+  service URL and add its origin to `CORS_ORIGINS`.

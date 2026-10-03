@@ -2,14 +2,23 @@
 
 ## What we're building
 
-**TBD** — fill this in the moment the idea is locked. One paragraph: what it does, for
-whom, what the judges see in the demo. Until this line is replaced, agents should ask
-rather than invent.
+An **AI Control Layer** for the HackYeah challenge in `docs/task.md`: a security gateway
+that sits between users/agents and LLMs and MCP servers, and polices every prompt,
+response, tool call and tool result against one hot-reloaded TOML control catalog
+(`policy/`). Deterministic controls (PII, secrets, injection patterns, exploit
+signatures, budgets, model allow lists) run on every request; an AI judge runs only on
+traffic they flag. Every decision lands in a hash-chained audit log in Supabase, which
+the SecOps console (`web/`) shows to the security team. Judges see: an ad-hoc prompt
+redacted or blocked live, a catalog edit taking effect without a restart, the console's
+activity/controls/budgets views, and `just check` proving each control. The full spec is
+`docs/BACKEND.md`.
 
 ## Stack
 
 - **Gateway** — Rust workspace: `axum`, `tokio`, `sqlx`, `dotenvy`. Deployed from a
-  `cargo-chef` based Dockerfile. See `docs/backend-scaffold.md`.
+  `cargo-chef` based Dockerfile to Cloud Run (`docs/DEPLOY.md`). Spec: `docs/BACKEND.md`.
+- **Web app** — Next.js in `web/` (pnpm): the SecOps console and security assistant chat.
+  Reads the Data API as the signed-in security team; never writes gateway tables.
 - **Storage** — Supabase Postgres, project ref `wkxhfzjknxdyfwhnwogn`. Schema lives in
   `supabase/migrations/`; the gateway reaches it through `sqlx` with `DATABASE_URL`, the
   dashboard through the Data API.
@@ -33,9 +42,12 @@ rather than invent.
   migration new <name>`, edit the file, apply, commit. A console edit is invisible to
   everyone else's checkout.
 - **RLS is on for every table and must stay on.** Public-schema tables are reachable
-  through the Data API. Only the gateway's privileged connection writes; the dashboard
-  reads. There is no authenticated write path — the audit log must not be rewritable by
-  the thing that displays it.
+  through the Data API. Gateway tables (`events`, `detections`, `principals`, `budgets`, `usage`,
+  `policy_versions`, `attack_signatures`, `attack_history`) are written only by the
+  gateway's privileged connection; the console reads them and has no write path — the
+  audit log must not be rewritable by the thing that displays it. The console's own
+  tables (incidents, company policies, chat, team, LLM connections) take role-gated
+  writes from signed-in team members.
 - **Run the advisors after any schema change** (`supabase db advisors`, or the MCP
   `get_advisors`). It was clean when the schema landed; keep it that way.
 
@@ -48,10 +60,16 @@ the contract, so the stack can change without retraining anyone.
 |---|---|
 | `just setup` | install dependencies |
 | `just check` | typecheck + lint + test — **the definition of done** |
-| `just dev` | run locally |
+| `just dev` | run gateway + web app locally (`dev-api` / `dev-web` for one) |
+| `just demo` | gateway + the deliberately vulnerable `mcp-demo` server |
+| `just fmt` | apply rustfmt + prettier |
 | `just migrate` | apply new Supabase migrations (`--dry-run` to preview) |
+| `just db-new <name>` | new migration file |
 | `just seed` | load demo data |
-| `just deploy` | ship to the demo URL |
+| `just report` | render the PDF security report (needs `DATABASE_URL`, `typst`) |
+| `just verify-audit` | prove the audit hash chain is intact (needs `DATABASE_URL`) |
+| `just deploy` | ship the gateway to Cloud Run (runs `just check` first) |
+| `just infra` | provision the Vertex judge with Terraform (~$25/day while up) |
 | `just wt <name>` | new isolated worktree + branch + its own PORT |
 | `just wt-rm <name>` | remove that worktree |
 
@@ -65,10 +83,11 @@ we lose an hour to merge conflicts at 3am.
 | path | owner |
 |---|---|
 | `gateway/` — Rust proxy, deterministic tier, policy engine, audit writer | |
-| `sentinel/` — semantic tier (pending the stack decision above) | |
-| `dashboard/` — admin UI, reads the Data API | |
+| `sentinel/` — semantic tier: the Ollama judge image (`sentinel/ollama/`) | |
+| `infra/` — Terraform for the VPC-internal Vertex judge | |
+| `mcp-demo/` — deliberately vulnerable MCP server for the demo | |
+| `web/` — SecOps console + assistant chat (Next.js), reads the Data API | |
 | `policy/` — TOML control catalog, thresholds, budgets | |
-| `tests/` — scenario cases, positive and negative | |
 | `supabase/migrations/` — schema | |
 
 ## Hard rules
@@ -87,6 +106,9 @@ This is a 24-hour build. Do **not** TDD everything; that default is wrong here.
 - **Test**: pure logic — scoring, parsing, validation, anything with real edge cases.
 - **One smoke test**: the demo happy path, end to end.
 - **Don't test**: UI layout, third-party wiring, anything a human eyeballs in two seconds.
+
+Tests live next to the code: `gateway/src/**/tests.rs` (cargo) and `web/src/**/*.test.ts`
+(pnpm). `just test` runs both.
 
 ## Demo rules
 
