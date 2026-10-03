@@ -4,17 +4,20 @@ import { notFound } from "next/navigation";
 import { ActionForm } from "@/components/action-form";
 import { ConfirmButton } from "@/components/confirm-button";
 import { TrashIcon } from "@/components/icons";
-import { Card, Field, PageHeader, Select, inputClass } from "@/components/ui";
+import { ProviderIcon } from "@/components/provider-icon";
+import { Card, Field, PageHeader, inputClass } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
-import { availableModels, defaultModel, modelLabel } from "@/lib/llm/models";
+import { loadModels } from "@/lib/llm/catalog";
+import { defaultModel, modelLabel } from "@/lib/llm/models";
 
 import {
   deleteAllConversations,
   deleteConversation,
   sendChatMessage,
 } from "./actions";
+import { ModelSelect } from "./model-select";
 
 const SUGGESTIONS = [
   "What are the password requirements for a new service?",
@@ -44,7 +47,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
   const conversations = (convData ?? []) as ChatConversation[];
   const messages = (messageData ?? []) as ChatMessage[];
   const active = conversations.find((x) => x.id === activeId) ?? null;
-  const models = availableModels(process.env);
+  const models = await loadModels(supabase);
   const selected = defaultModel(active?.model ?? null, models);
   if (activeId !== null && active === null) {
     notFound();
@@ -159,7 +162,13 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                 >
                   {m.content}
                   {m.model === null ? null : (
-                    <p className="mt-2 text-xs text-zinc-500">
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
+                      <ProviderIcon
+                        icon={
+                          models.find((o) => o.id === m.model)?.icon ?? "custom"
+                        }
+                        size="sm"
+                      />
                       {modelLabel(m.model, models)}
                     </p>
                   )}
@@ -182,12 +191,16 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
               placeholder="Ask the security assistant… (never paste real secrets)"
             />
             <Field label="Model">
-              <Select
+              <ModelSelect
                 // remount when switching conversations so the default follows
                 key={active?.id ?? "new"}
                 name="model"
                 defaultValue={selected.id}
-                options={models.map((o) => ({ value: o.id, label: o.label }))}
+                options={models.map((o) => ({
+                  value: o.id,
+                  label: o.label,
+                  icon: o.icon,
+                }))}
               />
             </Field>
           </ActionForm>

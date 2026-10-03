@@ -2,16 +2,35 @@
 // A provider only shows up when its API key is configured; the offline mock is always there
 // so the demo never depends on a third-party API.
 import type { ChatTurn } from "../assistant.ts";
+import { isPresetId, presetForBaseUrl } from "./presets.ts";
+import type { ConnectionKind, PresetId } from "./presets.ts";
 
 export type ProviderId =
   "gateway" | "anthropic" | "openai" | "compatible" | "mock";
 
+/** Logo to show next to a model. */
+export type ModelIcon = PresetId | "gateway" | "mock";
+
 export interface ModelOption {
-  /** stable id stored in the DB: `<provider>:<model>` */
+  /** stable id stored in the DB: `<provider>:<model>`, or `db:<connection id>:<model>` */
   id: string;
   provider: ProviderId;
   model: string;
   label: string;
+  icon: ModelIcon;
+  /** set for console-managed connections; the server looks up their key by this id */
+  connectionId?: string;
+}
+
+/** A console-managed connection, as members can read it (never includes the key). */
+export interface LlmConnection {
+  id: string;
+  name: string;
+  preset: string;
+  kind: ConnectionKind;
+  base_url: string | null;
+  models: string[];
+  enabled: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -51,7 +70,10 @@ function configured(value: string | undefined): value is string {
 }
 
 /** Every selectable model, best default first. */
-export function availableModels(env: Env): ModelOption[] {
+export function availableModels(
+  env: Env,
+  connections: LlmConnection[] = [],
+): ModelOption[] {
   const options: ModelOption[] = [];
 
   // through the AI Control Layer gateway: every prompt and answer is policed and audited.
@@ -66,6 +88,7 @@ export function availableModels(env: Env): ModelOption[] {
         provider: "gateway",
         model,
         label: `Gateway ${model} (protected)`,
+        icon: "gateway",
       });
     }
   }
@@ -80,6 +103,7 @@ export function availableModels(env: Env): ModelOption[] {
         provider: "anthropic",
         model,
         label: ANTHROPIC_LABELS[model] ?? model,
+        icon: "anthropic",
       });
     }
   }
@@ -94,6 +118,7 @@ export function availableModels(env: Env): ModelOption[] {
         provider: "openai",
         model,
         label: `OpenAI ${model}`,
+        icon: "openai",
       });
     }
   }
@@ -109,6 +134,28 @@ export function availableModels(env: Env): ModelOption[] {
         provider: "compatible",
         model,
         label: `${name} ${model}`,
+        icon: presetForBaseUrl(env.LLM_COMPATIBLE_BASE_URL),
+      });
+    }
+  }
+
+  // added by an admin on the Models page
+  for (const connection of connections) {
+    if (!connection.enabled) {
+      continue;
+    }
+    for (const model of connection.models) {
+      const anthropicLabel =
+        connection.kind === "anthropic" && connection.name === "Anthropic"
+          ? ANTHROPIC_LABELS[model]
+          : undefined;
+      options.push({
+        id: `db:${connection.id}:${model}`,
+        provider: connection.kind,
+        model,
+        label: anthropicLabel ?? `${connection.name} ${model}`,
+        icon: isPresetId(connection.preset) ? connection.preset : "custom",
+        connectionId: connection.id,
       });
     }
   }
@@ -118,6 +165,7 @@ export function availableModels(env: Env): ModelOption[] {
     provider: "mock",
     model: "security-assistant",
     label: "Offline demo (no API)",
+    icon: "mock",
   });
   return options;
 }
@@ -142,7 +190,13 @@ export function defaultModel(
 
 /** Label for a stored model id, even if that provider is no longer configured. */
 export function modelLabel(id: string, options: ModelOption[]): string {
-  return findModel(id, options)?.label ?? id.slice(id.indexOf(":") + 1);
+  const found = findModel(id, options);
+  if (found !== null) {
+    return found.label;
+  }
+  // `db:<uuid>:<model>` — model ids can contain ":" themselves (llama3.1:8b)
+  const prefixEnd = id.startsWith("db:") ? id.indexOf(":", 3) : id.indexOf(":");
+  return id.slice(prefixEnd + 1);
 }
 
 /** Most recent turns only, merged so roles alternate and the first turn is the user's. */

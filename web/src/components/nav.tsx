@@ -7,6 +7,7 @@ import {
   ActivityIcon,
   AlertIcon,
   ChatIcon,
+  ChipIcon,
   DocumentIcon,
   GaugeIcon,
   SlidersIcon,
@@ -20,6 +21,7 @@ const LINKS = [
   { href: "/incidents", label: "Incidents", Icon: AlertIcon },
   { href: "/policies", label: "Policies", Icon: DocumentIcon },
   { href: "/team", label: "Team", Icon: UsersIcon },
+  { href: "/models", label: "Models", Icon: ChipIcon },
   { href: "/chat", label: "Assistant", Icon: ChatIcon, open: true },
 ];
 
