@@ -17,7 +17,7 @@ Format: `- [ ] <name> — <what> (@who)`
 - [ ] grants-to-toml — move model/tool grants + roles into the catalog, drop `budgets` table and grant columns via migration; budgets already come from the catalog, `seed.sql` still fills the table (@)
 - [ ] principal-models — enforce per-identity/role model allow list on top of the global one (@)
 - [ ] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count (@)
-- [ ] chat-upstream-prod — a real `UPSTREAM_URL` for prod chat (the Vertex judge serves only the semantic tier); wire it into cloudbuild.yaml (@)
+- [ ] chat-upstream-prod — a real `UPSTREAM_URL` for prod chat ; wire it into cloudbuild.yaml (@)
 - [ ] signature-mirror — upsert loaded feed into `attack_signatures` on every load (@)
 - [ ] policy-reload-audit — record rejected reloads and a diff for file reloads; uploads already store `diff_summary` (@)
 - [ ] prompt-helper — local-model helper: violated policy + compliant rewrite, never auto-resubmitted (@)
@@ -37,4 +37,4 @@ Format: `- [ ] <name> — <what> (@who)`
 - [x] api-keys — per-principal Bearer keys (SHA-256 in `principals.api_key_hash`), `x-principal` dropped, `/policy` and `/metrics` need a `security_admin` key
 - [x] policy-upload — `POST /admin/policy`: validated like a reload, stored in `policy_versions` with a diff, newest of disk/upload wins at startup
 - [x] strictness-profiles — `permissive` / `balanced` / `strict` profiles, per-control override
-- [x] ollama-gpu — superseded: the judge runs on a VPC-internal Vertex AI endpoint (`infra/`)
+- [ ] ollama-gpu — a reachable Ollama for the prod judge (`OLLAMA_URL`); the Vertex/Terraform attempt was removed

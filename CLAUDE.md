@@ -26,9 +26,7 @@ activity/controls/budgets views, and `just check` proving each control. The full
   flags the traffic (`escalate_when`), so clean requests pay nothing. In `dev` it is a
   deterministic mock (`OLLAMA_URL=mock`, scores from each control's `mock_keywords`) and
   chat goes to a mock upstream (`UPSTREAM_URL=mock`), so no Ollama is needed. In `prod`
-  the judge runs on a Vertex AI endpoint reachable only inside the VPC
-  (`infra/`, `SEMANTIC_BACKEND=vertex`); it bills ~$25/day while deployed — tear it down
-  after the demo (`infra/README.md`). Prod refuses to start with a mock.
+  the judge is the Ollama at `OLLAMA_URL`. Prod refuses to start with a mock.
   With no reachable detector the controls fail closed and suspicious traffic is refused.
   A Presidio sidecar for contextual PII is still unbuilt; that control ships disabled.
 
@@ -69,7 +67,6 @@ the contract, so the stack can change without retraining anyone.
 | `just report` | render the PDF security report (needs `DATABASE_URL`, `typst`) |
 | `just verify-audit` | prove the audit hash chain is intact (needs `DATABASE_URL`) |
 | `just deploy` | ship the gateway to Cloud Run (runs `just check` first) |
-| `just infra` | provision the Vertex judge with Terraform (~$25/day while up) |
 | `just wt <name>` | new isolated worktree + branch + its own PORT |
 | `just wt-rm <name>` | remove that worktree |
 
@@ -83,8 +80,7 @@ we lose an hour to merge conflicts at 3am.
 | path | owner |
 |---|---|
 | `gateway/` — Rust proxy, deterministic tier, policy engine, audit writer | |
-| `sentinel/` — semantic tier: the Ollama judge image (`sentinel/ollama/`) | |
-| `infra/` — Terraform for the VPC-internal Vertex judge | |
+| `sentinel/` — semantic tier | |
 | `mcp-demo/` — deliberately vulnerable MCP server for the demo | |
 | `web/` — SecOps console + assistant chat (Next.js), reads the Data API | |
 | `policy/` — TOML control catalog, thresholds, budgets | |

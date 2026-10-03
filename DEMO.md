@@ -27,8 +27,8 @@ Target length: **3 minutes.**
 - Services that must be up:
   - locally: `just dev` (gateway + console) or `just demo` (gateway + `mcp-demo` on
     :9310 for the MCP path). Dev uses the mock upstream and mock judge — no model needed.
-  - prod: the gateway (`just deploy`) and the Vertex judge (`just infra`, then the cert
-    capture in `infra/README.md`). Without the judge, semantic controls fail closed.
+  - prod: the gateway (`just deploy`) and a reachable Ollama judge (`OLLAMA_URL`).
+    Without the judge, semantic controls fail closed.
     Prod chat also needs a real `UPSTREAM_URL` (TASKS.md `chat-upstream-prod`).
 - Anything manual: _(TBD — ideally nothing)_
 
