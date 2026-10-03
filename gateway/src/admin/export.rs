@@ -25,6 +25,9 @@ pub struct Filters {
     /// Principal slug.
     #[serde(default)]
     principal: Option<String>,
+    /// End user the event is attributed to.
+    #[serde(default)]
+    user: Option<String>,
     /// Control id that fired on the event.
     #[serde(default)]
     control: Option<String>,
@@ -44,6 +47,7 @@ pub struct Row {
     pub hook: String,
     pub channel: String,
     pub principal: Option<String>,
+    pub user: Option<String>,
     pub model: Option<String>,
     pub tool: Option<String>,
     pub verdict: String,
@@ -85,6 +89,7 @@ pub async fn export(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
             String,
             Option<String>,
             String,
@@ -95,7 +100,7 @@ pub async fn export(
     >(
         "select e.id,
                 to_char(e.ts at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'),
-                e.trace_id::text, e.hook::text, e.channel::text, p.slug, e.model, e.tool,
+                e.trace_id::text, e.hook::text, e.channel::text, p.slug, e.end_user, e.model, e.tool,
                 e.verdict::text, pv.sha256,
                 coalesce((select string_agg(d.control_id || ':' || d.action::text, ' ' order by d.id)
                           from detections d where d.event_id = e.id), ''),
@@ -109,6 +114,7 @@ pub async fn export(
          where ($1::text is null or e.ts >= $1::text::timestamptz)
            and ($2::text is null or e.ts < $2::text::timestamptz)
            and ($3::text is null or p.slug = $3)
+           and ($7::text is null or e.end_user = $7)
            and ($4::text is null or exists (
                  select 1 from detections d where d.event_id = e.id and d.control_id = $4))
            and ($5::text is null or e.verdict::text = $5 or exists (
@@ -122,6 +128,7 @@ pub async fn export(
     .bind(&filters.control)
     .bind(&filters.action)
     .bind(filters.limit.unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS))
+    .bind(&filters.user)
     .fetch_all(state.db())
     .await;
 
@@ -135,14 +142,15 @@ pub async fn export(
                 hook: r.3,
                 channel: r.4,
                 principal: r.5,
-                model: r.6,
-                tool: r.7,
-                verdict: r.8,
-                policy_version: r.9,
-                controls: r.10,
-                tokens: r.11,
-                cost_usd: r.12,
-                latency: r.13,
+                user: r.6,
+                model: r.7,
+                tool: r.8,
+                verdict: r.9,
+                policy_version: r.10,
+                controls: r.11,
+                tokens: r.12,
+                cost_usd: r.13,
+                latency: r.14,
             })
             .collect(),
         Err(error) => {
@@ -174,7 +182,7 @@ pub async fn export(
 
 pub fn to_csv(rows: &[Row]) -> String {
     let mut out = String::from(
-        "id,ts,trace_id,hook,channel,principal,model,tool,verdict,policy_version,controls,tokens,cost_usd,latency\n",
+        "id,ts,trace_id,hook,channel,principal,user,model,tool,verdict,policy_version,controls,tokens,cost_usd,latency\n",
     );
     for r in rows {
         let fields = [
@@ -184,6 +192,7 @@ pub fn to_csv(rows: &[Row]) -> String {
             r.hook.clone(),
             r.channel.clone(),
             r.principal.clone().unwrap_or_default(),
+            r.user.clone().unwrap_or_default(),
             r.model.clone().unwrap_or_default(),
             r.tool.clone().unwrap_or_default(),
             r.verdict.clone(),
@@ -235,7 +244,8 @@ mod tests {
             trace_id: "t".into(),
             hook: "prompt_in".into(),
             channel: "llm".into(),
-            principal: Some("demo-agent".into()),
+            principal: Some("console-chat".into()),
+            user: Some("anna@example.com".into()),
             model: None,
             tool: None,
             verdict: "block".into(),
@@ -249,7 +259,7 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("id,ts,"));
-        assert!(lines[1].starts_with("1,2026-10-03T12:00:00.000Z,t,prompt_in,llm,demo-agent,,,block,"));
+        assert!(lines[1].starts_with("1,2026-10-03T12:00:00.000Z,t,prompt_in,llm,console-chat,anna@example.com,,,block,"));
         assert!(lines[1].ends_with(r#""{""deterministic_us"": 12}""#));
     }
 }

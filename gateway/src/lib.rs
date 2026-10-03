@@ -4,6 +4,9 @@
 //! engine and the enforcement hooks can be driven directly from tests and from
 //! the scenario runner.
 
+// The OpenAPI document is one `json!` literal, deeper than the default limit.
+#![recursion_limit = "256"]
+
 pub mod admin;
 pub mod approvals;
 pub mod audit;

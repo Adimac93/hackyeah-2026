@@ -20,7 +20,7 @@ interface GatewayCompletion {
 }
 
 interface GatewayRefusal {
-  error?: { type?: string; message?: string };
+  error?: { type?: string; message?: string; stage?: string };
   trace_id?: string;
 }
 
@@ -77,6 +77,12 @@ export function interpretGatewayResponse(
   const type = refusal.error?.type;
   if (type !== undefined && POLICY_REFUSALS.has(type)) {
     const reason = refusal.error?.message ?? type;
+    if (refusal.error?.stage === "deterministic") {
+      return {
+        ok: true,
+        reply: `🛡 This prompt doesn't meet the deterministic security requirements: ${reason}${shortTrace(refusal.trace_id)}. Remove the flagged content (secrets, personal data, injection patterns) and try again.`,
+      };
+    }
     return {
       ok: true,
       reply: `🛡 The AI Control Layer stopped this: ${reason}${shortTrace(refusal.trace_id)}. Rephrase without the flagged content, or ask the security team if you think this is a mistake.`,

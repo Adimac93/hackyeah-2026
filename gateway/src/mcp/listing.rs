@@ -29,7 +29,7 @@ pub(super) async fn tools_list(
             Hook::ToolResult,
             &hidden,
             None,
-            Some(principal.id),
+            principal,
             policy.version_id,
             &listing,
         );

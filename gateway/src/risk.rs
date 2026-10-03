@@ -1,10 +1,9 @@
-//! Attack history as a risk score (§4.4): identities with recent violations
-//! get stricter treatment. The score is the sum of `attack_history.risk_score`
-//! for the identity inside the catalog's `[risk]` window.
+//! Attack history as a risk score (§4.4): users with recent violations get
+//! stricter treatment. The score is the sum of `attack_history.risk_score`
+//! for the user (the delegated end user, or the calling principal) inside the
+//! catalog's `[risk]` window.
 
 use sqlx::PgPool;
-use uuid::Uuid;
-
 use crate::engine::Evaluation;
 use crate::policy::{Action, Risk, Severity};
 
@@ -30,12 +29,12 @@ pub fn assess(risk: &Risk, score: f32) -> Outcome {
     }
 }
 
-pub async fn score(pool: &PgPool, principal: Uuid, window_secs: i32) -> f32 {
+pub async fn score(pool: &PgPool, user: &str, window_secs: i32) -> f32 {
     sqlx::query_scalar::<_, f64>(
         "select coalesce(sum(risk_score), 0)::float8 from attack_history
-         where principal_id = $1 and created_at > now() - make_interval(secs => $2::int)",
+         where end_user = $1 and created_at > now() - make_interval(secs => $2::int)",
     )
-    .bind(principal)
+    .bind(user)
     .bind(window_secs)
     .fetch_one(pool)
     .await
@@ -49,12 +48,12 @@ pub async fn score(pool: &PgPool, principal: Uuid, window_secs: i32) -> f32 {
     )
 }
 
-/// Look up the identity's score and apply the catalog's thresholds.
-pub async fn apply(pool: &PgPool, risk: &Risk, principal: Uuid, evaluation: &mut Evaluation) {
+/// Look up the user's score and apply the catalog's thresholds.
+pub async fn apply(pool: &PgPool, risk: &Risk, user: &str, evaluation: &mut Evaluation) {
     if risk.escalate_at.is_none() && risk.block_at.is_none() {
         return;
     }
-    let score = score(pool, principal, risk.window_secs).await;
+    let score = score(pool, user, risk.window_secs).await;
     match assess(risk, score) {
         Outcome::Normal => {}
         Outcome::Escalate => {

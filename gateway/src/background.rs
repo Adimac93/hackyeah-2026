@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::audit::{self, EventRecord};
+use crate::audit::{self, EventRecord, Principal};
 use crate::engine::{self, Evaluation, Verdict};
 use crate::policy::{EscalateWhen, Hook, Policy};
 use crate::state::AppState;
@@ -19,7 +19,7 @@ pub struct Job {
     pub channel: &'static str,
     pub text: String,
     pub trace_id: Uuid,
-    pub principal_id: Uuid,
+    pub principal: Principal,
     pub model: Option<String>,
     pub tool: Option<String>,
 }
@@ -70,7 +70,8 @@ pub fn analyse(state: &AppState, evaluation: &Evaluation, job: Job) {
                 trace_id: job.trace_id,
                 hook: job.hook,
                 channel: job.channel,
-                principal_id: Some(job.principal_id),
+                principal_id: Some(job.principal.id),
+                end_user: Some(&job.principal.user),
                 model: job.model.as_deref(),
                 tool: job.tool.as_deref(),
                 // The request was already answered; the verdict records what

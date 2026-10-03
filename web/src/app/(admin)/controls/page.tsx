@@ -1,65 +1,46 @@
-import { ActionForm } from "@/components/action-form";
-import {
-  Card,
-  ControlSeverityBadge,
-  EmptyRow,
-  PageHeader,
-  tableClass,
-  tdClass,
-  thClass,
-} from "@/components/ui";
+import { Card, ControlSeverityBadge, PageHeader } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
-import { budgetSpend, fmtWindow, isUploadedVersion } from "@/lib/gateway";
 import type {
   AttackSignature,
   Budget,
   PolicyVersion,
-  Principal,
   UsageRow,
 } from "@/lib/gateway";
+import type { LivePolicy } from "@/lib/gateway-live";
+import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
-import { importPolicy } from "./actions";
+import { PolicyEditor } from "./policy-editor";
+import { Budgets, ControlsTable, ResourceAccess } from "./sections";
 
 const DAY_MS = 86_400_000;
 
-function Chips({ items, empty }: { items: string[]; empty: string }) {
-  if (items.length === 0) {
-    return <span className="text-xs text-zinc-600">{empty}</span>;
-  }
-  return (
-    <span className="flex flex-wrap gap-1">
-      {items.map((item) => (
-        <code
-          key={item}
-          className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300"
-        >
-          {item}
-        </code>
-      ))}
-    </span>
-  );
-}
+type VersionRow = PolicyVersion & { catalog_toml: string | null };
 
 export default async function ControlsPage() {
   const { supabase, member } = await requireMember();
-  const isAdmin = member.role === "admin";
   // longest budget window is a day; usage older than that never counts
   const since = new Date(Date.now() - DAY_MS).toISOString();
 
   const [
-    { data: principalRows },
+    live,
+    { data: activeRow },
     { data: budgetRows },
     { data: usageRows },
     { data: versionRows },
     { data: signatureRows },
   ] = await Promise.all([
-    supabase.from("principals").select("*").order("slug"),
-    supabase.from("budgets").select("*").order("id"),
+    gatewayFetch<LivePolicy>("/policy"),
+    supabase
+      .from("policy_versions")
+      .select("id, sha256, catalog_toml")
+      .eq("active", true)
+      .maybeSingle<Pick<VersionRow, "id" | "sha256" | "catalog_toml">>(),
+    supabase.from("budgets").select("*").order("scope").order("scope_id"),
     supabase
       .from("usage")
       .select(
-        "ts, principal_id, model, prompt_tokens, completion_tokens, cost_usd",
+        "ts, principal_id, end_user, model, prompt_tokens, completion_tokens, cost_usd",
       )
       .gte("ts", since)
       .limit(10_000),
@@ -76,128 +57,87 @@ export default async function ControlsPage() {
       .order("severity", { ascending: false })
       .limit(100),
   ]);
-  const principals = (principalRows ?? []) as Principal[];
   const budgets = (budgetRows ?? []) as Budget[];
   const usage = (usageRows ?? []) as UsageRow[];
   const versions = (versionRows ?? []) as PolicyVersion[];
   const signatures = (signatureRows ?? []) as AttackSignature[];
+  const controls =
+    live.ok && Array.isArray(live.data.controls) ? live.data.controls : [];
   const now = Date.now();
 
   return (
     <>
       <PageHeader
-        title="Controls"
-        subtitle="Who may call the gateway, what they may spend, and which rules are enforced"
+        title="Controls & policies"
+        subtitle="The control catalog the gateway enforces, who may reach which resources, and what each user may spend"
       />
 
       <div className="space-y-6">
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
-          <table className={tableClass}>
-            <thead className="border-b border-zinc-800">
-              <tr>
-                <th className={thClass}>Principal</th>
-                <th className={thClass}>Allowed models</th>
-                <th className={thClass}>Allowed tools</th>
-                <th className={`${thClass} text-right`}>Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800">
-              {principals.length === 0 && (
-                <EmptyRow cols={4}>No principals registered.</EmptyRow>
-              )}
-              {principals.map((p) => (
-                <tr key={p.id}>
-                  <td className={tdClass}>
-                    <p className="text-zinc-100">{p.display_name}</p>
-                    <p className="text-xs text-zinc-500">
-                      {p.slug} · {p.kind}
-                    </p>
-                  </td>
-                  <td className={tdClass}>
-                    <Chips items={p.allowed_models} empty="none" />
-                  </td>
-                  <td className={tdClass}>
-                    <Chips items={p.allowed_tools} empty="none" />
-                  </td>
-                  <td className={`${tdClass} text-right text-xs`}>
-                    {p.enabled ? (
-                      <span className="text-emerald-400">enabled</span>
-                    ) : (
-                      <span className="text-zinc-500">disabled</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <Card
+          title={
+            activeRow === null
+              ? "Control catalog"
+              : `Control catalog · version #${String(activeRow.id)}`
+          }
+          actions={
+            activeRow === null ? null : (
+              <a
+                href={`/controls/policy/${String(activeRow.id)}`}
+                className="text-xs text-zinc-400 hover:text-zinc-100"
+              >
+                Download .toml
+              </a>
+            )
+          }
+        >
+          {typeof activeRow?.catalog_toml === "string" ? (
+            <PolicyEditor
+              key={activeRow.sha256}
+              active={activeRow.catalog_toml}
+              canEdit={member.role === "admin"}
+            />
+          ) : (
+            <p className="text-sm text-zinc-500">
+              The gateway hasn&apos;t stored a policy yet. It seeds the built-in
+              catalog on first start.
+            </p>
+          )}
+        </Card>
+
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-300">
+            Active controls
+            {live.ok && typeof live.data.profile === "string" ? (
+              <span className="ml-2 text-xs font-normal text-zinc-500">
+                profile {live.data.profile} · on detect {live.data.on_detect} ·
+                fail {live.data.fail_mode}
+              </span>
+            ) : null}
+          </h2>
+          {live.ok ? (
+            <ControlsTable controls={controls} />
+          ) : (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              Couldn&apos;t read the active controls from the gateway:{" "}
+              {live.error}
+            </p>
+          )}
+        </section>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ResourceAccess
+            resources={live.ok ? live.data.resources : undefined}
+          />
+          <Budgets budgets={budgets} usage={usage} now={now} />
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <Card title="Budgets">
-            {budgets.length === 0 ? (
-              <p className="text-sm text-zinc-500">No budgets configured.</p>
-            ) : (
-              <ul className="space-y-4">
-                {budgets.map((b) => {
-                  const spend = budgetSpend(b, usage, principals, now);
-                  const pct = Math.min(100, (spend.used ?? 0) * 100);
-                  const limit = [
-                    b.limit_tokens === null
-                      ? null
-                      : `${b.limit_tokens.toLocaleString("en")} tokens`,
-                    b.limit_usd === null
-                      ? null
-                      : `$${Number(b.limit_usd).toFixed(2)}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" / ");
-                  return (
-                    <li key={b.id} className="space-y-1.5">
-                      <div className="flex items-baseline justify-between gap-3 text-sm">
-                        <span className="text-zinc-100">
-                          {b.scope === "global" ? "Global" : b.scope_id}
-                          <span className="ml-2 text-xs text-zinc-500">
-                            {b.scope} · per {fmtWindow(b.window_secs)} ·{" "}
-                            {b.hard ? "hard" : "soft"}
-                            {b.enabled ? "" : " · disabled"}
-                          </span>
-                        </span>
-                        <span className="text-xs text-zinc-400 tabular-nums">
-                          {spend.tokens.toLocaleString("en")} / {limit}
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-zinc-800">
-                        <div
-                          className={`h-2 rounded-full ${
-                            pct >= 100
-                              ? "bg-red-500"
-                              : pct >= 80
-                                ? "bg-amber-400"
-                                : "bg-emerald-500"
-                          }`}
-                          style={{ width: `${String(pct)}%` }}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {usage.length === 0 && budgets.length > 0 ? (
-              <p className="mt-4 text-xs text-zinc-500">
-                No model usage recorded in the last 24h.
-              </p>
-            ) : null}
-          </Card>
-
           <Card title="Policy versions">
             {versions.length === 0 ? (
-              <p className="text-sm text-zinc-500">
-                The gateway hasn&apos;t loaded a policy yet.
-              </p>
+              <p className="text-sm text-zinc-500">No versions yet.</p>
             ) : (
               <ul className="-my-2 divide-y divide-zinc-800">
-                {versions.map((v, index) => (
+                {versions.map((v) => (
                   <li
                     key={v.id}
                     className="flex items-center justify-between gap-3 py-2.5"
@@ -208,9 +148,9 @@ export default async function ControlsPage() {
                         <code className="text-zinc-400">
                           {v.sha256.slice(0, 12)}
                         </code>
-                        {index === 0 && v.active ? (
+                        {v.active ? (
                           <span className="ml-2 text-xs text-emerald-400">
-                            current
+                            active
                           </span>
                         ) : null}
                       </p>
@@ -218,90 +158,53 @@ export default async function ControlsPage() {
                         className="truncate text-xs text-zinc-500"
                         title={v.diff_summary ?? fmtDateTime(v.loaded_at)}
                       >
-                        {isUploadedVersion(v.source)
-                          ? "imported in console"
-                          : (v.note ?? v.source.split("\n")[0])}{" "}
-                        · loaded {timeAgo(v.loaded_at)}
+                        {v.note ?? v.source.split("\n")[0]} · loaded{" "}
+                        {timeAgo(v.loaded_at)}
                       </p>
                     </div>
-                    {isUploadedVersion(v.source) ? (
-                      <a
-                        href={`/controls/policy/${String(v.id)}`}
-                        className="shrink-0 text-xs text-zinc-400 hover:text-zinc-100"
-                      >
-                        Download .toml
-                      </a>
-                    ) : null}
+                    <a
+                      href={`/controls/policy/${String(v.id)}`}
+                      className="shrink-0 text-xs text-zinc-400 hover:text-zinc-100"
+                    >
+                      .toml
+                    </a>
                   </li>
                 ))}
               </ul>
             )}
-            {isAdmin ? (
-              <details className="group mt-5 border-t border-zinc-800 pt-4">
-                <summary className="cursor-pointer text-sm font-medium text-emerald-400 hover:text-emerald-300">
-                  Import policy from TOML
-                </summary>
-                <ActionForm
-                  action={importPolicy}
-                  submitLabel="Validate & activate"
-                  pendingLabel="Importing…"
-                  className="mt-4 space-y-3"
-                >
-                  <p className="text-xs text-zinc-500">
-                    Upload a complete control catalog (same format as{" "}
-                    <code>policy/control-catalog.toml</code>). The gateway
-                    validates it and switches over without a restart; an invalid
-                    file is rejected and the current policy keeps running.
-                  </p>
-                  <input
-                    type="file"
-                    name="file"
-                    accept=".toml,application/toml,text/plain"
-                    className="block w-full text-sm text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-sm file:text-zinc-200 hover:file:bg-zinc-700"
-                  />
-                  <textarea
-                    name="catalog"
-                    rows={5}
-                    spellCheck={false}
-                    placeholder={
-                      '…or paste it here\nschema_version = 1\nprofile = "balanced"'
-                    }
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none"
-                  />
-                </ActionForm>
-              </details>
-            ) : null}
+          </Card>
+
+          <Card title={`Attack signatures (${String(signatures.length)})`}>
+            {signatures.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                No signatures synced yet. The gateway mirrors the feed uploaded
+                with the catalog.
+              </p>
+            ) : (
+              <ul className="-my-2 max-h-96 divide-y divide-zinc-800 overflow-y-auto">
+                {signatures.map((s) => (
+                  <li key={s.id} className="flex items-center gap-3 py-2.5">
+                    <ControlSeverityBadge severity={s.severity} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-zinc-100">
+                        {s.title}
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        {s.source} · {s.external_id}
+                        {s.cve === null ? "" : ` · ${s.cve}`} · {s.kind}
+                      </p>
+                    </div>
+                    <span
+                      className={`text-xs ${s.enabled ? "text-emerald-400" : "text-zinc-500"}`}
+                    >
+                      {s.enabled ? "enabled" : "disabled"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Card>
         </div>
-
-        <Card title={`Attack signatures (${String(signatures.length)})`}>
-          {signatures.length === 0 ? (
-            <p className="text-sm text-zinc-500">
-              No signatures synced yet. The gateway populates these from its
-              external threat feed.
-            </p>
-          ) : (
-            <ul className="-my-2 divide-y divide-zinc-800">
-              {signatures.map((s) => (
-                <li key={s.id} className="flex items-center gap-3 py-2.5">
-                  <ControlSeverityBadge severity={s.severity} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-zinc-100">{s.title}</p>
-                    <p className="text-xs text-zinc-500">
-                      {s.source} · {s.external_id}
-                      {s.cve === null ? "" : ` · ${s.cve}`} · {s.kind}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-xs ${s.enabled ? "text-emerald-400" : "text-zinc-500"}`}
-                  >
-                    {s.enabled ? "enabled" : "disabled"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
       </div>
     </>
   );

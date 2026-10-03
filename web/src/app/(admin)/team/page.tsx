@@ -27,7 +27,7 @@ import {
 
 const ROLE_HELP: Record<string, string> = {
   admin: "Everything, including team management",
-  analyst: "Manage incidents and policies",
+  analyst: "Investigate activity, controls and user risk",
   viewer: "Read-only",
   developer: "AI security assistant only",
 };

@@ -26,6 +26,8 @@ fn principal(models: &[&str]) -> Principal {
         role: "member".into(),
         allowed_models: models.iter().map(|m| (*m).to_owned()).collect(),
         allowed_tools: vec![],
+        delegates_users: false,
+        user: "agent".into(),
     }
 }
 
@@ -85,6 +87,58 @@ fn array_content_parts_are_checked_and_redacted() {
 fn refusals_name_their_category() {
     assert!(is_content_control("secret.aws-access-key"));
     assert!(!is_content_control(MODEL_NOT_ALLOWED));
-    assert!(!is_content_control("budget.principal.demo-agent"));
+    assert!(!is_content_control("budget.user.demo-agent"));
     assert!(!is_content_control(RISK_CONTROL));
+}
+
+#[test]
+fn a_caller_that_delegates_nothing_is_its_own_user() {
+    assert_eq!(delegated_user(&principal(&[]), None).unwrap(), "agent");
+}
+
+#[test]
+fn only_a_delegating_principal_may_name_an_end_user() {
+    let agent = principal(&[]);
+    assert!(delegated_user(&agent, Some("anna@example.com")).is_err());
+
+    let console = Principal { delegates_users: true, ..principal(&[]) };
+    assert_eq!(
+        delegated_user(&console, Some(" anna@example.com ")).unwrap(),
+        "anna@example.com"
+    );
+    assert_eq!(delegated_user(&console, None).unwrap(), "agent");
+    assert!(delegated_user(&console, Some("")).is_err());
+    assert!(delegated_user(&console, Some("anna\nadmin")).is_err());
+    assert!(delegated_user(&console, Some(&"a".repeat(255))).is_err());
+}
+
+async fn refusal_error(hook: Hook, blocker: &Detection) -> (StatusCode, Value) {
+    let response = refusal_for(Uuid::nil(), hook, blocker, None);
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice::<Value>(&body).unwrap()["error"].clone())
+}
+
+#[tokio::test]
+async fn a_refusal_says_which_stage_and_hook_stopped_it() {
+    let mut evaluation = engine::evaluate(&policy(), Hook::PromptIn, "hi");
+    gate_model(&policy(), &principal(&[]), "llama3.1:8b", &mut evaluation);
+    let mut blocker = evaluation.blocked_by().unwrap().clone();
+
+    let (status, error) = refusal_error(Hook::PromptIn, &blocker).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["type"], "model_not_allowed");
+    assert_eq!(error["stage"], "access");
+
+    blocker.control_id = "secret.aws-access-key".into();
+    let (_, error) = refusal_error(Hook::PromptIn, &blocker).await;
+    assert_eq!(error["type"], "blocked_by_control");
+    assert_eq!(error["stage"], "deterministic");
+    assert_eq!(error["hook"], "prompt_in");
+    assert_eq!(error["message"], "request blocked by secret.aws-access-key");
+
+    blocker.kind = ControlKind::Semantic;
+    let (_, error) = refusal_error(Hook::ResponseOut, &blocker).await;
+    assert_eq!(error["stage"], "semantic");
+    assert_eq!(error["message"], "response blocked by secret.aws-access-key");
 }

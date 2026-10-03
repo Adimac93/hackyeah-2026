@@ -8,7 +8,6 @@ import {
   AlertIcon,
   ChatIcon,
   ChipIcon,
-  DocumentIcon,
   GaugeIcon,
   ServerIcon,
   SlidersIcon,
@@ -19,21 +18,14 @@ const LINKS = [
   { href: "/dashboard", label: "Overview", Icon: GaugeIcon },
   { href: "/activity", label: "Activity", Icon: ActivityIcon },
   { href: "/gateway", label: "Gateway", Icon: ServerIcon },
-  { href: "/controls", label: "Controls", Icon: SlidersIcon },
-  { href: "/incidents", label: "Incidents", Icon: AlertIcon },
-  { href: "/policies", label: "Policies", Icon: DocumentIcon },
+  { href: "/controls", label: "Controls & policies", Icon: SlidersIcon },
+  { href: "/risk", label: "User risk", Icon: AlertIcon },
   { href: "/team", label: "Team", Icon: UsersIcon },
   { href: "/models", label: "Models", Icon: ChipIcon },
   { href: "/chat", label: "Assistant", Icon: ChatIcon, open: true },
 ];
 
-export function Nav({
-  openIncidents,
-  consoleAccess,
-}: {
-  openIncidents: number;
-  consoleAccess: boolean;
-}) {
+export function Nav({ consoleAccess }: { consoleAccess: boolean }) {
   const pathname = usePathname();
   const links = consoleAccess ? LINKS : LINKS.filter((l) => "open" in l);
   return (
@@ -52,11 +44,6 @@ export function Nav({
           >
             <Icon />
             <span>{label}</span>
-            {href === "/incidents" && openIncidents > 0 && (
-              <span className="ml-auto rounded-full bg-red-500/20 px-1.5 text-xs font-medium text-red-300">
-                {openIncidents}
-              </span>
-            )}
           </Link>
         );
       })}

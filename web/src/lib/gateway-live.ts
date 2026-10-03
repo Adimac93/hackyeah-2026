@@ -61,6 +61,12 @@ export interface LivePolicy {
     max_depth: number | null;
   };
   mcp_servers?: { name: string; enabled: boolean; pinned_tools: number }[];
+  /** `[resources]`: identity slug -> tables of the `resources` schema it may query */
+  resources?: {
+    grants: Record<string, string[]>;
+    max_rows: number;
+    statement_timeout_ms: number;
+  };
   /** Newer builds list every control; the deployed one only counts them. */
   controls: LiveControl[] | { deterministic: number; semantic: number };
   /** Deployed build's signature feed (newer builds send `signature_feed`). */
@@ -126,6 +132,24 @@ export interface MetricsReport {
     first_broken: number | null;
   };
   policy_version: string | null;
+}
+
+/** `GET /admin/risk`: each user's score under the active `[risk]` thresholds. */
+export interface RiskReport {
+  window_secs: number;
+  escalate_at: number | null;
+  block_at: number | null;
+  users: UserRisk[];
+}
+
+export interface UserRisk {
+  user: string;
+  score: number;
+  status: "normal" | "escalate" | "block";
+  violations: number;
+  last_violation: string | null;
+  last_seen: string;
+  principals: string[];
 }
 
 export type Live<T> = { ok: true; data: T } | { ok: false; error: string };

@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod budgets;
 pub mod export;
+pub mod risk;
 
 use axum::Json;
 use axum::extract::State;
@@ -93,6 +94,7 @@ pub fn describe(policy: &Policy) -> Value {
         })),
         "risk": policy.risk,
         "runaway": policy.runaway,
+        "resources": policy.resources,
         "mcp_servers": policy.mcp.servers.iter().map(|s| json!({
             "name": s.name, "enabled": s.enabled, "pinned_tools": s.pinned.len(),
         })).collect::<Vec<_>>(),

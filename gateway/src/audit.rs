@@ -35,6 +35,11 @@ pub struct Principal {
     pub allowed_models: Vec<String>,
     /// Deny-by-default: an empty list grants no tool.
     pub allowed_tools: Vec<String>,
+    /// May name the end user it acts for in `X-On-Behalf-Of`.
+    pub delegates_users: bool,
+    /// Who budgets, risk and activity are attributed to: the delegated end
+    /// user, or this principal's own slug.
+    pub user: String,
 }
 
 impl Principal {
@@ -53,6 +58,7 @@ pub struct EventRecord<'a> {
     pub hook: Hook,
     pub channel: &'static str,
     pub principal_id: Option<Uuid>,
+    pub end_user: Option<&'a str>,
     pub model: Option<&'a str>,
     pub tool: Option<&'a str>,
     pub verdict: Verdict,
@@ -91,8 +97,8 @@ impl Auditor {
     /// the digest, never a bearer secret. HTTP handlers must use this method,
     /// not a caller-supplied principal slug.
     pub async fn principal_for_api_key(&self, api_key: &str) -> Option<Principal> {
-        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>)>(
-            "select id, slug, role, allowed_models, allowed_tools
+        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>, bool)>(
+            "select id, slug, role, allowed_models, allowed_tools, delegates_users
              from principals where api_key_hash = $1 and enabled",
         )
         .bind(sha256_hex(api_key.as_bytes()))
@@ -105,17 +111,19 @@ impl Auditor {
 
         Some(Principal {
             id: row.0,
+            user: row.1.clone(),
             slug: row.1,
             role: row.2,
             allowed_models: row.3,
             allowed_tools: row.4,
+            delegates_users: row.5,
         })
     }
 
     pub async fn record_usage(
         &self,
         event_id: Option<i64>,
-        principal: Option<Uuid>,
+        principal: &Principal,
         model: &str,
         prompt_tokens: i32,
         completion_tokens: i32,
@@ -123,11 +131,12 @@ impl Auditor {
     ) {
         let result = sqlx::query(
             "insert into usage
-               (event_id, principal_id, model, prompt_tokens, completion_tokens, cost_usd)
-             values ($1, $2, $3, $4, $5, $6)",
+               (event_id, principal_id, end_user, model, prompt_tokens, completion_tokens, cost_usd)
+             values ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(event_id)
-        .bind(principal)
+        .bind(principal.id)
+        .bind(&principal.user)
         .bind(model)
         .bind(prompt_tokens)
         .bind(completion_tokens)
@@ -159,16 +168,17 @@ impl Auditor {
 
         let event_id = sqlx::query_scalar::<_, i64>(
             "insert into events
-               (trace_id, hook, channel, principal_id, model, tool, verdict,
+               (trace_id, hook, channel, principal_id, end_user, model, tool, verdict,
                 policy_version_id, latency, payload_sha256, prev_hash, hash)
-             values ($1, $2::text::hook, $3::text::channel, $4, $5, $6,
-                     $7::text::verdict, $8, $9, $10, $11, $12)
+             values ($1, $2::text::hook, $3::text::channel, $4, $5, $6, $7,
+                     $8::text::verdict, $9, $10, $11, $12, $13)
              returning id",
         )
         .bind(record.trace_id)
         .bind(hook_name(record.hook))
         .bind(record.channel)
         .bind(record.principal_id)
+        .bind(record.end_user)
         .bind(record.model)
         .bind(record.tool)
         .bind(verdict_name(record.verdict))
@@ -218,10 +228,12 @@ impl Auditor {
             // scoring. The prompt itself remains represented by its hash.
             if counts_as_attack(detection) {
                 let result = sqlx::query(
-                    "insert into attack_history (principal_id, trace_id, control_id, action, risk_score)
-                     values ($1, $2, $3, $4::text::control_action, $5)",
+                    "insert into attack_history
+                       (principal_id, end_user, trace_id, control_id, action, risk_score)
+                     values ($1, $2, $3, $4, $5::text::control_action, $6)",
                 )
                 .bind(record.principal_id)
+                .bind(record.end_user)
                 .bind(record.trace_id)
                 .bind(&detection.control_id)
                 .bind(action_name(detection.action))
@@ -381,7 +393,7 @@ pub fn record_for<'a>(
     hook: Hook,
     evaluation: &'a Evaluation,
     model: Option<&'a str>,
-    principal_id: Option<Uuid>,
+    principal: &'a Principal,
     policy_version_id: Option<i64>,
     payload: &str,
 ) -> EventRecord<'a> {
@@ -389,7 +401,8 @@ pub fn record_for<'a>(
         trace_id,
         hook,
         channel: "llm",
-        principal_id,
+        principal_id: Some(principal.id),
+        end_user: Some(&principal.user),
         model,
         tool: None,
         verdict: evaluation.verdict,
