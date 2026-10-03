@@ -8,7 +8,7 @@ import { Card, Field, PageHeader } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
-import { loadModels } from "@/lib/llm/catalog";
+import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
 
 import {
@@ -47,8 +47,11 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
   const conversations = (convData ?? []) as ChatConversation[];
   const messages = (messageData ?? []) as ChatMessage[];
   const active = conversations.find((x) => x.id === activeId) ?? null;
-  const models = await loadModels(supabase);
-  const selected = defaultModel(active?.model ?? null, models);
+  const [models, orgDefault] = await Promise.all([
+    loadModels(supabase),
+    loadDefaultModelId(supabase),
+  ]);
+  const selected = defaultModel(active?.model ?? null, models, orgDefault);
   if (activeId !== null && active === null) {
     notFound();
   }

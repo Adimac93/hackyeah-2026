@@ -5,7 +5,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { getSession } from "@/lib/auth";
+import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
+import { loadModels } from "@/lib/llm/catalog";
+import { findModel } from "@/lib/llm/models";
 import { parseProviderInput } from "@/lib/llm/presets";
 import { loadConnectionSecret } from "@/lib/llm/secrets";
 
@@ -233,4 +236,30 @@ export async function testConnection(
       error: `Couldn't reach the provider (${error instanceof Error ? error.name : "unknown error"}).`,
     };
   }
+}
+
+/** Set the model new chats start on. Must be one of the currently available models. */
+export async function setDefaultModel(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const session = await requireAdmin();
+  if (session.error) {
+    return { error: session.error };
+  }
+  const model = findModel(
+    formString(formData, "default_model"),
+    await loadModels(session.supabase),
+  );
+  if (model === null) {
+    return { error: "Pick one of the available models." };
+  }
+  const { error } = await session.supabase
+    .from("chat_settings")
+    .upsert({ id: true, default_model: model.id, updated_by: session.user.id });
+  if (error !== null) {
+    return { error: `Couldn't save the default (${error.message}).` };
+  }
+  refresh();
+  return { ok: `New chats now start on ${model.label}.` };
 }

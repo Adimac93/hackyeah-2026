@@ -6,7 +6,8 @@ import { ProviderIcon } from "@/components/provider-icon";
 import { Card, PageHeader } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
 import { timeAgo } from "@/lib/format";
-import { availableModels } from "@/lib/llm/models";
+import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
+import { availableModels, defaultModel } from "@/lib/llm/models";
 import type { ModelIcon } from "@/lib/llm/models";
 import { PRESETS, isPresetId } from "@/lib/llm/presets";
 
@@ -14,8 +15,10 @@ import {
   createConnection,
   deleteConnection,
   setConnectionEnabled,
+  setDefaultModel,
   testConnection,
 } from "./actions";
+import { DefaultModelForm } from "./default-model-form";
 import { ProviderForm } from "./provider-form";
 
 interface ConnectionRow {
@@ -53,6 +56,13 @@ export default async function ModelsPage() {
     )
     .order("created_at");
   const connections = (data ?? []) as ConnectionRow[];
+  const [chatModels, defaultId] = await Promise.all([
+    loadModels(supabase),
+    loadDefaultModelId(supabase),
+  ]);
+  const chatDefault = defaultModel(null, chatModels, defaultId);
+  // a stored default whose provider was removed or disabled no longer applies
+  const defaultStale = defaultId !== null && defaultId !== chatDefault.id;
 
   // env-configured providers, grouped for a read-only overview
   const envGroups = new Map<string, { icon: ModelIcon; models: string[] }>();
@@ -77,6 +87,35 @@ export default async function ModelsPage() {
 
       <div className="grid gap-6 xl:grid-cols-5">
         <div className="space-y-4 xl:col-span-3">
+          <Card title="Default chat model">
+            <p className="mb-3 text-xs text-zinc-500">
+              New conversations in the assistant start on this model. A
+              conversation keeps the model it was last used with.
+            </p>
+            {isAdmin ? (
+              <DefaultModelForm
+                action={setDefaultModel}
+                defaultValue={chatDefault.id}
+                options={chatModels.map((m) => ({
+                  value: m.id,
+                  label: m.label,
+                }))}
+              />
+            ) : (
+              <p className="flex items-center gap-2 text-sm text-zinc-200">
+                <ProviderIcon icon={chatDefault.icon} />
+                {chatDefault.label}
+              </p>
+            )}
+            {defaultId === null || defaultStale ? (
+              <p className="mt-2 text-xs text-amber-400/90">
+                {defaultStale
+                  ? "The saved default is no longer available; chats use the first model until a new one is saved."
+                  : "No default saved yet; chats use the first available model."}
+              </p>
+            ) : null}
+          </Card>
+
           {connections.length === 0 ? (
             <Card>
               <p className="text-sm text-zinc-500">

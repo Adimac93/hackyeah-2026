@@ -193,3 +193,16 @@ void test("modelLabel strips the connection id for removed console models", () =
   );
   assert.equal(modelLabel("openai:gpt-5", []), "gpt-5");
 });
+
+void test("defaultModel falls back to the organisation default, then the first", () => {
+  const models = availableModels({ ANTHROPIC_API_KEY: "k" });
+  const haiku = "anthropic:claude-haiku-4-5";
+  assert.equal(defaultModel(null, models, haiku).id, haiku);
+  // the conversation's own model wins over the org default
+  assert.equal(
+    defaultModel("anthropic:claude-sonnet-5-5", models, haiku).id,
+    "anthropic:claude-sonnet-5-5",
+  );
+  // a stale org default (provider removed) is skipped
+  assert.equal(defaultModel(null, models, "openai:gpt-5").id, models[0].id);
+});

@@ -178,14 +178,23 @@ export function findModel(
   return options.find((o) => o.id === id) ?? null;
 }
 
-/** Preferred id when it's still available, otherwise the first (best) option. */
+/**
+ * The model to preselect: the conversation's own model while it's available,
+ * then the organisation default set on the Models page, then the first (best)
+ * option.
+ */
 export function defaultModel(
   preferred: string | null,
   options: ModelOption[],
+  orgDefault: string | null = null,
 ): ModelOption {
-  return (
-    (preferred === null ? null : findModel(preferred, options)) ?? options[0]
-  );
+  for (const id of [preferred, orgDefault]) {
+    const found = id === null ? null : findModel(id, options);
+    if (found !== null) {
+      return found;
+    }
+  }
+  return options[0];
 }
 
 /** Label for a stored model id, even if that provider is no longer configured. */

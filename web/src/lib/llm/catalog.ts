@@ -14,3 +14,14 @@ export async function loadModels(supabase: Supabase): Promise<ModelOption[]> {
     .order("created_at");
   return availableModels(process.env, (data ?? []) as LlmConnection[]);
 }
+
+/** The organisation's default chat model id (Models page), or null when unset. */
+export async function loadDefaultModelId(
+  supabase: Supabase,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("chat_settings")
+    .select("default_model")
+    .maybeSingle<{ default_model: string | null }>();
+  return data?.default_model ?? null;
+}
