@@ -125,6 +125,8 @@ async function callGateway(
       method: "POST",
       headers: {
         "content-type": "application/json",
+        // the gateway resolves the calling principal from this key; no key, no call
+        authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
         ...(principal === undefined ? {} : { "x-principal": principal }),
       },
       body: JSON.stringify({

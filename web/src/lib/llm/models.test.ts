@@ -52,6 +52,7 @@ void test("blank keys don't count, compatible needs a base url and models", () =
 void test("the gateway, when configured, is the default ahead of direct providers", () => {
   const ids = availableModels({
     GATEWAY_URL: "http://localhost:8080",
+    GATEWAY_API_KEY: "k",
     ANTHROPIC_API_KEY: "k",
   }).map((m) => m.id);
   assert.equal(ids[0], "gateway:llama3.1:8b");
@@ -59,9 +60,17 @@ void test("the gateway, when configured, is the default ahead of direct provider
     availableModels({ GATEWAY_URL: " ", GATEWAY_MODELS: "x" }).length,
     1,
   );
+  // without a principal key the gateway answers 401, so it is not offered
+  assert.equal(
+    availableModels({ GATEWAY_URL: "http://gw" }).some(
+      (m) => m.provider === "gateway",
+    ),
+    false,
+  );
   assert.deepEqual(
     availableModels({
       GATEWAY_URL: "http://gw",
+      GATEWAY_API_KEY: "k",
       GATEWAY_MODELS: "qwen2.5:7b,mistral:7b",
     })
       .filter((m) => m.provider === "gateway")
