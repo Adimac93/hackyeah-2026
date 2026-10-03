@@ -300,14 +300,14 @@ export function describePolicyUpload(
     return {
       ok: false,
       error:
-        "The gateway refused the admin key. Check GATEWAY_ADMIN_KEY (a principal with role security_admin).",
+        "The gateway refused your session or role (admins only). Sign out and in again.",
     };
   }
   if (status === 503) {
     return {
       ok: false,
       error:
-        "The gateway can't persist policies right now (no database). The active policy is unchanged.",
+        "The gateway can't take policy uploads right now (no database, or its admin auth isn't configured). The active policy is unchanged.",
     };
   }
   return {
