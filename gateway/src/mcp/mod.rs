@@ -1,7 +1,8 @@
 //! The MCP enforcement point.
 //!
 //! The gateway is the only MCP server any agent talks to; real servers sit
-//! behind it. Two of the four hooks live here:
+//! behind it, next to the gateway's own `resources` and `control` tools. Two of the four
+//! hooks live here:
 //!
 //! - `tool_call`   — what the agent is about to ask a tool to do
 //! - `tool_result` — what comes back, before it reaches the model's context
@@ -14,9 +15,13 @@
 //! Every request is self-contained, so enforcement is per-request.
 
 pub mod federation;
+pub mod guard;
+mod listing;
 pub mod native;
+pub mod resources;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::State;
@@ -25,12 +30,13 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::approvals::Approvals;
-use crate::audit::{self, Auditor};
-use crate::engine::{self, Verdict};
-use crate::policy::{Hook, Policy, PolicyHandle};
-use crate::proxy::bearer_principal;
-use crate::semantic::Registry;
+use crate::audit::{self, Principal};
+use crate::background::{self, Job};
+use crate::engine::{self, Evaluation, Verdict};
+use crate::policy::{Action, Hook, Policy, Severity};
+use crate::proxy::{bearer_principal, summarise, verdict_name};
+use crate::risk;
+use crate::state::AppState;
 
 use federation::PROTOCOL_VERSION;
 
@@ -43,17 +49,10 @@ const POLICY_DENIED: i64 = -32000;
 const PRINCIPAL_DENIED: i64 = -32001;
 const UPSTREAM_ERROR: i64 = -32002;
 
-#[derive(Clone)]
-pub struct McpState {
-    pub policy: PolicyHandle,
-    pub auditor: Arc<Auditor>,
-    pub http: reqwest::Client,
-    pub detectors: Arc<Registry>,
-    pub approvals: Arc<Approvals>,
-}
+const TOOL_NOT_GRANTED: &str = "mcp.tool-not-granted";
 
 pub async fn endpoint(
-    State(state): State<McpState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
@@ -64,7 +63,7 @@ pub async fn endpoint(
         .unwrap_or_default()
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
-    let policy = state.policy.load();
+    let policy = state.policy.load_full();
 
     // The body is the source of truth. A request that says one thing in its
     // headers and another in its body is trying to be routed as one method and
@@ -86,12 +85,11 @@ pub async fn endpoint(
             );
         }
     };
-    let slug = principal.slug.clone();
 
     match method.as_str() {
         "server/discover" => discover(&id),
-        "tools/list" => tools_list(&state, &policy, Some(&principal), &id).await,
-        "tools/call" => tools_call(&state, &policy, Some(&principal), &slug, &id, &params).await,
+        "tools/list" => listing::tools_list(&state, &policy, &principal, &id).await,
+        "tools/call" => tools_call(&state, &policy, &principal, &id, &params).await,
         // Deny by default: an unlisted method is not proxied to upstreams that
         // might implement it.
         other => error(
@@ -115,99 +113,63 @@ fn discover(id: &Value) -> Response {
     )
 }
 
-async fn tools_list(
-    state: &McpState,
-    policy: &Policy,
-    principal: Option<&crate::audit::Principal>,
-    id: &Value,
-) -> Response {
-    let mut tools = federated_tools(state, policy).await;
-
-    // A tool the caller may not invoke is a tool they should not be shown —
-    // unless a human granted it for now.
-    if let Some(principal) = principal
-        && !principal.allowed_tools.is_empty()
-    {
-        let grants = state.approvals.active_grants(principal.id);
-        tools.retain(|tool| {
-            tool.get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| {
-                    principal.allowed_tools.iter().any(|t| t == name)
-                        || grants.iter().any(|g| g.tool == name)
-                })
-        });
+/// A listing with nothing on it, for gating decisions that are not about text.
+pub(crate) fn blank() -> Evaluation {
+    Evaluation {
+        verdict: Verdict::Allow,
+        text: String::new(),
+        detections: Vec::new(),
+        suspicious: false,
+        deterministic_us: 0,
+        semantic_us: 0,
     }
+}
 
-    // The gateway's own tools are always listed: an agent must be able to see
-    // its policy and ask for more.
-    tools.extend(native::descriptors());
-
-    result(
-        id,
-        json!({
-            "resultType": "complete",
-            "tools": tools,
-            "ttlMs": 30_000,
-            // The listing is filtered per principal, so a shared intermediary
-            // must never serve one caller's list to another.
-            "cacheScope": "private",
-        }),
+/// Tool calls by this identity inside the runaway window: all of them, and
+/// those identical to this one.
+async fn runaway_counts(
+    state: &AppState,
+    policy: &Policy,
+    principal: &Principal,
+    tool: &str,
+    payload_sha256: &str,
+) -> (i64, i64) {
+    let limits = &policy.runaway;
+    if limits.max_tool_calls.is_none() && limits.max_identical_calls.is_none() {
+        return (0, 0);
+    }
+    sqlx::query_as::<_, (i64, i64)>(
+        "select count(*), count(*) filter (where tool = $3 and payload_sha256 = $4)
+         from events
+         where principal_id = $1 and hook = 'tool_call'
+           and ts > now() - make_interval(secs => $2::int)",
     )
+    .bind(principal.id)
+    .bind(limits.window_secs)
+    .bind(tool)
+    .bind(payload_sha256)
+    .fetch_one(state.db())
+    .await
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "runaway count failed");
+        (0, 0)
+    })
 }
 
-/// Every tool on every enabled upstream, under its qualified name.
-pub(crate) async fn federated_tools(state: &McpState, policy: &Policy) -> Vec<Value> {
-    let mut tools = Vec::new();
-
-    for server in policy.mcp.enabled_servers() {
-        match federation::call(&state.http, server, "tools/list", None, json!({})).await {
-            Ok(listing) => {
-                let upstream = listing
-                    .get("tools")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for mut tool in upstream {
-                    if let Some(name) = tool.get("name").and_then(Value::as_str) {
-                        tool["name"] = Value::String(federation::qualify(&server.name, name));
-                    }
-                    tools.push(tool);
-                }
-            }
-            Err(problem) => tracing::warn!(%problem, "an upstream could not be listed"),
-        }
-    }
-    tools
-}
-
+#[expect(clippy::too_many_lines, reason = "one hook after another, in order")]
 async fn tools_call(
-    state: &McpState,
-    policy: &Policy,
-    principal: Option<&crate::audit::Principal>,
-    slug: &str,
+    state: &AppState,
+    policy: &Arc<Policy>,
+    principal: &Principal,
     id: &Value,
     params: &Value,
 ) -> Response {
     let trace_id = Uuid::new_v4();
-    let principal_id = principal.map(|p| p.id);
-    let policy_version_id = state
-        .auditor
-        .policy_version_id(&policy.sha256, &policy.source)
-        .await;
-
     let Some(qualified) = params.get("name").and_then(Value::as_str) else {
         return error(id, POLICY_DENIED, "tools/call requires a tool name");
     };
 
     if native::is_native(qualified) {
-        let Some(principal) = principal else {
-            return error(
-                id,
-                PRINCIPAL_DENIED,
-                "gateway tools need an identified caller",
-            );
-        };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
         return match native::call(state, policy, principal, qualified, &arguments).await {
             Ok(payload) => result(id, payload),
@@ -215,65 +177,66 @@ async fn tools_call(
         };
     }
 
-    // Checked again here, not only at list time: a client can call a tool it
-    // was never shown. A live human-approved grant counts as permission.
-    if let Some(principal) = principal
-        && !principal.allowed_tools.is_empty()
-        && !principal.allowed_tools.iter().any(|t| t == qualified)
-        && !state.approvals.has_grant(principal.id, qualified)
-    {
-        tracing::warn!(%slug, tool = %qualified, "tool not permitted for this principal");
-        return error(
-            id,
-            PRINCIPAL_DENIED,
-            &format!("{slug} may not call {qualified}"),
-        );
-    }
-
-    let Some((server_name, tool)) = federation::split(qualified) else {
-        return error(
-            id,
-            POLICY_DENIED,
-            &format!("{qualified} is not a federated tool name (expected server__tool)"),
-        );
-    };
-    let Some(server) = policy.mcp.server(server_name) else {
-        return error(
-            id,
-            POLICY_DENIED,
-            &format!("no enabled server named {server_name}"),
-        );
-    };
-
     // --- hook 3: tool_call ------------------------------------------------
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let rendered = arguments.to_string();
     let mut outbound = engine::evaluate(policy, Hook::ToolCall, &rendered);
-    engine::escalate(policy, Hook::ToolCall, &mut outbound, &state.detectors).await;
+    state.telemetry.observe("deterministic", outbound.deterministic_us);
+
+    // Checked here, not only at list time: a client can call a tool it was
+    // never shown. A live human-approved grant counts as permission. Every
+    // refusal below is audited with the call.
+    let resource_tool = qualified == resources::DESCRIBE || qualified == resources::QUERY;
+    let server = federation::split(qualified).and_then(|(server, _)| policy.mcp.server(server));
+    let gate = |evaluation: &mut Evaluation, control: &str, reason: String| {
+        evaluation.gate(control.to_owned(), Severity::High, Action::Block, reason);
+    };
+    if !principal.may_call_tool(qualified)
+        && !state.approvals.has_grant(principal.id, qualified)
+    {
+        gate(&mut outbound, TOOL_NOT_GRANTED, format!("{} may not call {qualified}", principal.slug));
+    } else if !resource_tool && server.is_none() {
+        gate(&mut outbound, "mcp.unknown-server", format!("{qualified} is not served by an enabled server"));
+    } else if let (Some(server), Some((_, tool))) = (server, federation::split(qualified))
+        && !guard::callable(server, tool)
+    {
+        gate(&mut outbound, "mcp.tool-unapproved", format!("{qualified} is not on the approved list"));
+    }
+    let digest = audit::sha256_hex(rendered.as_bytes());
+    let (calls, identical) = runaway_counts(state, policy, principal, qualified, &digest).await;
+    let depth = params.pointer("/_meta/depth").and_then(Value::as_u64);
+    if let Some(reason) = guard::runaway(&policy.runaway, calls, identical, depth) {
+        gate(&mut outbound, "mcp.runaway", reason);
+    }
+    let _inflight = state.budgets.check(principal, None, &mut outbound).await;
+    risk::apply(state.db(), &policy.risk, principal.id, &mut outbound).await;
+    if outbound.verdict != Verdict::Block {
+        engine::escalate(policy, Hook::ToolCall, &mut outbound, &state.detectors).await;
+    }
 
     let mut outbound_record = audit::record_for(
         trace_id,
         Hook::ToolCall,
         &outbound,
         None,
-        principal_id,
-        policy_version_id,
+        Some(principal.id),
+        policy.version_id,
         &rendered,
     );
     outbound_record.channel = "mcp";
     outbound_record.tool = Some(qualified);
     state.auditor.record(outbound_record).await;
+    state.telemetry.verdict("tool_call", verdict_name(outbound.verdict));
 
-    if outbound.verdict == Verdict::Block {
-        let control = outbound
-            .blocked_by()
-            .map_or("policy", |d| d.control_id.as_str());
-        return error(
-            id,
-            POLICY_DENIED,
-            &format!("tool call blocked by {control}"),
-        );
+    if let Some(blocker) = outbound.blocked_by() {
+        let code = if blocker.control_id == TOOL_NOT_GRANTED {
+            PRINCIPAL_DENIED
+        } else {
+            POLICY_DENIED
+        };
+        return error(id, code, &format!("tool call blocked by {}", blocker.control_id));
     }
+    background::analyse(state, &outbound, job(policy, Hook::ToolCall, &rendered, trace_id, principal, qualified));
 
     let forwarded = if outbound.verdict == Verdict::Redact {
         // Redaction rewrote a JSON document as text. If it no longer parses we
@@ -294,21 +257,31 @@ async fn tools_call(
     };
 
     // --- upstream ---------------------------------------------------------
-    let started = std::time::Instant::now();
-    let upstream = federation::call(
-        &state.http,
-        server,
-        "tools/call",
-        Some(tool),
-        json!({ "name": tool, "arguments": forwarded }),
-    )
-    .await;
+    let started = Instant::now();
+    let upstream = if resource_tool {
+        resource_call(state, policy, principal, trace_id, qualified, &forwarded).await
+    } else {
+        let (server, tool) = server
+            .zip(federation::split(qualified).map(|(_, tool)| tool))
+            .expect("checked above");
+        let reply = federation::call(
+            &state.http,
+            server,
+            "tools/call",
+            Some(tool),
+            json!({ "name": tool, "arguments": forwarded }),
+        )
+        .await;
+        state.telemetry.dependency(&format!("mcp:{}", server.name), reply.is_ok());
+        reply
+    };
     let upstream_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    state.telemetry.observe("mcp_upstream", upstream_us);
 
     let mut payload = match upstream {
         Ok(value) => value,
         Err(problem) => {
-            tracing::error!(%problem, "upstream tool call failed");
+            tracing::error!(%problem, "tool call failed");
             return error(id, UPSTREAM_ERROR, &problem);
         }
     };
@@ -324,8 +297,8 @@ async fn tools_call(
         Hook::ToolResult,
         &inbound,
         None,
-        principal_id,
-        policy_version_id,
+        Some(principal.id),
+        policy.version_id,
         &text,
     );
     inbound_record.channel = "mcp";
@@ -336,6 +309,7 @@ async fn tools_call(
         "upstream_us": upstream_us,
     });
     state.auditor.record(inbound_record).await;
+    state.telemetry.verdict("tool_result", verdict_name(inbound.verdict));
 
     if inbound.verdict == Verdict::Block {
         let control = inbound
@@ -348,6 +322,7 @@ async fn tools_call(
             &format!("tool result blocked by {control}"),
         );
     }
+    background::analyse(state, &inbound, job(policy, Hook::ToolResult, &text, trace_id, principal, qualified));
 
     if inbound.verdict == Verdict::Redact {
         federation::replace_result_text(&mut payload, &inbound.text);
@@ -367,13 +342,72 @@ async fn tools_call(
     result(id, payload)
 }
 
-fn summarise(evaluation: &engine::Evaluation) -> Value {
-    json!({
-        "verdict": evaluation.verdict,
-        "controls_fired": evaluation.detections.iter().map(|d| &d.control_id).collect::<Vec<_>>(),
-        "deterministic_us": evaluation.deterministic_us,
-        "semantic_us": evaluation.semantic_us,
-    })
+fn job(
+    policy: &Arc<Policy>,
+    hook: Hook,
+    text: &str,
+    trace_id: Uuid,
+    principal: &Principal,
+    tool: &str,
+) -> Job {
+    Job {
+        policy: Arc::clone(policy),
+        hook,
+        channel: "mcp",
+        text: text.to_owned(),
+        trace_id,
+        principal_id: principal.id,
+        model: None,
+        tool: Some(tool.to_owned()),
+    }
+}
+
+/// The gateway's own `resources` tools. Structure goes to the model; rows go
+/// to the identity that asked, and the model gets an acknowledgement.
+async fn resource_call(
+    state: &AppState,
+    policy: &Policy,
+    principal: &Principal,
+    trace_id: Uuid,
+    tool: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let pool = state
+        .resources
+        .as_ref()
+        .ok_or("resource tools are not configured on this gateway")?;
+    let tables = policy.resources.tables_for(&principal.slug);
+
+    if tool == resources::DESCRIBE {
+        return resources::describe(pool, tables)
+            .await
+            .map(resources::as_tool_result);
+    }
+
+    let sql = arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .ok_or("resources__query requires a `sql` argument")?;
+    let mut result = resources::run(pool, policy, tables, sql).await?;
+
+    // The rows leave through the output guardrails and are audited as data
+    // delivered to the user.
+    let delivered = resources::guard_rows(policy, &mut result.rows);
+    let mut record = audit::record_for(
+        trace_id,
+        Hook::ResponseOut,
+        &delivered,
+        None,
+        Some(principal.id),
+        policy.version_id,
+        &Value::Array(result.rows.clone()).to_string(),
+    );
+    record.channel = "mcp";
+    record.tool = Some(resources::QUERY);
+    state.auditor.record(record).await;
+
+    let ack = resources::deliver(state.db(), principal, trace_id, &result).await?;
+    Ok(resources::as_tool_result(ack.to_string()))
 }
 
 /// `Mcp-Method` and `Mcp-Name` mirror the body so intermediaries can route
@@ -408,7 +442,7 @@ fn header_mismatch(headers: &HeaderMap, method: &str, params: &Value) -> Option<
     None
 }
 
-fn result(id: &Value, result: Value) -> Response {
+pub(crate) fn result(id: &Value, result: Value) -> Response {
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
 }
 

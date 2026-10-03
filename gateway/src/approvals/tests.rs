@@ -13,11 +13,7 @@ fn principal(allowed_tools: &[&str]) -> Principal {
 }
 
 fn policy() -> Policy {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../policy/control-catalog.toml"
-    );
-    Policy::load(path).unwrap()
+    Policy::builtin().unwrap()
 }
 
 #[test]
@@ -65,10 +61,10 @@ fn targets_are_validated() {
         validate_target(&policy, &narrow, true, "docs__read"),
         Target::AlreadyPermitted
     );
-    // Empty allowed_tools means "any tool".
+    // Grants are deny-by-default: an empty list grants nothing.
     assert_eq!(
         validate_target(&policy, &principal(&[]), false, "docs__read"),
-        Target::AlreadyPermitted
+        Target::Requestable
     );
     for refused in ["control__my_access", "docs", "nowhere__read"] {
         assert!(

@@ -3,8 +3,9 @@
 //! This is the integration surface: point any OpenAI client at the gateway and
 //! every call is policed. Two of the four enforcement points are wired here —
 //! `prompt_in` on the way out and `response_out` on the way back. `tool_call`
-//! and `tool_result` are the same engine at the MCP boundary, which lands with
-//! the MCP proxy.
+//! and `tool_result` are the same engine at the MCP boundary.
+
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::State;
@@ -13,42 +14,34 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::admin::auth::bearer;
 use crate::audit::{self, Auditor, Principal};
-use crate::engine::{self, Verdict};
-use crate::mock;
-use crate::policy::{Action, Budget, Hook, Policy, PolicyHandle, Severity};
-use crate::semantic::Registry;
+use crate::background::{self, Job};
+use crate::budget::BUDGET_PREFIX;
+use crate::engine::{self, Evaluation, Verdict};
+use crate::helper::{self, Help};
+use crate::policy::{Action, Hook, Policy, Severity};
+use crate::risk::{self, RISK_CONTROL};
+use crate::state::AppState;
+use crate::{mock, telemetry::Telemetry};
 
-/// Everything a request needs. Cloned per request, so each field is cheap.
-#[derive(Clone)]
-pub struct ProxyState {
-    pub policy: PolicyHandle,
-    pub auditor: std::sync::Arc<Auditor>,
-    pub http: reqwest::Client,
-    pub upstream: String,
-    pub detectors: std::sync::Arc<Registry>,
-}
+/// Detection id for a model outside the allow lists.
+pub const MODEL_NOT_ALLOWED: &str = "model.not-allowed";
 
-/// Authenticate the gateway's integration endpoints.  We intentionally do
-/// not accept an `X-Principal` escape hatch: identity arrives only from a
-/// per-principal Bearer key and the database maps its hash to the principal.
+/// Authenticate the gateway's integration endpoints. There is no
+/// `X-Principal` escape hatch: identity arrives only from a per-principal
+/// Bearer key, and the database maps its hash to the principal.
 pub async fn bearer_principal(
     auditor: &Auditor,
     headers: &HeaderMap,
 ) -> Result<Principal, Response> {
-    let Some(value) = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .and_then(|header| header.strip_prefix("Bearer "))
-        .filter(|key| !key.is_empty())
-    else {
+    let Some(key) = bearer(headers) else {
         return Err(authentication_refusal(
             "missing or malformed Bearer API key",
         ));
     };
-
     auditor
-        .principal_for_api_key(value)
+        .principal_for_api_key(key)
         .await
         .ok_or_else(|| authentication_refusal("invalid or disabled API key"))
 }
@@ -61,25 +54,32 @@ fn authentication_refusal(message: &str) -> Response {
         .into_response()
 }
 
+/// The global deny list wins, then the global allow list, then the identity's
+/// own grant narrows it. Grants are deny-by-default.
+pub fn gate_model(policy: &Policy, principal: &Principal, model: &str, evaluation: &mut Evaluation) {
+    let reason = if !policy.model_allowed(model) {
+        format!("model {model} is not in the allow list")
+    } else if !principal.may_use_model(model) {
+        format!("model {model} is not granted to this identity")
+    } else {
+        return;
+    };
+    evaluation.gate(MODEL_NOT_ALLOWED.to_owned(), Severity::High, Action::Block, reason);
+}
+
 pub async fn chat_completions(
-    State(state): State<ProxyState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    let started = Instant::now();
     let trace_id = Uuid::new_v4();
-    let policy = state.policy.load();
-    let policy_version_id = state
-        .auditor
-        .policy_version_id(&policy.sha256, &policy.source)
-        .await;
+    let policy = state.policy.load_full();
 
     let principal = match bearer_principal(&state.auditor, &headers).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    let slug = &principal.slug;
-    let principal_id = Some(principal.id);
-
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -89,43 +89,40 @@ pub async fn chat_completions(
     // --- hook 1: prompt_in ------------------------------------------------
     let prompt = extract_prompt(&body);
     let mut inbound = engine::evaluate(&policy, Hook::PromptIn, &prompt);
+    state.telemetry.observe("deterministic", inbound.deterministic_us);
 
-    // --- model allow list (§4.1) and budget (§4.3) ------------------------
-    // Gated on the same evaluation, so a refusal is audited like any control.
-    if !policy.model_allowed(&model) {
-        inbound.gate(
-            MODEL_NOT_ALLOWED.to_owned(),
-            Severity::High,
-            Action::Block,
-            format!("model {model} is not in the allow list"),
-        );
-    }
-    if !principal.allowed_models.is_empty()
-        && !principal
-            .allowed_models
-            .iter()
-            .any(|allowed| allowed == &model)
-    {
-        inbound.gate(
-            MODEL_NOT_ALLOWED.to_owned(),
-            Severity::High,
-            Action::Block,
-            format!("model {model} is not allowed for this identity"),
-        );
-    }
-    check_budgets(
-        &policy,
-        &state.auditor,
-        principal_id,
-        slug,
-        &model,
-        &mut inbound,
-    )
-    .await;
+    // Model grants (§4.1), budgets (§4.3) and history (§4.4) gate the same
+    // evaluation, so a refusal is audited like any control.
+    gate_model(&policy, &principal, &model, &mut inbound);
+    let _inflight = state
+        .budgets
+        .check(&principal, Some(&model), &mut inbound)
+        .await;
+    risk::apply(state.db(), &policy.risk, principal.id, &mut inbound).await;
 
     // A request already refused should not also pay for the semantic tier.
     if inbound.verdict != Verdict::Block {
         engine::escalate(&policy, Hook::PromptIn, &mut inbound, &state.detectors).await;
+        observe_semantic(&state.telemetry, &inbound);
+    }
+
+    let help = match inbound.blocked_by() {
+        Some(blocker) if is_content_control(&blocker.control_id) => {
+            helper::help(&policy, &state.detectors, &prompt, &inbound).await
+        }
+        _ => None,
+    };
+    if let Some(help) = &help {
+        inbound.gate(
+            "helper.suggestion".to_owned(),
+            Severity::Info,
+            Action::Allow,
+            format!(
+                "{}; rewrite {}",
+                help.violated_policy,
+                if help.suggestion.is_some() { "offered" } else { "unavailable" }
+            ),
+        );
     }
 
     let event_id = state
@@ -135,51 +132,51 @@ pub async fn chat_completions(
             Hook::PromptIn,
             &inbound,
             Some(&model),
-            principal_id,
-            policy_version_id,
+            Some(principal.id),
+            policy.version_id,
             &prompt,
         ))
         .await;
+    state.telemetry.verdict("prompt_in", verdict_name(inbound.verdict));
 
     if let Some(blocker) = inbound.blocked_by() {
-        let control = blocker.control_id.as_str();
-        let reason = blocker.evidence.excerpt.as_str();
-        return if control == MODEL_NOT_ALLOWED {
-            refusal(trace_id, StatusCode::FORBIDDEN, "model_not_allowed", reason)
-        } else if control.starts_with(BUDGET_PREFIX) {
-            refusal(
-                trace_id,
-                StatusCode::TOO_MANY_REQUESTS,
-                "budget_exceeded",
-                reason,
-            )
-        } else {
-            refusal(
-                trace_id,
-                StatusCode::FORBIDDEN,
-                "blocked_by_control",
-                &format!("request blocked by {control}"),
-            )
-        };
+        return refusal_for(trace_id, &blocker.control_id, &blocker.evidence.excerpt, help);
     }
+    background::analyse(
+        &state,
+        &inbound,
+        Job {
+            policy: policy.clone(),
+            hook: Hook::PromptIn,
+            channel: "llm",
+            text: prompt.clone(),
+            trace_id,
+            principal_id: principal.id,
+            model: Some(model.clone()),
+            tool: None,
+        },
+    );
 
-    // Forward the redacted text, never the original.
+    // Forward the redacted conversation, never the original.
     let mut upstream_body = body.clone();
     if inbound.verdict == Verdict::Redact {
-        replace_prompt(&mut upstream_body, &inbound.text);
+        redact_messages(&policy, &mut upstream_body);
     }
 
     // --- upstream ---------------------------------------------------------
-    let started = std::time::Instant::now();
+    let upstream_started = Instant::now();
     let (status, mut completion) = if state.upstream == mock::MOCK {
         (StatusCode::OK, mock::completion(&upstream_body))
     } else {
-        match forward(&state, trace_id, &upstream_body).await {
+        let reply = forward(&state, trace_id, &upstream_body).await;
+        state.telemetry.dependency("upstream", reply.is_ok());
+        match reply {
             Ok(reply) => reply,
             Err(refused) => return refused,
         }
     };
-    let upstream_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    let upstream_us = micros(upstream_started);
+    state.telemetry.observe("upstream", upstream_us);
 
     if !status.is_success() {
         return (status, Json(completion)).into_response();
@@ -188,15 +185,17 @@ pub async fn chat_completions(
     // --- hook 2: response_out --------------------------------------------
     let answer = extract_answer(&completion);
     let mut outbound = engine::evaluate(&policy, Hook::ResponseOut, &answer);
+    state.telemetry.observe("deterministic", outbound.deterministic_us);
     engine::escalate(&policy, Hook::ResponseOut, &mut outbound, &state.detectors).await;
+    observe_semantic(&state.telemetry, &outbound);
 
     let mut outbound_record = audit::record_for(
         trace_id,
         Hook::ResponseOut,
         &outbound,
         Some(&model),
-        principal_id,
-        policy_version_id,
+        Some(principal.id),
+        policy.version_id,
         &answer,
     );
     outbound_record.latency = json!({
@@ -205,6 +204,7 @@ pub async fn chat_completions(
         "upstream_us": upstream_us,
     });
     let outbound_event = state.auditor.record(outbound_record).await;
+    state.telemetry.verdict("response_out", verdict_name(outbound.verdict));
 
     // Usage is recorded even when the answer is blocked: the tokens were spent.
     let (prompt_tokens, completion_tokens) = usage(&completion);
@@ -212,13 +212,16 @@ pub async fn chat_completions(
         .auditor
         .record_usage(
             outbound_event.or(event_id),
-            principal_id,
+            Some(principal.id),
             &model,
             prompt_tokens,
             completion_tokens,
             policy.cost_usd(&model, prompt_tokens, completion_tokens),
         )
         .await;
+    state
+        .telemetry
+        .observe("total", micros(started).saturating_sub(upstream_us));
 
     if outbound.verdict == Verdict::Block {
         let control = outbound
@@ -229,8 +232,23 @@ pub async fn chat_completions(
             StatusCode::FORBIDDEN,
             "blocked_by_control",
             &format!("response blocked by {control}"),
+            None,
         );
     }
+    background::analyse(
+        &state,
+        &outbound,
+        Job {
+            policy: policy.clone(),
+            hook: Hook::ResponseOut,
+            channel: "llm",
+            text: answer,
+            trace_id,
+            principal_id: principal.id,
+            model: Some(model),
+            tool: None,
+        },
+    );
 
     if outbound.verdict == Verdict::Redact {
         replace_answer(&mut completion, &outbound.text);
@@ -248,8 +266,58 @@ pub async fn chat_completions(
     (StatusCode::OK, Json(completion)).into_response()
 }
 
+/// Content controls get the prompt helper; refusals about who is asking (model
+/// grant, budget, history) have no compliant rewrite to offer.
+fn is_content_control(control_id: &str) -> bool {
+    control_id != MODEL_NOT_ALLOWED
+        && control_id != RISK_CONTROL
+        && !control_id.starts_with(BUDGET_PREFIX)
+}
+
+fn refusal_for(trace_id: Uuid, control: &str, reason: &str, help: Option<Help>) -> Response {
+    if control == MODEL_NOT_ALLOWED {
+        refusal(trace_id, StatusCode::FORBIDDEN, "model_not_allowed", reason, None)
+    } else if control.starts_with(BUDGET_PREFIX) {
+        refusal(trace_id, StatusCode::TOO_MANY_REQUESTS, "budget_exceeded", reason, None)
+    } else if control == RISK_CONTROL {
+        refusal(
+            trace_id,
+            StatusCode::FORBIDDEN,
+            "risk_blocked",
+            "too many recent policy violations; try again later",
+            None,
+        )
+    } else {
+        refusal(
+            trace_id,
+            StatusCode::FORBIDDEN,
+            "blocked_by_control",
+            &format!("request blocked by {control}"),
+            help,
+        )
+    }
+}
+
+fn observe_semantic(telemetry: &Telemetry, evaluation: &Evaluation) {
+    if evaluation.semantic_us > 0 {
+        telemetry.observe("semantic", evaluation.semantic_us);
+    }
+}
+
+fn micros(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+pub const fn verdict_name(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::Allow => "allow",
+        Verdict::Redact => "redact",
+        Verdict::Block => "block",
+    }
+}
+
 async fn forward(
-    state: &ProxyState,
+    state: &AppState,
     trace_id: Uuid,
     body: &Value,
 ) -> Result<(StatusCode, Value), Response> {
@@ -266,6 +334,7 @@ async fn forward(
                 StatusCode::BAD_GATEWAY,
                 "upstream_unavailable",
                 "the upstream model is unreachable",
+                None,
             )
         })?;
 
@@ -276,12 +345,13 @@ async fn forward(
             StatusCode::BAD_GATEWAY,
             "upstream_unreadable",
             "the upstream response was not JSON",
+            None,
         )
     })?;
     Ok((status, completion))
 }
 
-fn summarise(evaluation: &engine::Evaluation) -> Value {
+pub fn summarise(evaluation: &Evaluation) -> Value {
     json!({
         "verdict": evaluation.verdict,
         "controls_fired": evaluation.detections.iter().map(|d| &d.control_id).collect::<Vec<_>>(),
@@ -290,102 +360,73 @@ fn summarise(evaluation: &engine::Evaluation) -> Value {
     })
 }
 
-fn refusal(trace_id: Uuid, status: StatusCode, code: &str, message: &str) -> Response {
+fn refusal(
+    trace_id: Uuid,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    help: Option<Help>,
+) -> Response {
     tracing::info!(%trace_id, code, message, "refused");
-    (
-        status,
-        Json(json!({
-            "error": { "type": code, "message": message },
-            "trace_id": trace_id,
-        })),
-    )
-        .into_response()
-}
-
-/// Detection id for a model outside the allow list.
-const MODEL_NOT_ALLOWED: &str = "model.not-allowed";
-
-/// Budget detections are `budget.global`, `budget.principal.<slug>` and
-/// `budget.model.<name>`, mirroring where the budget sits in the catalog.
-const BUDGET_PREFIX: &str = "budget.";
-
-/// Budget check. The global budget applies to everyone, a model budget to all
-/// traffic on that model, a principal budget to that caller. A hard budget
-/// blocks; a soft one is recorded and lets the request through.
-async fn check_budgets(
-    policy: &Policy,
-    auditor: &Auditor,
-    principal_id: Option<Uuid>,
-    slug: &str,
-    model: &str,
-    evaluation: &mut engine::Evaluation,
-) {
-    if !auditor.enabled() {
-        return;
+    let mut error = json!({ "type": code, "message": message });
+    if let Some(help) = help {
+        error["helper"] = json!(help);
     }
-
-    let mut checks: Vec<(String, Option<Uuid>, Option<&str>, &Budget)> = Vec::new();
-    if let Some(budget) = policy.budgets.global.as_ref() {
-        checks.push(("global".to_owned(), None, None, budget));
-    }
-    // Without a resolved principal the usage cannot be attributed, and summing
-    // everyone's would charge this caller for the whole organisation.
-    if let (Some(budget), Some(id)) = (policy.budgets.principal.get(slug), principal_id) {
-        checks.push((format!("principal.{slug}"), Some(id), None, budget));
-    }
-    if let Some(budget) = policy.budgets.model.get(model) {
-        checks.push((format!("model.{model}"), None, Some(model), budget));
-    }
-
-    for (scope, owner, model, budget) in checks {
-        let (tokens, usd) = auditor
-            .usage_in_window(owner, model, budget.window_secs)
-            .await;
-        let spent = match (budget.limit_tokens, budget.limit_usd) {
-            (Some(limit), _) if tokens >= limit => format!("{tokens}/{limit} tokens"),
-            (_, Some(limit)) if usd >= limit => format!("${usd:.4}/${limit:.2}"),
-            _ => continue,
-        };
-        let reason = format!(
-            "{scope} budget exhausted: {spent} in the last {}s",
-            budget.window_secs
-        );
-        let (severity, action) = if budget.hard {
-            (Severity::High, Action::Block)
-        } else {
-            tracing::warn!(%scope, %spent, "soft budget exceeded");
-            (Severity::Low, Action::Allow)
-        };
-        evaluation.gate(format!("{BUDGET_PREFIX}{scope}"), severity, action, reason);
-    }
+    (status, Json(json!({ "error": error, "trace_id": trace_id }))).into_response()
 }
 
 // ---------------------------------------------------------------- payloads
 
+/// The text of one message's `content`: a plain string, or the text parts of
+/// an array of content parts. Anything the model would read must be seen.
+fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 /// Everything the model will read, concatenated. Controls run over the whole
 /// conversation, not just the newest turn — an injection planted three
 /// messages ago is still an injection.
-fn extract_prompt(body: &Value) -> String {
+pub fn extract_prompt(body: &Value) -> String {
     body.get("messages")
         .and_then(Value::as_array)
         .map(|messages| {
             messages
                 .iter()
-                .filter_map(|m| m.get("content").and_then(Value::as_str))
+                .filter_map(|m| m.get("content"))
+                .map(content_text)
+                .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n")
         })
         .unwrap_or_default()
 }
 
-/// Redaction rewrites the last user message, which is where the finding
-/// realistically sits in a single-turn demo.
-fn replace_prompt(body: &mut Value, text: &str) {
-    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut)
-        && let Some(last) = messages.last_mut()
-        && let Some(content) = last.get_mut("content")
-    {
-        *content = Value::String(text.to_owned());
+/// Redact every message in place, each on its own, so the conversation keeps
+/// its shape and every turn its own content.
+pub fn redact_messages(policy: &Policy, body: &mut Value) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for content in messages.iter_mut().filter_map(|m| m.get_mut("content")) {
+        match content {
+            Value::String(text) => *text = engine::redact(policy, Hook::PromptIn, text),
+            Value::Array(parts) => {
+                for text in parts.iter_mut().filter_map(|p| p.get_mut("text")) {
+                    if let Value::String(inner) = text {
+                        *inner = engine::redact(policy, Hook::PromptIn, inner);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -396,9 +437,8 @@ fn extract_answer(completion: &Value) -> String {
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
-        .and_then(Value::as_str)
+        .map(content_text)
         .unwrap_or_default()
-        .to_owned()
 }
 
 fn replace_answer(completion: &mut Value, text: &str) {
@@ -424,3 +464,6 @@ fn usage(completion: &Value) -> (i32, i32) {
     };
     (field("prompt_tokens"), field("completion_tokens"))
 }
+
+#[cfg(test)]
+mod tests;

@@ -16,28 +16,46 @@ Security gateway (overall) specification:
 - Implements a hybrid defense: fast deterministic (non-AI, full-text search instead) controls on the synchronous path, and AI-based semantic controls where they add value (§2, §4.2) — asynchronous by default, synchronous only when a deterministic control escalates the request.
 - Everything must run locally (`dev`) or on Google Cloud platform (`prod`) - depending on the `ENVIRONMENT` config variable (`dev`, `prod`).
 - `ENVIRONMENT` sets defaults and strictness, never which controls are enforced:
-  - `dev` may start without a database (enforcement runs, nothing is persisted), logs human-readable text, allows any browser origin unless `CORS_ORIGINS` says otherwise, and by default uses mocks instead of models: a mock chat upstream (`UPSTREAM_URL=mock`) and a deterministic mock semantic judge (`OLLAMA_URL=mock`), so no Ollama is needed.
-  - `prod` refuses to start without `DATABASE_URL` (a production control layer must audit) and refuses to start with a mock upstream or mock judge (a fabricated verdict has no place in a production control). It logs JSON and allows only the browser origins listed in `CORS_ORIGINS`. The semantic judge is the Ollama at `OLLAMA_URL`; the chat upstream is any OpenAI-compatible server set by `UPSTREAM_URL`. `just deploy` targets Google Cloud Run.
+  - Both environments refuse to start without `DATABASE_URL`: the active policy, the identities, their grants and the budgets all live in the database, so a gateway without one has nothing to enforce.
+  - `dev` logs human-readable text, allows any browser origin unless `CORS_ORIGINS` says otherwise, and by default uses mocks instead of models: a mock chat upstream (`UPSTREAM_URL=mock`) and a deterministic mock semantic judge (`OLLAMA_URL=mock`), so no Ollama is needed.
+  - `prod` refuses to start with a mock upstream or mock judge (a fabricated verdict has no place in a production control). It logs JSON and allows only the browser origins listed in `CORS_ORIGINS`. The semantic judge is the Ollama at `OLLAMA_URL`; the chat upstream is any OpenAI-compatible server set by `UPSTREAM_URL`. `just deploy` targets Google Cloud Run.
   - Detector availability is not checked at startup in either environment; an unavailable detector is resolved at request time by the control's `fail_mode`.
 - Stack is decided - look for project context to discover the stack.
 - Coverage should be reviewed against OWASP Top 10 for LLM Applications and OWASP agentic AI threats (§1 note): prompt injection, sensitive information disclosure, supply chain, data/model poisoning, improper output handling, excessive agency, system prompt leakage, vector/embedding weaknesses, misinformation, unbounded consumption.
 
 Centralized policy engine and configuration file specification:
-- A single TOML configuration file is the only source of truth for all controls (§4.1); the gateway parses it and distributes the effective policy to the security proxy.
-- The active file is the newest of two: the file on disk (edited in place, hot-reloaded) or a file uploaded by the security team through the authenticated gateway admin API. An upload is validated exactly like a reload, and its full text is stored in the database (`policy_versions`), so every gateway instance and every restart serves the same policy without touching the disk.
-- The admin dashboard may also hold runtime settings that are never written to the file. None are defined yet: controls, thresholds, actions, budgets, model lists and MCP servers live only in the file. When a setting is added it overlays the active file, and each decision records both the file version and the settings revision.
+- A single TOML control catalog is the only source of truth for all controls (§4.1); the gateway parses it and distributes the effective policy to the security proxy.
+- The catalog lives in the database for its entire life (`policy_versions`, exactly one row `active`). The gateway never reads a catalog from disk at runtime. The only way to change it is to upload a complete TOML catalog — and optionally the attack-signature feed — through the authenticated gateway admin API.
+- First start: when the database holds no active version, the gateway seeds it with the built-in sample catalog and feed (`policy/control-catalog.toml`, `policy/signatures.toml`, compiled into the binary) and activates that. Editing those files changes nothing until they are uploaded.
+- Every gateway instance polls the active version (every 5 s) and swaps to a newer one without a restart, so an upload applies to the whole fleet; judges upload an edited catalog during evaluation and observe the effect (§6).
 - The configuration file is in the TOML format.
-- The file defines: list of controls with `enabled` flag, action per control, failure mode per control (`closed` or `open`, falling back to a file-wide default), sensitivity thresholds (e.g. adherence % or classifier score cutoffs), allowed LLM models (a global allow/deny list, narrowed per identity/role), a per-model pricing table, and per identity/role: resource and financial budgets, data access rules (MCP servers, tools, resources); plus the attack-signature feed source.
+- The catalog defines: list of controls with `enabled` flag, action per control, failure mode per control (`closed` or `open`, falling back to a file-wide default), sensitivity thresholds (e.g. adherence % or classifier score cutoffs), the global model allow/deny list, a per-model pricing table, the attack-history risk thresholds, runaway-agent limits, MCP servers (with pinned tool hashes) and resource access rules.
 - Actions: `allow` (record only), `flag` (record and mark the request suspicious, which escalates it to the semantic tier), `redact` (replace the match and continue), `block` (stop the request).
-- Identity is not policy: the registry of identities and their hashed API keys lives in the database (`principals`); everything an identity may do lives in the file, keyed by identity slug or role.
+- Identity and grants live in the database, not the catalog: `principals` holds each identity, the hash of its API key, and its `allowed_models` / `allowed_tools`. Grants are deny-by-default: an empty list grants nothing.
+- Budgets live in the database (`budgets`), not the catalog, and are edited through the gateway admin API.
 - Unknown keys are a validation error, so a typo such as `enabeld = false` is rejected instead of silently leaving the control on.
 - Supports named strictness profiles (e.g. `permissive`, `balanced`, `strict`) that set defaults for all controls; individual controls can override the profile (§3.2).
-- Hot reload: file changes apply at runtime without a restart, because judges will edit the file during evaluation and observe the effect (§6).
-- Every reload and upload is validated against a schema; an invalid file is rejected, the last valid policy stays active and the error is reported in the audit log and admin dashboard (and returned to the uploader).
-- Every accepted reload produces a policy version id and a human-readable diff, recorded in the audit log and visible in the admin dashboard.
+- Every upload is validated against the schema before it is stored; an invalid upload is rejected with the error returned to the uploader, recorded in `admin_actions`, and the last valid policy stays active.
+- Every accepted upload produces a policy version id and a human-readable control-level diff (controls added, removed, and changed field by field), stored with the version and the uploader, and visible in the admin dashboard.
 - Each decision in the audit log references the policy version and control id that produced it.
-- Ship a documented sample configuration demonstrating different strictness levels and budget rules (§3.2).
-- Removing a control from the file disables it immediately; the self-testing suite must prove this.
+- Ship a documented sample configuration demonstrating different strictness levels (§3.2); budget rules are demonstrated by the seeded `budgets` rows.
+- Removing a control from an uploaded catalog disables it as soon as the version activates; the self-testing suite must prove this.
+
+Policy settings flow:
+
+```
+startup ─► select active policy_versions row
+            ├─ found ─► compile catalog_toml + signatures_toml ─► active policy
+            └─ none  ─► insert the built-in sample as active ─► active policy
+security admin (Supabase session, team role admin)
+  POST /admin/policy {catalog_toml, signatures_toml?}
+    ─► compile + validate ── invalid ─► 422, admin_actions(rejected); active unchanged
+    ─► control-level diff against the active version
+    ─► one transaction: deactivate old, insert new version (text, diff, uploader), admin_actions(accepted)
+    ─► swap in this instance; mirror signatures into attack_signatures
+other instances ─► poll every 5 s ─► compile + swap
+every decision ─► events.policy_version_id
+```
 
 Deterministic guardrails (security proxy) specification:
 - The security proxy sits between the provisioned interface and the LLM; all deterministic checks happen here, on both the prompt (input) and the LLM response (output) (§4.2.1).
@@ -68,8 +86,8 @@ Semantic guardrails (async semantic analysis) specification:
 - If the semantic model is unavailable, the gateway fails according to policy (`fail_closed` or `fail_open` per control) and reports the outage.
 
 Data access control specification:
-- Every user and every agent has an identity authenticated by its own API key and a role; anonymous traffic and unknown keys are rejected on every endpoint (§1: agents need modern authentication and access control). Only a hash of each key is stored.
-- Access to resources (database tables/rows, file paths), MCP servers and individual MCP tools is deny-by-default and granted per role by the policy.
+- Every user and every agent has an identity authenticated by its own API key; anonymous traffic and unknown keys are rejected on every endpoint (§1: agents need modern authentication and access control). Only a hash of each key is stored.
+- Access to resources (database tables/rows, file paths), MCP servers and individual MCP tools is deny-by-default: tools are granted per identity in `principals.allowed_tools`, resources per identity in the catalog's resource rules.
 - Agents act on behalf of a user with delegated, narrowed scope; an agent never gets more permissions than the user it acts for, which prevents impersonation and privilege escalation.
 - Destructive or irreversible operations (delete, write, payments, external sends) are classified by the policy and require an explicit allow rule and, where configured, human confirmation.
 - Data retrieved from protected resources never reaches the LLM (see the MCP integration spec); it is filtered (redacted if required by the policy) before it reaches the user (output guardrails).
@@ -79,8 +97,9 @@ Data access control specification:
 Budget and resource governance specification:
 - Enforces budgets for both external commercial APIs and locally hosted models (§2, §4.3): token spend, monetary cost, compute time, request count and concurrency.
 - Budgets are scoped hierarchically (identity → team → organization) and per model, with time windows (per minute, hour, day, month).
-- Costs come from a per-model pricing table in the configuration; local models are accounted for by compute time and tokens.
-- Only models allowed for the identity are reachable: the global deny list wins, then the global allow list, then the identity/role allow list narrows it further; requests for other models are blocked (§4.1).
+- Budgets are rows in the `budgets` table (scope, window, token / USD / request-count / concurrency limits, hard or soft), edited only through the gateway admin API.
+- Costs come from a per-model pricing table in the catalog; local models are accounted for by compute time and tokens.
+- Only models allowed for the identity are reachable: the global deny list wins, then the global allow list, then the identity's `allowed_models` narrows it further (empty grants nothing); requests for other models are blocked (§4.1).
 - Runaway agent protection: limits on tool-call count, agent loop iterations, recursion depth and repeated identical calls per session (§1: runaway execution loops).
 - Soft limit triggers a warning (logged and shown in dashboards); hard limit blocks with a clear budget-exceeded error.
 - Budget usage is updated in real time and exposed to monitoring and the dashboards.
@@ -88,8 +107,8 @@ Budget and resource governance specification:
 
 Malicious patterns detection and historical attack mitigation specification:
 - Detects and blocks patterns associated with successful historical exploits on AI systems (§4.4): malicious code execution, unsafe deserialization (pickle/`torch.load` payloads, dangerous opcodes), supply-chain exploits on model repositories (untrusted repos, typosquatted model names, unpinned or hash-mismatched artifacts), MCP tool poisoning (hidden instructions in tool descriptions, tool definition changes after approval), known jailbreak prompts.
-- Attack signatures are loaded from an externally managed feed (URL or file), versioned, and hot-reloaded like the policy; the feed format is documented so security teams can add signatures without code changes.
-- The feed file stays the source of truth; on every load the gateway mirrors the active signatures into the `attack_signatures` table so the dashboard can show feed status.
+- Attack signatures come from an externally managed feed, uploaded together with the catalog (`signatures_toml`) and versioned with it; the feed format is documented so security teams can add signatures without code changes.
+- On every activation the gateway mirrors the active signatures into the `attack_signatures` table so the dashboard can show feed status.
 - Allowlists for model sources and MCP servers (with pinned versions/hashes) are part of the policy.
 - The history store keeps past blocked and flagged interactions per identity and session.
 - History is used to detect multi-step or repeated attacks: identities with recent violations get a higher risk score, which tightens checks or blocks them according to policy.
@@ -125,7 +144,8 @@ Admin dashboard backend API specification:
 - The admin dashboard (security team) reads persisted data — audit log, detections, policy versions, usage, signature feed mirror — directly through the Supabase Data API, authenticated as the security team; RLS grants it read-only access, so the dashboard can never rewrite the audit log it displays.
 - The gateway writes through its privileged connection only. It exposes HTTP endpoints for live state the database does not hold (e.g. the active policy and its reload status, telemetry) and an authenticated admin API for the dashboard's writes (policy upload, and runtime settings once any exist). The dashboard never writes through the Data API.
 - Together these provide: active controls and their state, current policy version and reload diff history, live and historical metrics, blocked threats with details, budget usage, audit log search and export, signature feed status (§3.3).
-- Data API and gateway endpoints are restricted to the security team role, and every admin action that changes state is audited.
+- Gateway admin endpoints authenticate the console user with their Supabase access token (`Authorization: Bearer <access_token>`); the gateway verifies it with Supabase Auth and reads the user's `team_members.role`. `viewer`, `analyst` and `admin` may read; only `admin` may change state (policy upload, budgets). Every state-changing admin action, accepted or rejected, is recorded in `admin_actions`. The exception is `/admin/approvals/*`: the console server calls those with the `secops-console` principal's API key (`GATEWAY_ADMIN_KEY`, `principals.role = security_admin`) after checking the user's team role itself, and decisions are recorded in `access_requests`.
+- Data API reads are restricted to the security team by RLS.
 
 Performance telemetry specification:
 - Per-stage latency (deterministic checks, semantic analysis, LLM call, MCP call, total overhead added by the layer) with p50/p95/p99 (§6).
@@ -136,7 +156,7 @@ Self-testing suite specification:
 - A ready-to-run automated suite executed by a single command (`just check`), which judges will run (§3.4, §4.6, §6).
 - Every implemented control has at least one positive (allowed) and one negative (blocked or redacted) test case.
 - Covers: PII/secret redaction, prompt injection and jailbreak blocking, data access denial, budget limits (tokens, cost, rate, loop limits), historical exploit signatures (unsafe deserialization, malicious code, supply-chain, MCP tool poisoning), output filtering, prompt helper behavior.
-- Includes policy tests: hot reload applies changes, disabling a control stops it from triggering, threshold changes alter outcomes, invalid config is rejected with the last valid policy kept.
+- Includes policy tests: an upload applies changes, disabling a control stops it from triggering, threshold changes alter outcomes, invalid config is rejected with the last valid policy kept.
 - Deterministic tests run without any model; semantic tests run against the mock judge by default, and tests against a real local model are clearly marked so they can be run separately when no model is available.
 - Includes one end-to-end smoke test of the demo happy path (per `CLAUDE.md` testing policy).
 - Interactions recorded in the attack history can be exported as regression test cases.

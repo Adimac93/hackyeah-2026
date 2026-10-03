@@ -9,7 +9,6 @@
 //! hackathon traffic that costs nothing; a production version would shard the
 //! chain per principal.
 
-use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use sha2::{Digest as _, Sha256};
@@ -21,13 +20,8 @@ use crate::engine::{Detection, Evaluation, Verdict};
 use crate::policy::Hook;
 
 pub struct Auditor {
-    /// Absent when `DATABASE_URL` is unset: the gateway still enforces, it just
-    /// cannot persist. Enforcement must not depend on the logger being up.
-    db: Option<PgPool>,
+    db: PgPool,
     chain: Mutex<Vec<u8>>,
-    /// sha256 -> `policy_versions.id`, so a decision costs no extra round trip
-    /// once its version is known.
-    versions: std::sync::Mutex<HashMap<String, i64>>,
 }
 
 /// A registered caller: an agent, an application or a person.
@@ -35,12 +29,22 @@ pub struct Auditor {
 pub struct Principal {
     pub id: Uuid,
     pub slug: String,
-    /// Only governs gateway administration. Resource/model/tool permissions
-    /// remain in the centralized policy and principal grants.
+    /// `security_admin` may call the approvals admin routes with its API key.
     pub role: String,
+    /// Deny-by-default: an empty list grants no model.
     pub allowed_models: Vec<String>,
-    /// Empty means "any tool", matching how `models.allowed` already behaves.
+    /// Deny-by-default: an empty list grants no tool.
     pub allowed_tools: Vec<String>,
+}
+
+impl Principal {
+    pub fn may_use_model(&self, model: &str) -> bool {
+        self.allowed_models.iter().any(|m| m == model)
+    }
+
+    pub fn may_call_tool(&self, tool: &str) -> bool {
+        self.allowed_tools.iter().any(|t| t == tool)
+    }
 }
 
 /// One interception, ready to be written.
@@ -61,79 +65,38 @@ pub struct EventRecord<'a> {
 impl Auditor {
     /// Reads the tail of the existing chain so a restart continues it rather
     /// than starting a second, unverifiable one.
-    pub async fn new(db: Option<PgPool>) -> Self {
-        let tail = match &db {
-            None => Vec::new(),
-            Some(pool) => {
-                sqlx::query_scalar::<_, Vec<u8>>("select hash from events order by id desc limit 1")
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or_else(|error| {
-                        tracing::error!(%error, "could not read the audit chain tail");
-                        None
-                    })
-                    .unwrap_or_default()
-            }
-        };
+    pub async fn new(db: PgPool) -> Self {
+        let tail = sqlx::query_scalar::<_, Vec<u8>>("select hash from events order by id desc limit 1")
+            .fetch_optional(&db)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "could not read the audit chain tail");
+                None
+            })
+            .unwrap_or_default();
         if !tail.is_empty() {
             tracing::info!(tail = %hex(&tail)[..12].to_owned(), "continuing the audit chain");
         }
         Self {
             db,
             chain: Mutex::new(tail),
-            versions: std::sync::Mutex::default(),
         }
     }
 
-    pub fn enabled(&self) -> bool {
-        self.db.is_some()
-    }
-
-    /// The row id of the policy version a decision ran under, registering the
-    /// version on first sight. Resolved per request rather than once at
-    /// startup: a hot reload changes the version, and every decision must point
-    /// at the exact catalog text that produced it.
-    pub async fn policy_version_id(&self, sha256: &str, source: &str) -> Option<i64> {
-        if let Some(id) = self.versions.lock().ok()?.get(sha256) {
-            return Some(*id);
-        }
-        let id = self.register_policy(sha256, source).await?;
-        self.versions.lock().ok()?.insert(sha256.to_owned(), id);
-        Some(id)
-    }
-
-    async fn register_policy(&self, sha256: &str, source: &str) -> Option<i64> {
-        let pool = self.db.as_ref()?;
-        let result = sqlx::query_scalar::<_, i64>(
-            "insert into policy_versions (sha256, source) values ($1, $2)
-             on conflict (sha256) do update set loaded_at = now(), active = true
-             returning id",
-        )
-        .bind(sha256)
-        .bind(source)
-        .fetch_one(pool)
-        .await;
-
-        match result {
-            Ok(id) => Some(id),
-            Err(error) => {
-                tracing::error!(%error, "could not register the policy version");
-                None
-            }
-        }
+    pub fn pool(&self) -> &PgPool {
+        &self.db
     }
 
     /// Resolve an enabled principal from an API key. The registry stores only
     /// the digest, never a bearer secret. HTTP handlers must use this method,
     /// not a caller-supplied principal slug.
     pub async fn principal_for_api_key(&self, api_key: &str) -> Option<Principal> {
-        let pool = self.db.as_ref()?;
         let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>)>(
             "select id, slug, role, allowed_models, allowed_tools
              from principals where api_key_hash = $1 and enabled",
         )
         .bind(sha256_hex(api_key.as_bytes()))
-        .fetch_optional(pool)
+        .fetch_optional(&self.db)
         .await
         .unwrap_or_else(|error| {
             tracing::error!(%error, "API-key principal lookup failed");
@@ -149,110 +112,6 @@ impl Auditor {
         })
     }
 
-    /// Persist a validated admin upload before it becomes active.  The full
-    /// catalog is retained so another gateway instance can load the same
-    /// version after a restart; the dashboard only receives it through its
-    /// existing security-team read policy.
-    pub async fn store_policy_upload(
-        &self,
-        sha256: &str,
-        source: &str,
-        catalog_toml: &str,
-        uploaded_by: Uuid,
-        diff_summary: &str,
-    ) -> Option<i64> {
-        let pool = self.db.as_ref()?;
-        let mut tx = pool.begin().await.ok()?;
-        if sqlx::query("update policy_versions set active = false where active")
-            .execute(&mut *tx)
-            .await
-            .is_err()
-        {
-            return None;
-        }
-        let id = sqlx::query_scalar::<_, i64>(
-            "insert into policy_versions
-               (sha256, source, catalog_toml, diff_summary, uploaded_by, active)
-             values ($1, $2, $3, $4, $5, true)
-             on conflict (sha256) do update set
-               source = excluded.source, catalog_toml = excluded.catalog_toml,
-               diff_summary = excluded.diff_summary, uploaded_by = excluded.uploaded_by,
-               loaded_at = now(), active = true
-             returning id",
-        )
-        .bind(sha256)
-        .bind(source)
-        .bind(catalog_toml)
-        .bind(diff_summary)
-        .bind(uploaded_by)
-        .fetch_one(&mut *tx)
-        .await
-        .ok()?;
-        tx.commit().await.ok()?;
-        self.versions.lock().ok()?.insert(sha256.to_owned(), id);
-        Some(id)
-    }
-
-    /// Lookup used by reporting and tests. It is intentionally not an HTTP
-    /// authentication path: a self-declared identity is never trusted.
-    pub async fn principal(&self, slug: &str) -> Option<Principal> {
-        let pool = self.db.as_ref()?;
-        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>)>(
-            "select id, slug, role, allowed_models, allowed_tools
-             from principals where slug = $1 and enabled",
-        )
-        .bind(slug)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::error!(%error, "principal lookup failed");
-            None
-        })?;
-
-        Some(Principal {
-            id: row.0,
-            slug: row.1,
-            role: row.2,
-            allowed_models: row.3,
-            allowed_tools: row.4,
-        })
-    }
-
-    pub async fn principal_id(&self, slug: &str) -> Option<Uuid> {
-        self.principal(slug).await.map(|p| p.id)
-    }
-
-    /// Tokens and USD spent inside the trailing window, narrowed to a principal
-    /// and/or a model when given.
-    pub async fn usage_in_window(
-        &self,
-        principal: Option<Uuid>,
-        model: Option<&str>,
-        window_secs: i32,
-    ) -> (i64, f64) {
-        let Some(pool) = self.db.as_ref() else {
-            return (0, 0.0);
-        };
-        let used = sqlx::query_as::<_, (i64, f64)>(
-            "select coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
-                    coalesce(sum(cost_usd), 0)::float8
-             from usage
-             where ts > now() - make_interval(secs => $1::int)
-               and ($2::uuid is null or principal_id = $2::uuid)
-               and ($3::text is null or model = $3::text)",
-        )
-        .bind(window_secs)
-        .bind(principal)
-        .bind(model)
-        .fetch_one(pool)
-        .await;
-
-        used.unwrap_or_else(|error| {
-            tracing::error!(%error, "budget lookup failed");
-            (0, 0.0)
-        })
-    }
-
     pub async fn record_usage(
         &self,
         event_id: Option<i64>,
@@ -262,9 +121,6 @@ impl Auditor {
         completion_tokens: i32,
         cost_usd: f64,
     ) {
-        let Some(pool) = self.db.as_ref() else {
-            return;
-        };
         let result = sqlx::query(
             "insert into usage
                (event_id, principal_id, model, prompt_tokens, completion_tokens, cost_usd)
@@ -276,7 +132,7 @@ impl Auditor {
         .bind(prompt_tokens)
         .bind(completion_tokens)
         .bind(cost_usd)
-        .execute(pool)
+        .execute(&self.db)
         .await;
 
         if let Err(error) = result {
@@ -286,7 +142,7 @@ impl Auditor {
 
     /// Append one event and its detections. Returns the event id.
     pub async fn record(&self, record: EventRecord<'_>) -> Option<i64> {
-        let pool = self.db.as_ref()?;
+        let pool = &self.db;
 
         // The chain is held across the insert so two concurrent requests cannot
         // compute their hashes from the same predecessor.
@@ -360,10 +216,7 @@ impl Auditor {
 
             // Keep only non-sensitive behavioral metadata for repeated-attack
             // scoring. The prompt itself remains represented by its hash.
-            if matches!(
-                detection.action,
-                crate::policy::Action::Block | crate::policy::Action::Flag
-            ) {
+            if counts_as_attack(detection) {
                 let result = sqlx::query(
                     "insert into attack_history (principal_id, trace_id, control_id, action, risk_score)
                      values ($1, $2, $3, $4::text::control_action, $5)",
@@ -401,6 +254,17 @@ async fn abandon(tx: sqlx::Transaction<'_, sqlx::Postgres>) -> Option<i64> {
         tracing::error!(%error, "could not roll back the audit transaction");
     }
     None
+}
+
+/// Blocked and flagged content feeds the risk score. Refusals on spend or on
+/// the score itself do not: an exhausted budget is not an attack, and a
+/// history refusal that raised the history would never expire.
+fn counts_as_attack(detection: &Detection) -> bool {
+    matches!(
+        detection.action,
+        crate::policy::Action::Block | crate::policy::Action::Flag
+    ) && !detection.control_id.starts_with(crate::budget::BUDGET_PREFIX)
+        && detection.control_id != crate::risk::RISK_CONTROL
 }
 
 const fn risk_for(severity: crate::policy::Severity) -> f32 {

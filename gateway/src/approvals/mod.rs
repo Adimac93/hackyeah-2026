@@ -23,6 +23,8 @@ use crate::audit::Principal;
 use crate::mcp::federation;
 use crate::policy::Policy;
 
+pub mod http;
+
 /// Prefix of the tools the gateway serves itself. Never requestable, never
 /// a federated server name.
 pub const NATIVE_PREFIX: &str = "control__";
@@ -431,10 +433,7 @@ pub fn validate_target(
     if policy.mcp.server(server).is_none() {
         return Target::Refused(format!("no enabled server named {server}"));
     }
-    if principal.allowed_tools.is_empty()
-        || principal.allowed_tools.iter().any(|t| t == tool)
-        || has_grant
-    {
+    if principal.may_call_tool(tool) || has_grant {
         return Target::AlreadyPermitted;
     }
     Target::Requestable
