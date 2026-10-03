@@ -1,4 +1,5 @@
 use super::*;
+use crate::policy::UnknownPrincipal;
 use axum::http::{HeaderMap, HeaderValue};
 
 fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {

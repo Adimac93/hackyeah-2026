@@ -9,20 +9,24 @@
 
 -- ========================= gateway: identities and limits ====================
 
-insert into principals (slug, display_name, kind, allowed_models, allowed_tools)
+insert into principals (slug, display_name, kind, allowed_models, allowed_tools, api_key_hash, role)
 values
   -- A well-behaved agent with a narrow tool grant. It may read documents but
   -- not enumerate them.
   ('demo-agent', 'Demo agent', 'agent',
    array['llama3.1:8b', 'qwen2.5:7b'],
-   array['docs__read', 'docs__search']),
+   array['docs__read', 'docs__search'],
+   '191b558a694b9c5081fc238f779c811e6de37e92b1ca8471cb29ea96d4393a45', 'security_admin'),
 
   -- Deliberately unrestricted models, deliberately no tools: used to show the
   -- tool grant doing the work rather than the controls.
-  ('red-team', 'Red team harness', 'agent', array[]::text[], array['docs__search'])
+  ('red-team', 'Red team harness', 'agent', array[]::text[], array['docs__search'],
+   'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member')
 on conflict (slug) do update
   set allowed_models = excluded.allowed_models,
-      allowed_tools  = excluded.allowed_tools;
+      allowed_tools  = excluded.allowed_tools,
+      api_key_hash   = excluded.api_key_hash,
+      role           = excluded.role;
 
 insert into budgets (scope, scope_id, window_secs, limit_tokens, hard)
 values

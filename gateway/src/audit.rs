@@ -34,6 +34,10 @@ pub struct Auditor {
 #[derive(Debug, Clone)]
 pub struct Principal {
     pub id: Uuid,
+    pub slug: String,
+    /// Only governs gateway administration. Resource/model/tool permissions
+    /// remain in the centralized policy and principal grants.
+    pub role: String,
     pub allowed_models: Vec<String>,
     /// Empty means "any tool", matching how `models.allowed` already behaves.
     pub allowed_tools: Vec<String>,
@@ -119,13 +123,82 @@ impl Auditor {
         }
     }
 
-    /// Resolve a principal slug. Unknown slugs return `None`; the gateway
-    /// records the event without an owner rather than inventing one, and the
-    /// policy decides whether an unidentified caller may proceed.
+    /// Resolve an enabled principal from an API key. The registry stores only
+    /// the digest, never a bearer secret. HTTP handlers must use this method,
+    /// not a caller-supplied principal slug.
+    pub async fn principal_for_api_key(&self, api_key: &str) -> Option<Principal> {
+        let pool = self.db.as_ref()?;
+        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>)>(
+            "select id, slug, role, allowed_models, allowed_tools
+             from principals where api_key_hash = $1 and enabled",
+        )
+        .bind(sha256_hex(api_key.as_bytes()))
+        .fetch_optional(pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "API-key principal lookup failed");
+            None
+        })?;
+
+        Some(Principal {
+            id: row.0,
+            slug: row.1,
+            role: row.2,
+            allowed_models: row.3,
+            allowed_tools: row.4,
+        })
+    }
+
+    /// Persist a validated admin upload before it becomes active.  The full
+    /// catalog is retained so another gateway instance can load the same
+    /// version after a restart; the dashboard only receives it through its
+    /// existing security-team read policy.
+    pub async fn store_policy_upload(
+        &self,
+        sha256: &str,
+        source: &str,
+        catalog_toml: &str,
+        uploaded_by: Uuid,
+        diff_summary: &str,
+    ) -> Option<i64> {
+        let pool = self.db.as_ref()?;
+        let mut tx = pool.begin().await.ok()?;
+        if sqlx::query("update policy_versions set active = false where active")
+            .execute(&mut *tx)
+            .await
+            .is_err()
+        {
+            return None;
+        }
+        let id = sqlx::query_scalar::<_, i64>(
+            "insert into policy_versions
+               (sha256, source, catalog_toml, diff_summary, uploaded_by, active)
+             values ($1, $2, $3, $4, $5, true)
+             on conflict (sha256) do update set
+               source = excluded.source, catalog_toml = excluded.catalog_toml,
+               diff_summary = excluded.diff_summary, uploaded_by = excluded.uploaded_by,
+               loaded_at = now(), active = true
+             returning id",
+        )
+        .bind(sha256)
+        .bind(source)
+        .bind(catalog_toml)
+        .bind(diff_summary)
+        .bind(uploaded_by)
+        .fetch_one(&mut *tx)
+        .await
+        .ok()?;
+        tx.commit().await.ok()?;
+        self.versions.lock().ok()?.insert(sha256.to_owned(), id);
+        Some(id)
+    }
+
+    /// Lookup used by reporting and tests. It is intentionally not an HTTP
+    /// authentication path: a self-declared identity is never trusted.
     pub async fn principal(&self, slug: &str) -> Option<Principal> {
         let pool = self.db.as_ref()?;
-        let row = sqlx::query_as::<_, (Uuid, Vec<String>, Vec<String>)>(
-            "select id, allowed_models, allowed_tools
+        let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>)>(
+            "select id, slug, role, allowed_models, allowed_tools
              from principals where slug = $1 and enabled",
         )
         .bind(slug)
@@ -138,8 +211,10 @@ impl Auditor {
 
         Some(Principal {
             id: row.0,
-            allowed_models: row.1,
-            allowed_tools: row.2,
+            slug: row.1,
+            role: row.2,
+            allowed_models: row.3,
+            allowed_tools: row.4,
         })
     }
 
@@ -281,6 +356,28 @@ impl Auditor {
             if let Err(error) = result {
                 tracing::error!(%error, control = %detection.control_id, "could not write a detection");
             }
+
+            // Keep only non-sensitive behavioral metadata for repeated-attack
+            // scoring. The prompt itself remains represented by its hash.
+            if matches!(
+                detection.action,
+                crate::policy::Action::Block | crate::policy::Action::Flag
+            ) {
+                let result = sqlx::query(
+                    "insert into attack_history (principal_id, trace_id, control_id, action, risk_score)
+                     values ($1, $2, $3, $4::text::verdict, $5)",
+                )
+                .bind(record.principal_id)
+                .bind(record.trace_id)
+                .bind(&detection.control_id)
+                .bind(action_name(detection.action))
+                .bind(risk_for(detection.severity))
+                .execute(&mut *tx)
+                .await;
+                if let Err(error) = result {
+                    tracing::error!(%error, "could not write attack history");
+                }
+            }
         }
 
         if let Err(error) = tx.commit().await {
@@ -290,6 +387,16 @@ impl Auditor {
 
         *chain = hash;
         Some(event_id)
+    }
+}
+
+const fn risk_for(severity: crate::policy::Severity) -> f32 {
+    match severity {
+        crate::policy::Severity::Info => 0.05,
+        crate::policy::Severity::Low => 0.15,
+        crate::policy::Severity::Medium => 0.35,
+        crate::policy::Severity::High => 0.65,
+        crate::policy::Severity::Critical => 1.0,
     }
 }
 
