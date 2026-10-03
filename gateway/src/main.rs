@@ -11,7 +11,8 @@ use anyhow::Context as _;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderValue, Method},
+    http::{HeaderMap, HeaderValue, Method},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use serde_json::{Value, json};
@@ -177,12 +178,28 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Service index. Anyone who opens the base URL in a browser — a judge, a
-/// teammate wiring up the dashboard — should see what this is and what it
-/// serves, not a blank 404.
-async fn index(State(state): State<AppState>) -> Json<Value> {
+/// Service index. Anyone who opens the base URL — a judge, a teammate wiring up
+/// the dashboard — should see what this is and what it serves, not a blank 404.
+///
+/// A browser gets a page; everything else gets the same facts as JSON. One
+/// endpoint, two audiences, no second route to keep in step.
+async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let wants_html = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+
+    let facts = index_json(&state);
+    if wants_html {
+        Html(index_html(&facts)).into_response()
+    } else {
+        Json(facts).into_response()
+    }
+}
+
+fn index_json(state: &AppState) -> Value {
     let policy = state.policy.load();
-    Json(json!({
+    json!({
         "service": "ai-control-layer",
         "description": "Security gateway for agent, LLM and MCP traffic. \
                         Every interception is policed at one of four hooks and \
@@ -200,7 +217,84 @@ async fn index(State(state): State<AppState>) -> Json<Value> {
             "POST /v1/chat/completions": "OpenAI-compatible. Hooks: prompt_in, response_out",
             "POST /mcp": "MCP 2026-07-28. Hooks: tool_call, tool_result",
         },
-    }))
+    })
+}
+
+/// Rendered from the same values the JSON carries, so the page cannot drift
+/// from the API. Deliberately one file with no assets: a landing page that
+/// needs a CDN to render is a landing page that fails on conference wifi.
+fn index_html(facts: &Value) -> String {
+    let policy = &facts["policy"];
+    let version = policy["version"].as_str().unwrap_or_default();
+    let short = version.get(..12).unwrap_or(version);
+
+    let endpoints = facts["endpoints"]
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .map(|(route, note)| {
+                    format!(
+                        "<tr><td><code>{route}</code></td><td>{}</td></tr>",
+                        note.as_str().unwrap_or_default()
+                    )
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+
+    format!(
+        r#"<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Control Layer</title>
+<style>
+  :root {{ color-scheme: light dark; --fg:#111; --muted:#666; --line:#e2e2e2; --bg:#fff; --accent:#b3261e; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --fg:#e8e8e8; --muted:#9a9a9a; --line:#2c2c2c; --bg:#131313; --accent:#ff6b5e; }}
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,Helvetica,Arial,sans-serif; }}
+  main {{ max-width:46rem; margin:0 auto; padding:3rem 16px 4rem; }}
+  h1 {{ font-size:1.6rem; margin:0 0 .2rem; letter-spacing:-.01em; }}
+  .sub {{ color:var(--muted); margin:0 0 2rem; }}
+  .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(8rem,1fr)); gap:.75rem; margin-bottom:2.5rem; }}
+  .stat {{ border:1px solid var(--line); border-radius:6px; padding:.8rem .9rem; }}
+  .stat b {{ display:block; font-size:1.5rem; font-weight:650; }}
+  .stat span {{ color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }}
+  h2 {{ font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 .6rem; }}
+  table {{ width:100%; border-collapse:collapse; }}
+  td {{ padding:.55rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; }}
+  td:first-child {{ white-space:nowrap; width:1%; padding-right:1.25rem; }}
+  td:last-child {{ color:var(--muted); font-size:.9rem; }}
+  code {{ font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }}
+  footer {{ margin-top:2.5rem; color:var(--muted); font-size:.8rem; }}
+  .chip {{ display:inline-block; border:1px solid var(--line); border-radius:999px; padding:.1rem .5rem; font-size:.75rem; }}
+</style>
+</head><body><main>
+  <h1>AI Control Layer</h1>
+  <p class="sub">{}</p>
+
+  <div class="grid">
+    <div class="stat"><b>{}</b><span>deterministic</span></div>
+    <div class="stat"><b>{}</b><span>semantic</span></div>
+    <div class="stat"><b>{}</b><span>fail mode</span></div>
+    <div class="stat"><b><code>{short}</code></b><span>policy</span></div>
+  </div>
+
+  <h2>Endpoints</h2>
+  <table>{endpoints}</table>
+
+  <footer>
+    v{} · <span class="chip">this page is also JSON — request it with <code>Accept: application/json</code></span>
+  </footer>
+</main></body></html>"#,
+        facts["description"].as_str().unwrap_or_default(),
+        policy["deterministic_controls"],
+        policy["semantic_controls"],
+        policy["fail_mode"].as_str().unwrap_or_default(),
+        facts["version"].as_str().unwrap_or_default(),
+    )
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
