@@ -95,6 +95,13 @@ export interface PolicyVersion {
   loaded_at: string;
   active: boolean;
   note: string | null;
+  /** set for versions imported through the console / `POST /admin/policy` */
+  diff_summary?: string | null;
+}
+
+/** Imported versions keep their TOML in the database and can be downloaded again. */
+export function isUploadedVersion(source: string): boolean {
+  return source.startsWith("uploaded:");
 }
 
 export interface AttackSignature {
@@ -234,4 +241,77 @@ export function shortHash(hash: string | null, length = 12): string {
     return "—";
   }
   return hash.replace(/^\\x/, "").slice(0, length);
+}
+
+/** Gateway's `POST /admin/policy` takes the whole catalog; keep uploads well under the action limit. */
+export const MAX_POLICY_BYTES = 256 * 1024;
+
+/** Cheap checks before sending a catalog to the gateway, which does the real validation. */
+export function checkPolicyUpload(
+  text: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (text.trim() === "") {
+    return { ok: false, error: "The file is empty." };
+  }
+  if (new TextEncoder().encode(text).length > MAX_POLICY_BYTES) {
+    return { ok: false, error: "The catalog is larger than 256 KB." };
+  }
+  if (text.includes("\u0000")) {
+    return { ok: false, error: "That doesn't look like a text TOML file." };
+  }
+  if (!/^\s*schema_version\s*=/m.test(text)) {
+    return {
+      ok: false,
+      error:
+        "Missing `schema_version` — upload a complete control catalog, not a fragment.",
+    };
+  }
+  return { ok: true, value: text };
+}
+
+/** Human-readable outcome of `POST /admin/policy`; never echoes the catalog back. */
+export function describePolicyUpload(
+  status: number,
+  body: unknown,
+): { ok: true; message: string } | { ok: false; error: string } {
+  const record =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>)
+      : {};
+  if (status === 200 && record.accepted === true) {
+    const diff = typeof record.diff === "string" ? record.diff : "";
+    return {
+      ok: true,
+      message:
+        record.changed === false
+          ? "Imported — identical to the active policy, nothing changed."
+          : `Imported and active. ${diff}`.trim(),
+    };
+  }
+  if (status === 422) {
+    const detail =
+      typeof record.message === "string" ? record.message : "invalid catalog";
+    return {
+      ok: false,
+      error: `The gateway rejected the catalog: ${detail}. The active policy is unchanged.`,
+    };
+  }
+  if (status === 401 || status === 403) {
+    return {
+      ok: false,
+      error:
+        "The gateway refused the admin key. Check GATEWAY_ADMIN_KEY (a principal with role security_admin).",
+    };
+  }
+  if (status === 503) {
+    return {
+      ok: false,
+      error:
+        "The gateway can't persist policies right now (no database). The active policy is unchanged.",
+    };
+  }
+  return {
+    ok: false,
+    error: `The gateway answered HTTP ${String(status)}. The active policy is unchanged.`,
+  };
 }
