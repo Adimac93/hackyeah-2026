@@ -23,3 +23,9 @@ tower-http = { version = "0.7.1", features = ["cors"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 uuid = { version = "1.27.0", features = ["serde", "v4"] }
+
+[lints.clippy]
+# Handlers and their helpers return `Result<_, axum::response::Response>`: the
+# Err is the response to send back, and boxing it everywhere only adds noise.
+# Newer clippy flags every one of them, so it is allowed crate-wide.
+result_large_err = "allow"
