@@ -1,0 +1,105 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+import {
+  conversationTitle,
+  getAssistant,
+  parseChatMessage,
+} from "@/lib/assistant";
+import type { ChatTurn, PolicySnippet } from "@/lib/assistant";
+import { requireChatUser } from "@/lib/auth";
+import { formString } from "@/lib/domain";
+import type { FormState } from "@/lib/domain";
+
+/** Send a message (starting a new conversation when `conversationId` is null) and store the assistant's reply. */
+export async function sendChatMessage(
+  conversationId: string | null,
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const session = await requireChatUser();
+  if (session.error) {
+    return { error: session.error };
+  }
+
+  const parsed = parseChatMessage(formString(formData, "message"));
+  if (!parsed.ok) {
+    return { error: parsed.error };
+  }
+
+  const { supabase } = session;
+  let id = conversationId;
+  if (id === null) {
+    const { data, error } = await supabase
+      .from("chat_conversations")
+      .insert({ title: conversationTitle(parsed.value) })
+      .select("id")
+      .single();
+    if (error !== null) {
+      return { error: error.message };
+    }
+    id = data.id as string;
+  }
+
+  // RLS rejects this if the conversation isn't ours
+  const { error: insertError } = await supabase
+    .from("chat_messages")
+    .insert({ conversation_id: id, role: "user", content: parsed.value });
+  if (insertError !== null) {
+    return { error: insertError.message };
+  }
+
+  const [{ data: history }, { data: policies }] = await Promise.all([
+    supabase
+      .from("chat_messages")
+      .select("role, content")
+      .eq("conversation_id", id)
+      .order("id"),
+    supabase
+      .rpc("assistant_policies")
+      .overrideTypes<PolicySnippet[], { merge: false }>(),
+  ]);
+
+  let reply: string;
+  try {
+    reply = await getAssistant()({
+      history: (history ?? []) as ChatTurn[],
+      policies: (policies ?? []) as PolicySnippet[],
+    });
+  } catch {
+    return {
+      error: "The assistant is unavailable right now. Try again in a moment.",
+    };
+  }
+
+  const { error: replyError } = await supabase.from("chat_messages").insert({
+    conversation_id: id,
+    role: "assistant",
+    content: reply.slice(0, 8000),
+  });
+  if (replyError !== null) {
+    return { error: replyError.message };
+  }
+  await supabase
+    .from("chat_conversations")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  revalidatePath("/chat");
+  if (conversationId === null) {
+    redirect(`/chat?c=${id}`);
+  }
+  return {};
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const session = await requireChatUser();
+  if (session.error) {
+    return;
+  }
+  await session.supabase.from("chat_conversations").delete().eq("id", id);
+  revalidatePath("/chat");
+  redirect("/chat");
+}
