@@ -5,15 +5,17 @@
 # teaching the team a new command. The stack plugs in here and nowhere else.
 
 set shell := ["bash", "-uc"]
+# Load `.env` for local-only values such as DATABASE_URL. `.env` itself is gitignored.
+set dotenv-load := true
 
 repo := justfile_directory()
 
 default:
     @just --list --unsorted
 
-# install dependencies
+# install Rust dependencies into the local Cargo cache
 setup:
-    cargo fetch
+    cargo fetch --locked
 
 # the one gate: `just check` green == done. Nothing else counts.
 check: typecheck lint test
@@ -27,21 +29,21 @@ lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
 test:
-    cargo test --workspace
+    cargo test --workspace --all-targets
 
-# run the app locally
+# run the gateway locally; set UPSTREAM_URL/POLICY_PATH in .env to override defaults
 dev:
-    cargo run -p gateway
+    cargo run -p gateway --bin gateway
 
-# apply formatting
+# apply Rust formatting
 fmt:
     cargo fmt
 
-# PDF security report for management, including a chain attestation
+# render the management/security report; requires DATABASE_URL and typst
 report:
     cargo run --quiet -p gateway --bin report
 
-# prove the audit log has not been edited (exit 1 if it has)
+# prove the audit log has not been edited; requires DATABASE_URL
 verify-audit:
     cargo run --quiet -p gateway --bin verify-audit
 
@@ -57,15 +59,17 @@ seed:
 demo:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build -p gateway -p mcp-demo
+    cargo build -p gateway --bin gateway -p mcp-demo --bin mcp-demo
     ./target/debug/mcp-demo &
     demo_pid=$!
     trap 'kill $demo_pid 2>/dev/null || true' EXIT
     ./target/debug/gateway
 
-# ship to the demo URL. Wire this up on day one, not at hour 23.
-deploy:
-    @echo "deploy: TODO — docker build + push. Do this before building features."
+# ship the gateway to Cloud Run. See docs/DEPLOY.md for first-time setup.
+deploy region="europe-west1" service="backend": check
+    gcloud builds submit \
+      --config cloudbuild.yaml \
+      --substitutions=_REGION={{region}},_SERVICE={{service}}
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:

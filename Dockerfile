@@ -13,15 +13,31 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release -p gateway
+# --locked: build the dependency versions in Cargo.lock, not whatever
+# resolves today. A deploy that differs from what was tested is not a deploy.
+RUN cargo build --release --locked -p gateway
 
-FROM debian:bookworm-slim AS runtime
+# The runtime glibc must be at least the builder's. cargo-chef:latest-rust-1
+# tracks the official rust image, which is on Debian trixie (glibc 2.38); a
+# bookworm runtime (2.36) fails at the dynamic linker with
+#   version `GLIBC_2.38' not found (required by gateway)
+# which Cloud Run reports only as "container failed to listen on PORT".
+# Keep these two Debian releases in lockstep.
+FROM debian:trixie-slim AS runtime
 # rustls verifies upstream TLS against the system roots
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10001 gateway
+WORKDIR /app
 COPY --from=builder /app/target/release/gateway /usr/local/bin/gateway
+
+# The control catalog is not optional: the gateway refuses to start without a
+# policy, because a control layer that runs with no controls is worse than one
+# that does not run at all. POLICY_PATH overrides the location.
+COPY policy/ /app/policy/
+
 USER gateway
+# Cloud Run and friends inject PORT; this is only the documented default.
 EXPOSE 8080
 CMD ["gateway"]
