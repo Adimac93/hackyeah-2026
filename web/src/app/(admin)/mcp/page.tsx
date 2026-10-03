@@ -128,8 +128,12 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
   }));
 
   const calls = tools.reduce((n, t) => n + t.calls, 0);
-  const blocked = summaryEvents.filter((e) => e.verdict === "block").length;
-  const redacted = summaryEvents.filter((e) => e.verdict === "redact").length;
+  const blocked = summaryEvents.filter(
+    (event) => event.verdict === "block",
+  ).length;
+  const redacted = summaryEvents.filter(
+    (event) => event.verdict === "redact",
+  ).length;
   const pending = requests.filter((r) => r.shown === "pending").length;
   const activeGrants = requests.filter((r) => r.shown === "approved").length;
 
@@ -288,7 +292,7 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
                             until {fmtDateTime(r.expires_at)}
                           </p>
                         ) : null}
-                        {r.note ? (
+                        {r.note !== null && r.note !== "" ? (
                           <p className="text-zinc-500">“{r.note}”</p>
                         ) : null}
                       </>
