@@ -12,13 +12,6 @@ Format: `- [ ] <name> — <what> (@who)`
 ## Next
 
 - [ ] migrate-end-users — `just migrate` for 20261004090000_end_users_activity_status, `just seed` (adds `console-chat`), then `supabase db advisors` (@)
-- [ ] web-on-behalf — chat sends `X-On-Behalf-Of: <user email>` instead of `x-principal`, with `GATEWAY_API_KEY=console-chat-dev-key`, so budgets/risk/activity are per user (@)
-- [ ] web-refusal-stage — on a refused prompt show "doesn't meet deterministic requirements" when `error.stage == "deterministic"` (@)
-- [ ] web-live-activity — activity reads the `activity` view, filters by `status` (secure/flagged/redacted/blocked), live via Realtime inserts on `events`; drop the incidents panel (@)
-- [ ] web-risk-tab — risk tab with user search on `GET /admin/risk?q=` (@)
-- [ ] web-controls-policies — one page: catalog TOML in a text area → `POST /admin/policy` (user's access token); controls table from `GET /policy` (resources) + per-user budgets (@)
-- [ ] web-gateway-auth — web chat still sends `x-principal`, which the gateway no longer trusts, so "Gateway (protected)" chat gets 401; send `Authorization: Bearer $GATEWAY_API_KEY` from the server (@)
-- [ ] web-policy-upload — console policy page: upload catalog TOML (+ optional signatures) to `POST /admin/policy` with the user's Supabase access token, show the returned diff and `/admin/policy/versions` (@)
 - [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)
 - [ ] web-helper — show `error.helper` (violated policy + suggestion) on a blocked chat prompt, resubmit only on click (@)
 - [ ] web-results — fetch `GET /v1/results/{id}` for `resources__query` acknowledgements and render the rows (@)
@@ -32,6 +25,7 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Done
 
+- [x] console-specs — per-user budgets/risk/activity (X-On-Behalf-Of), deterministic refusal notice, live activity with status filter, user risk tab, merged Controls & policies with TOML editor, incidents and company-policy pages dropped
 - [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API
 - [x] principal-models — enforce per-identity/role model allow list on top of the global one
 - [x] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count

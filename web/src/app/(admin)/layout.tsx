@@ -11,14 +11,8 @@ import packageJson from "../../../package.json";
 import { signOut } from "../login/actions";
 
 export default async function AdminLayout({ children }: LayoutProps<"/">) {
-  const { supabase, member } = await requireAnyMember();
+  const { member } = await requireAnyMember();
   const hasConsole = canAccessConsole(member.role);
-  const { count } = hasConsole
-    ? await supabase
-        .from("incidents")
-        .select("id", { count: "exact", head: true })
-        .neq("status", "resolved")
-    : { count: 0 };
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
@@ -29,7 +23,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
           </div>
           <span className="font-semibold text-zinc-50">SecOps Console</span>
         </div>
-        <Nav openIncidents={count ?? 0} consoleAccess={hasConsole} />
+        <Nav consoleAccess={hasConsole} />
         <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-2 pt-3 md:mt-auto md:block md:space-y-3 md:pt-4">
           <div className="min-w-0">
             <p className="truncate text-sm text-zinc-200">

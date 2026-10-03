@@ -35,8 +35,8 @@ void test("budgetUsed is null without a token cap", () => {
 });
 
 void test("liveError explains auth failures distinctly", () => {
-  assert.match(liveError(401), /rejected GATEWAY_ADMIN_KEY/);
-  assert.match(liveError(403), /security_admin/);
+  assert.match(liveError(401), /rejected your session/);
+  assert.match(liveError(403), /team role/);
   assert.match(liveError(500), /HTTP 500/);
 });
 

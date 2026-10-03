@@ -28,6 +28,7 @@ export type Verdict = (typeof VERDICTS)[number];
 export type ControlAction = (typeof CONTROL_ACTIONS)[number];
 export type Hook = (typeof HOOKS)[number];
 export type Channel = (typeof CHANNELS)[number];
+export type SecurityStatus = (typeof SECURITY_STATUSES)[number];
 export type ControlSeverity = (typeof CONTROL_SEVERITIES)[number];
 
 /** Per-stage microseconds, e.g. {"deterministic_us": 180, "semantic_us": 41200, "upstream_us": 910}. */
@@ -63,6 +64,8 @@ export interface GatewayEvent {
   hook: Hook;
   channel: Channel;
   principal_id: string | null;
+  /** the user the request is attributed to: delegated end user or principal slug */
+  end_user: string | null;
   model: string | null;
   tool: string | null;
   verdict: Verdict;
@@ -75,12 +78,15 @@ export interface GatewayEvent {
 
 export interface Budget {
   id: number;
-  scope: "global" | "principal" | "model";
+  /** `user`: a delegated end user, or a principal acting for no one under its slug */
+  scope: "global" | "user" | "model";
   scope_id: string | null;
   window_secs: number;
   /** Postgres numeric: may arrive as a string */
   limit_usd: number | string | null;
   limit_tokens: number | null;
+  limit_requests: number | null;
+  limit_concurrency: number | null;
   hard: boolean;
   enabled: boolean;
   created_at: string;
@@ -89,6 +95,8 @@ export interface Budget {
 export interface UsageRow {
   ts: string;
   principal_id: string | null;
+  /** the user the spend is attributed to */
+  end_user: string | null;
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
@@ -104,11 +112,6 @@ export interface PolicyVersion {
   note: string | null;
   /** set for versions imported through the console / `POST /admin/policy` */
   diff_summary?: string | null;
-}
-
-/** Imported versions keep their TOML in the database and can be downloaded again. */
-export function isUploadedVersion(source: string): boolean {
-  return source.startsWith("uploaded:");
 }
 
 export interface AttackSignature {
@@ -183,22 +186,16 @@ export interface BudgetSpend {
 export function budgetSpend(
   budget: Budget,
   usage: UsageRow[],
-  principals: Pick<Principal, "id" | "slug">[],
   now = Date.now(),
 ): BudgetSpend {
   const since = now - budget.window_secs * 1000;
-  const principalId =
-    budget.scope === "principal"
-      ? (principals.find((p) => p.slug === budget.scope_id)?.id ?? null)
-      : null;
-
   let tokens = 0;
   let usd = 0;
   for (const u of usage) {
     if (new Date(u.ts).getTime() < since) {
       continue;
     }
-    if (budget.scope === "principal" && u.principal_id !== principalId) {
+    if (budget.scope === "user" && u.end_user !== budget.scope_id) {
       continue;
     }
     if (budget.scope === "model" && u.model !== budget.scope_id) {
@@ -276,49 +273,21 @@ export function checkPolicyUpload(
   return { ok: true, value: text };
 }
 
-/** Human-readable outcome of `POST /admin/policy`; never echoes the catalog back. */
-export function describePolicyUpload(
-  status: number,
-  body: unknown,
-): { ok: true; message: string } | { ok: false; error: string } {
-  const record =
-    typeof body === "object" && body !== null
-      ? (body as Record<string, unknown>)
-      : {};
-  if (status === 200 && record.accepted === true) {
-    const diff = typeof record.diff === "string" ? record.diff : "";
-    return {
-      ok: true,
-      message:
-        record.changed === false
-          ? "Imported — identical to the active policy, nothing changed."
-          : `Imported and active. ${diff}`.trim(),
-    };
+/** What `POST /admin/policy` answers when it accepts a catalog. */
+export interface PolicySaveResult {
+  accepted: boolean;
+  changed: boolean;
+  version: string;
+  version_id: number;
+  /** control-level diff: `+ added`, `- removed or disabled`, `~ changed` */
+  diff: string[];
+}
+
+/** Human-readable outcome of an accepted save; never echoes the catalog back. */
+export function describePolicySave(result: PolicySaveResult): string {
+  if (!result.changed) {
+    return "Saved — identical to the active policy, nothing changed.";
   }
-  if (status === 422) {
-    const detail =
-      typeof record.message === "string" ? record.message : "invalid catalog";
-    return {
-      ok: false,
-      error: `The gateway rejected the catalog: ${detail}. The active policy is unchanged.`,
-    };
-  }
-  if (status === 401 || status === 403) {
-    return {
-      ok: false,
-      error:
-        "The gateway refused the admin key. Check GATEWAY_ADMIN_KEY (a principal with role security_admin).",
-    };
-  }
-  if (status === 503) {
-    return {
-      ok: false,
-      error:
-        "The gateway can't persist policies right now (no database). The active policy is unchanged.",
-    };
-  }
-  return {
-    ok: false,
-    error: `The gateway answered HTTP ${String(status)}. The active policy is unchanged.`,
-  };
+  const changes = result.diff.length === 0 ? "" : ` ${result.diff.join("; ")}`;
+  return `Saved and active as version #${String(result.version_id)}.${changes}`;
 }

@@ -5,7 +5,7 @@ import {
   ControlSeverityBadge,
   EmptyRow,
   PageHeader,
-  VerdictBadge,
+  SecurityStatusBadge,
   tableClass,
   tdClass,
   thClass,
@@ -24,6 +24,7 @@ import type {
   Detection,
   GatewayEvent,
   Principal,
+  SecurityStatus,
 } from "@/lib/gateway";
 import { supabaseEnv } from "@/lib/supabase/env";
 
@@ -39,6 +40,7 @@ const SEVERITY_RANK: Record<ControlSeverity, number> = {
 };
 
 type EventRow = GatewayEvent & {
+  status: SecurityStatus;
   principals: Pick<Principal, "slug" | "display_name"> | null;
   detections: Pick<Detection, "id" | "severity" | "control_id">[];
 };
@@ -147,9 +149,9 @@ export default async function ActivityPage({
         <table className={tableClass}>
           <thead className="border-b border-zinc-800">
             <tr>
-              <th className={thClass}>Verdict</th>
+              <th className={thClass}>Status</th>
               <th className={thClass}>Request</th>
-              <th className={`${thClass} hidden md:table-cell`}>Principal</th>
+              <th className={`${thClass} hidden md:table-cell`}>User</th>
               <th className={thClass}>Detections</th>
               <th className={`${thClass} hidden text-right sm:table-cell`}>
                 Overhead
@@ -175,7 +177,7 @@ export default async function ActivityPage({
               return (
                 <tr key={event.id} className="hover:bg-zinc-800/40">
                   <td className={tdClass}>
-                    <VerdictBadge verdict={event.verdict} />
+                    <SecurityStatusBadge status={event.status} />
                   </td>
                   <td className={tdClass}>
                     <Link
@@ -192,9 +194,12 @@ export default async function ActivityPage({
                   <td
                     className={`${tdClass} hidden text-zinc-400 md:table-cell`}
                   >
-                    {event.principals?.display_name ?? (
+                    {event.end_user ?? (
                       <span className="text-zinc-600">Unknown</span>
                     )}
+                    <p className="text-xs text-zinc-600">
+                      via {event.principals?.display_name ?? "unregistered"}
+                    </p>
                   </td>
                   <td className={tdClass}>
                     {worst === null ? (
