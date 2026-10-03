@@ -21,6 +21,6 @@ sqlx = { version = "0.8", default-features = false, features = [
     "json",
     "macros",
 ] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

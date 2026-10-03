@@ -31,6 +31,9 @@ steps:
       - --region=$_REGION
       - --platform=managed
       - --port=8080
+      # Pending access approvals live in process memory: the agent's blocked
+      # tools/call and the console's decision must reach the same instance.
+      - --max-instances=1
       - --set-env-vars=ENVIRONMENT=prod
       # DATABASE_URL holds a password, so it comes from Secret Manager rather
       # than from this file or a --set-env-vars flag that lands in build logs.
