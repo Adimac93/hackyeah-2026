@@ -17,7 +17,9 @@ rather than invent.
   flags the traffic (`escalate_when`), so clean requests pay nothing. In `dev` it is a
   deterministic mock (`OLLAMA_URL=mock`, scores from each control's `mock_keywords`) and
   chat goes to a mock upstream (`UPSTREAM_URL=mock`), so no Ollama is needed. In `prod`
-  both point at Ollama on a Cloud Run GPU service; prod refuses to start with a mock.
+  the judge runs on a Vertex AI endpoint reachable only inside the VPC
+  (`infra/`, `SEMANTIC_BACKEND=vertex`); it bills ~$25/day while deployed — tear it down
+  after the demo (`infra/README.md`). Prod refuses to start with a mock.
   With no reachable detector the controls fail closed and suspicious traffic is refused.
   A Presidio sidecar for contextual PII is still unbuilt; that control ships disabled.
 

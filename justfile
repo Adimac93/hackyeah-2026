@@ -19,6 +19,8 @@ default:
 # install dependencies for both apps
 setup:
     cargo fetch --locked
+    command -v terraform >/dev/null || brew install hashicorp/tap/terraform
+    terraform -chdir=infra init -input=false
     cd web && pnpm install --frozen-lockfile
 
 # the one gate: `just check` green == done. Nothing else counts.
@@ -112,6 +114,11 @@ deploy region="europe-west1" service="backend": check
     gcloud builds submit \
       --config cloudbuild.yaml \
       --substitutions=_REGION={{region}},_SERVICE={{service}}
+
+# provision/update the Vertex AI judge infrastructure (bills ~$25/day while up).
+# Shows the plan and waits for a yes. See infra/README.md.
+infra:
+    terraform -chdir=infra apply
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:

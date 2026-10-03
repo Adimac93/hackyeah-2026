@@ -19,7 +19,8 @@ Target length: **3 minutes.**
 ## What it depends on
 
 - Seeded data: `just seed` — _(describe the accounts/records the script relies on)_
-- Services that must be up: _(TBD)_
+- Services that must be up: the Vertex judge (`just deploy`, then the cert capture in
+  `infra/README.md`). Without it semantic controls fail closed. _(TBD: the rest)_
 - Anything manual: _(TBD — ideally nothing)_
 
 ## Fallback

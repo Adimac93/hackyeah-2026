@@ -22,3 +22,9 @@ target/
 .venv/
 __pycache__/
 *.pyc
+
+# terraform: providers and state are not source; the lock file is
+infra/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
