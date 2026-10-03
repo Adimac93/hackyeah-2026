@@ -13,11 +13,13 @@ rather than invent.
 - **Storage** — Supabase Postgres, project ref `wkxhfzjknxdyfwhnwogn`. Schema lives in
   `supabase/migrations/`; the gateway reaches it through `sqlx` with `DATABASE_URL`, the
   dashboard through the Data API.
-- **Semantic tier** — an `llm_judge` detector calling a local Ollama model. Runs only
-  when a deterministic control flags the traffic (`escalate_when`), so clean requests pay
-  nothing. **Ollama must be running for the demo**: with no detector the controls fail
-  closed and suspicious traffic is refused. A Presidio sidecar for contextual PII is still
-  unbuilt; that control ships disabled.
+- **Semantic tier** — an `llm_judge` detector. Runs only when a deterministic control
+  flags the traffic (`escalate_when`), so clean requests pay nothing. In `dev` it is a
+  deterministic mock (`OLLAMA_URL=mock`, scores from each control's `mock_keywords`) and
+  chat goes to a mock upstream (`UPSTREAM_URL=mock`), so no Ollama is needed. In `prod`
+  both point at Ollama on a Cloud Run GPU service; prod refuses to start with a mock.
+  With no reachable detector the controls fail closed and suspicious traffic is refused.
+  A Presidio sidecar for contextual PII is still unbuilt; that control ships disabled.
 
 ### Database rules
 
