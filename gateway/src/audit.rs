@@ -355,6 +355,7 @@ impl Auditor {
 
             if let Err(error) = result {
                 tracing::error!(%error, control = %detection.control_id, "could not write a detection");
+                return abandon(tx).await;
             }
 
             // Keep only non-sensitive behavioral metadata for repeated-attack
@@ -365,7 +366,7 @@ impl Auditor {
             ) {
                 let result = sqlx::query(
                     "insert into attack_history (principal_id, trace_id, control_id, action, risk_score)
-                     values ($1, $2, $3, $4::text::verdict, $5)",
+                     values ($1, $2, $3, $4::text::control_action, $5)",
                 )
                 .bind(record.principal_id)
                 .bind(record.trace_id)
@@ -376,6 +377,7 @@ impl Auditor {
                 .await;
                 if let Err(error) = result {
                     tracing::error!(%error, "could not write attack history");
+                    return abandon(tx).await;
                 }
             }
         }
@@ -388,6 +390,17 @@ impl Auditor {
         *chain = hash;
         Some(event_id)
     }
+}
+
+/// A failed statement aborts a Postgres transaction, and `COMMIT` on an
+/// aborted transaction is a silent `ROLLBACK` that the driver reports as
+/// success. Committing anyway would advance the in-memory chain past an event
+/// that was never stored — a permanent gap. Roll back and leave the chain alone.
+async fn abandon(tx: sqlx::Transaction<'_, sqlx::Postgres>) -> Option<i64> {
+    if let Err(error) = tx.rollback().await {
+        tracing::error!(%error, "could not roll back the audit transaction");
+    }
+    None
 }
 
 const fn risk_for(severity: crate::policy::Severity) -> f32 {

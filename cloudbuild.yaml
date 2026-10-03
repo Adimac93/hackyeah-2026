@@ -31,6 +31,9 @@ steps:
       - --region=$_REGION
       - --platform=managed
       - --port=8080
+      # Pending access approvals live in process memory: the agent's blocked
+      # tools/call and the console's decision must reach the same instance.
+      - --max-instances=1
       # --update-*, not --set-*: --set replaces every variable on the service and
       # would wipe UPSTREAM_URL/OLLAMA_URL/CORS_ORIGINS, so prod refuses to start.
       - --update-env-vars=ENVIRONMENT=prod

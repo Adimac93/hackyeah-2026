@@ -10,9 +10,14 @@
 //! deterministic control has flagged the traffic as suspicious.
 //!
 //! Every detector here is self-hosted. task.md §7 provides no paid API
-//! subscriptions, so the judge is our own Ollama: on the same machine in
-//! development, on a VPC-internal Vertex AI endpoint in production
-//! (`SEMANTIC_BACKEND=vertex`, see `infra/`).
+//! subscriptions, so the judge is our own Ollama at `OLLAMA_URL`.
+//!
+//! Dormant: `SEMANTIC_BACKEND=vertex` (see `LlmJudge::vertex`) targets Ollama
+//! behind a VPC-internal Vertex AI Private Service Connect endpoint. The
+//! Terraform that provisioned it (`infra/`) was removed and nothing is deployed,
+//! so this path is unused. It is kept for further development: to revive it,
+//! restore `infra/` from commit 5c98a71 and set `VERTEX_JUDGE_URL`,
+//! `VERTEX_JUDGE_IP` and `VERTEX_JUDGE_CA` as its README described.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -168,6 +173,8 @@ impl LlmJudge {
     /// The judge behind a Vertex AI Private Service Connect endpoint. The
     /// endpoint serves a self-signed certificate, which is pinned as the only
     /// trusted root rather than turning verification off.
+    ///
+    /// Currently unused: its infrastructure was removed. See the module docs.
     fn vertex(metadata: reqwest::Client, model: String) -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
         let url = var("VERTEX_JUDGE_URL")?;

@@ -21,7 +21,12 @@ values
   -- Deliberately unrestricted models, deliberately no tools: used to show the
   -- tool grant doing the work rather than the controls.
   ('red-team', 'Red team harness', 'agent', array[]::text[], array['docs__search'],
-   'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member')
+   'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member'),
+
+  -- The SecOps console's server-side identity (GATEWAY_ADMIN_KEY): streams and
+  -- decides access requests. No models, no tools — it administers, never acts.
+  ('secops-console', 'SecOps console', 'app', array[]::text[], array['control__none'],
+   '943d28b8ad70296dff2b65fb4a17aaca0dffe92482b233100e4698390c1d89a0', 'security_admin')
 on conflict (slug) do update
   set allowed_models = excluded.allowed_models,
       allowed_tools  = excluded.allowed_tools,

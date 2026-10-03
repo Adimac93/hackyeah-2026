@@ -3,23 +3,29 @@
 //! Process bootstrap: environment, logging, database, policy and its watcher,
 //! then the routes. Enforcement lives in the library crate.
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::{
     Json, Router,
-    extract::State,
-    http::{HeaderMap, HeaderValue, Method},
-    response::{Html, IntoResponse, Response},
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
+    response::{
+        Html, IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
+use futures_util::{Stream, StreamExt as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt};
 
+use gateway::approvals::{ApprovalEvent, Approvals, DecideError, Decision};
 use gateway::audit::Auditor;
 use gateway::mcp::{self, McpState};
 use gateway::policy::{self, Policy, PolicyHandle};
@@ -37,11 +43,21 @@ struct AppState {
     db: Option<sqlx::PgPool>,
     policy: PolicyHandle,
     auditor: Arc<Auditor>,
+    approvals: Arc<Approvals>,
 }
 
 #[derive(Deserialize)]
 struct PolicyUpload {
     catalog_toml: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecisionBody {
+    decision: String,
+    ttl_minutes: Option<u32>,
+    note: Option<String>,
+    decided_by: String,
 }
 
 #[tokio::main]
@@ -176,11 +192,16 @@ async fn main() -> anyhow::Result<()> {
         detectors: Arc::clone(&detectors),
     };
 
+    // Pending approvals live in this process: run one instance (docs/DEPLOY.md).
+    let approvals = Arc::new(Approvals::new(db.clone()));
+    approvals.boot().await;
+
     let mcp_state = McpState {
         policy: policy.clone(),
         auditor: Arc::clone(&auditor),
         http,
         detectors,
+        approvals: Arc::clone(&approvals),
     };
 
     let app = Router::new()
@@ -191,10 +212,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/policy", get(active_policy))
         .route("/metrics", get(metrics))
         .route("/admin/policy", post(upload_policy))
+        .route("/admin/approvals/stream", get(approval_stream))
+        .route("/admin/approvals/{id}", post(decide_approval))
         .with_state(AppState {
             db,
             policy,
             auditor,
+            approvals,
         })
         .merge(
             Router::new()
@@ -261,6 +285,8 @@ fn index_json(state: &AppState) -> Value {
             "GET  /policy": "the catalog currently being enforced",
             "POST /v1/chat/completions": "OpenAI-compatible. Hooks: prompt_in, response_out",
             "POST /mcp": "MCP 2026-07-28. Hooks: tool_call, tool_result",
+            "GET  /admin/approvals/stream": "SSE of pending access requests (security_admin)",
+            "POST /admin/approvals/{id}": "approve or deny an access request (security_admin)",
         },
     })
 }
@@ -429,11 +455,43 @@ fn openapi_document() -> Value {
                         "503": {"description": "Policy database unavailable; policy remains unchanged"}
                     }
                 }
+            },
+            "/admin/approvals/stream": {
+                "get": {
+                    "summary": "Stream access requests awaiting a human decision",
+                    "description": "Server-sent events. Pending requests are replayed on connect, then `request`, `decided` and `expired` events follow; each event's data is JSON with a `type` field.",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {"description": "text/event-stream"},
+                        "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+                        "403": {"$ref": "#/components/responses/AdminRequired"}
+                    }
+                }
+            },
+            "/admin/approvals/{id}": {
+                "post": {
+                    "summary": "Approve or deny a pending access request",
+                    "description": "Approval grants the requesting principal the tool for `ttl_minutes` (1-60, default 15). The waiting agent receives the answer in its blocked tool call.",
+                    "security": [{"bearerAuth": []}],
+                    "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Decision"}}}
+                    },
+                    "responses": {
+                        "200": {"description": "Decision recorded and delivered"},
+                        "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+                        "403": {"$ref": "#/components/responses/AdminRequired"},
+                        "409": {"description": "Request is no longer pending"},
+                        "422": {"description": "decision must be approve or deny"},
+                        "503": {"description": "Decision could not be persisted; the agent was told denied"}
+                    }
+                }
             }
         },
         "components": {
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "API key", "description": "Per-principal gateway API key; only its SHA-256 hash is stored."}},
-            "schemas": {"PolicyUpload": {"type": "object", "additionalProperties": false, "required": ["catalog_toml"], "properties": {"catalog_toml": {"type": "string", "description": "Complete TOML control catalog", "example": "schema_version = 1\\n[defaults]\\non_detect = \\\"block\\\"\\nfail_mode = \\\"closed\\\""}}}},
+            "schemas": {"Decision": {"type": "object", "additionalProperties": false, "required": ["decision", "decided_by"], "properties": {"decision": {"type": "string", "enum": ["approve", "deny"]}, "ttl_minutes": {"type": "integer", "minimum": 1, "maximum": 60}, "note": {"type": "string"}, "decided_by": {"type": "string", "description": "Console user who decided"}}}, "PolicyUpload": {"type": "object", "additionalProperties": false, "required": ["catalog_toml"], "properties": {"catalog_toml": {"type": "string", "description": "Complete TOML control catalog", "example": "schema_version = 1\\n[defaults]\\non_detect = \\\"block\\\"\\nfail_mode = \\\"closed\\\""}}}},
             "responses": {
                 "AuthenticationRequired": {"description": "Missing, malformed, invalid, or disabled Bearer API key"},
                 "AdminRequired": {"description": "Authenticated principal lacks the security_admin role"}
@@ -556,6 +614,86 @@ async fn upload_policy(
     Json(json!({ "accepted": true, "changed": changed, "diff": diff })).into_response()
 }
 
+/// The console's live feed. Subscribe before the snapshot so nothing falls in
+/// between; the console dedupes by id.
+async fn approval_stream(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(refusal) = security_admin(&state, &headers).await {
+        return refusal;
+    }
+    let live = state.approvals.subscribe();
+    let backlog = state
+        .approvals
+        .snapshot()
+        .into_iter()
+        .map(ApprovalEvent::Request);
+
+    let live = futures_util::stream::unfold(live, |mut receiver| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(event) => return Some((event, receiver)),
+                // A slow console missed some events; a reconnect replays the
+                // pending set, so carry on with what is current.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    let events: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> = Box::pin(
+        futures_util::stream::iter(backlog)
+            .chain(live)
+            .map(|event| {
+                Ok(Event::default()
+                    .json_data(&event)
+                    .unwrap_or_else(|_| Event::default().comment("unserialisable event")))
+            }),
+    );
+
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+async fn decide_approval(
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<DecisionBody>,
+) -> Response {
+    if let Err(refusal) = security_admin(&state, &headers).await {
+        return refusal;
+    }
+    let approve = match body.decision.as_str() {
+        "approve" => true,
+        "deny" => false,
+        _ => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "decision must be approve or deny" })),
+            )
+                .into_response();
+        }
+    };
+    let decision = Decision {
+        approve,
+        ttl_minutes: gateway::approvals::clamp_ttl(body.ttl_minutes),
+        note: body.note.filter(|n| !n.trim().is_empty()),
+        decided_by: body.decided_by,
+    };
+    match state.approvals.decide(id, decision).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error @ DecideError::NotPending) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+        Err(error @ DecideError::Unavailable) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn security_admin(
     state: &AppState,
     headers: &HeaderMap,
@@ -654,6 +792,8 @@ mod tests {
             ("/policy", "get"),
             ("/metrics", "get"),
             ("/admin/policy", "post"),
+            ("/admin/approvals/stream", "get"),
+            ("/admin/approvals/{id}", "post"),
         ] {
             assert!(
                 document["paths"][path][method]["security"].is_array(),

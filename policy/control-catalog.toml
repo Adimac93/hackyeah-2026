@@ -181,7 +181,9 @@ pattern = '(?i)\b(pickle\.loads?|torch\.load|yaml\.load\s*\(|marshal\.loads)\b'
 [[controls.deterministic]]
 id = "injection.instruction-override"
 # Cheap first pass. The semantic tier below catches what this misses.
-hooks = ["prompt_in", "tool_result"]
+# tool_call covers model-written arguments a human will read, such as the
+# reason in control__request_access shown in the console's approval popup.
+hooks = ["prompt_in", "tool_call", "tool_result"]
 severity = "medium"
 action = "flag"
 pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
@@ -200,7 +202,7 @@ pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(in
 
 [[controls.semantic]]
 id = "injection.prompt-guard"
-hooks = ["prompt_in", "tool_result"]
+hooks = ["prompt_in", "tool_call", "tool_result"]
 severity = "high"
 action = "block"
 detector = "llm_judge"
