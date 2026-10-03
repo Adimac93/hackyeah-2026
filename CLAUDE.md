@@ -13,8 +13,11 @@ rather than invent.
 - **Storage** — Supabase Postgres, project ref `wkxhfzjknxdyfwhnwogn`. Schema lives in
   `supabase/migrations/`; the gateway reaches it through `sqlx` with `DATABASE_URL`, the
   dashboard through the Data API.
-- **Semantic tier** — still open. Candidates in `docs/prior-art.md`; it needs a Python
-  process (Presidio, Prompt Guard 2) or an Ollama call. Decide before building §4.2.
+- **Semantic tier** — an `llm_judge` detector calling a local Ollama model. Runs only
+  when a deterministic control flags the traffic (`escalate_when`), so clean requests pay
+  nothing. **Ollama must be running for the demo**: with no detector the controls fail
+  closed and suspicious traffic is refused. A Presidio sidecar for contextual PII is still
+  unbuilt; that control ships disabled.
 
 ### Database rules
 

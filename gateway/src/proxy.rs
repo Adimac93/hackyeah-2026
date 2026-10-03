@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
 use crate::policy::{Budget, Hook, Policy, PolicyHandle};
+use crate::semantic::Registry;
 
 /// Everything a request needs. Cloned per request, so each field is cheap.
 #[derive(Clone)]
@@ -25,6 +26,7 @@ pub struct ProxyState {
     pub http: reqwest::Client,
     pub upstream: String,
     pub policy_version_id: Option<i64>,
+    pub detectors: std::sync::Arc<Registry>,
 }
 
 pub async fn chat_completions(
@@ -70,7 +72,8 @@ pub async fn chat_completions(
 
     // --- hook 1: prompt_in ------------------------------------------------
     let prompt = extract_prompt(&body);
-    let inbound = engine::evaluate(&policy, Hook::PromptIn, &prompt);
+    let mut inbound = engine::evaluate(&policy, Hook::PromptIn, &prompt);
+    engine::escalate(&policy, Hook::PromptIn, &mut inbound, &state.detectors).await;
 
     let event_id = state
         .auditor
@@ -142,7 +145,8 @@ pub async fn chat_completions(
 
     // --- hook 2: response_out --------------------------------------------
     let answer = extract_answer(&completion);
-    let outbound = engine::evaluate(&policy, Hook::ResponseOut, &answer);
+    let mut outbound = engine::evaluate(&policy, Hook::ResponseOut, &answer);
+    engine::escalate(&policy, Hook::ResponseOut, &mut outbound, &state.detectors).await;
 
     let mut outbound_record = audit::record_for(
         trace_id,
@@ -155,6 +159,7 @@ pub async fn chat_completions(
     );
     outbound_record.latency = json!({
         "deterministic_us": outbound.deterministic_us,
+        "semantic_us": outbound.semantic_us,
         "upstream_us": upstream_us,
     });
     let outbound_event = state.auditor.record(outbound_record).await;
@@ -205,6 +210,7 @@ fn summarise(evaluation: &engine::Evaluation) -> Value {
         "verdict": evaluation.verdict,
         "controls_fired": evaluation.detections.iter().map(|d| &d.control_id).collect::<Vec<_>>(),
         "deterministic_us": evaluation.deterministic_us,
+        "semantic_us": evaluation.semantic_us,
     })
 }
 

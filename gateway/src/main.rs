@@ -21,6 +21,7 @@ use gateway::audit::Auditor;
 use gateway::mcp::{self, McpState};
 use gateway::policy::{self, Policy, PolicyHandle};
 use gateway::proxy::{self, ProxyState};
+use gateway::semantic::Registry;
 
 const DEFAULT_POLICY_PATH: &str = "policy/control-catalog.toml";
 
@@ -94,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%upstream, "forwarding model traffic upstream");
 
     let http = reqwest::Client::new();
+    let detectors = Arc::new(Registry::from_env(http.clone()));
 
     let proxy_state = ProxyState {
         policy: policy.clone(),
@@ -101,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
         http: http.clone(),
         upstream,
         policy_version_id,
+        detectors: Arc::clone(&detectors),
     };
 
     let mcp_state = McpState {
@@ -108,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
         auditor,
         http,
         policy_version_id,
+        detectors,
     };
 
     let app = Router::new()

@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::policy::{Action, DeterministicControl, Hook, Policy, Severity};
+use crate::policy::{Action, DeterministicControl, FailMode, Hook, Policy, Severity};
+use crate::semantic::Registry;
 
 /// What the caller observes. Distinct from [`Action`], which is what a single
 /// control asks for — a control may `flag`, but no request is ever "flagged".
@@ -71,6 +72,9 @@ pub struct Evaluation {
     /// Did tier 1 see anything worth escalating to tier 2?
     pub suspicious: bool,
     pub deterministic_us: u64,
+    /// Zero when tier 2 did not run, which is the common case and the whole
+    /// point of the escalation rule.
+    pub semantic_us: u64,
 }
 
 impl Evaluation {
@@ -135,6 +139,91 @@ pub fn evaluate(policy: &Policy, hook: Hook, text: &str) -> Evaluation {
             reason = "a control pass that runs for 500_000 years is not our failure mode"
         )]
         deterministic_us: started.elapsed().as_micros() as u64,
+        semantic_us: 0,
+    }
+}
+
+/// Run the semantic tier over an evaluation that tier 1 has already produced.
+///
+/// Only the controls that `escalate_when` admits actually run, so a clean
+/// request pays nothing here. A detector that fails or times out is resolved by
+/// the catalog's `fail_mode`: closed means an unavailable detector blocks, which
+/// is the only safe reading — a control that cannot run has not passed.
+pub async fn escalate(
+    policy: &Policy,
+    hook: Hook,
+    evaluation: &mut Evaluation,
+    detectors: &Registry,
+) {
+    let started = Instant::now();
+    let mut ran = false;
+
+    for control in policy.semantic_for(hook, evaluation.suspicious) {
+        ran = true;
+        let outcome = detectors
+            .score(
+                &control.detector,
+                &evaluation.text,
+                &control.describes,
+                control.timeout,
+            )
+            .await;
+
+        match outcome {
+            Ok(score) if score >= control.threshold => {
+                evaluation.verdict = evaluation.verdict.merge(verdict_of(control.action));
+                evaluation.detections.push(Detection {
+                    control_id: control.id.clone(),
+                    kind: ControlKind::Semantic,
+                    severity: control.severity,
+                    action: control.action,
+                    score: Some(score),
+                    evidence: Evidence {
+                        matches: 1,
+                        first_offset: 0,
+                        excerpt: format!("{} scored {score:.2}", control.detector),
+                    },
+                });
+            }
+            Ok(score) => {
+                tracing::debug!(control = %control.id, score, "below threshold");
+            }
+            Err(error) => match policy.fail_mode {
+                FailMode::Closed => {
+                    tracing::error!(control = %control.id, %error, "detector unavailable — failing closed");
+                    evaluation.verdict = evaluation.verdict.merge(Verdict::Block);
+                    evaluation.detections.push(Detection {
+                        control_id: format!("{}.unavailable", control.id),
+                        kind: ControlKind::Semantic,
+                        severity: control.severity,
+                        action: Action::Block,
+                        score: None,
+                        evidence: Evidence {
+                            matches: 0,
+                            first_offset: 0,
+                            excerpt: error.to_string(),
+                        },
+                    });
+                }
+                FailMode::Open => {
+                    tracing::warn!(control = %control.id, %error, "detector unavailable — failing open");
+                }
+            },
+        }
+    }
+
+    if ran {
+        evaluation.semantic_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    }
+}
+
+/// A control's requested action, as an outcome the caller can observe. `Flag`
+/// records without changing the verdict, so it maps to `Allow`.
+const fn verdict_of(action: Action) -> Verdict {
+    match action {
+        Action::Block => Verdict::Block,
+        Action::Redact => Verdict::Redact,
+        Action::Allow | Action::Flag => Verdict::Allow,
     }
 }
 

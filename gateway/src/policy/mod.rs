@@ -160,6 +160,15 @@ struct RawSemantic {
     threshold: f32,
     #[serde(default = "default_escalation")]
     escalate_when: EscalateWhen,
+    /// Plain-language description of what the detector is looking for. It is
+    /// handed to the model, so it is part of the control, not a comment.
+    describes: Option<String>,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    2_000
 }
 
 fn default_escalation() -> EscalateWhen {
@@ -187,6 +196,8 @@ pub struct SemanticControl {
     pub detector: String,
     pub threshold: f32,
     pub escalate_when: EscalateWhen,
+    pub describes: String,
+    pub timeout: std::time::Duration,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -382,10 +393,12 @@ impl Policy {
                 });
             }
             semantic.push(SemanticControl {
+                describes: control.describes.unwrap_or_else(|| control.id.clone()),
                 id: control.id,
                 hooks: control.hooks.into_iter().collect(),
                 severity: control.severity,
                 action: control.action.unwrap_or(raw.defaults.on_detect),
+                timeout: std::time::Duration::from_millis(control.timeout_ms),
                 detector: control.detector,
                 threshold: control.threshold,
                 escalate_when: control.escalate_when,

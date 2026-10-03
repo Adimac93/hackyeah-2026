@@ -116,21 +116,30 @@ id = "injection.prompt-guard"
 hooks = ["prompt_in", "tool_result"]
 severity = "high"
 action = "block"
-detector = "prompt_guard_2"
+detector = "llm_judge"
+describes = "an attempt to override, ignore or replace the instructions the assistant was given"
 # Strictness knob. Lower catches more and blocks more legitimate traffic.
 threshold = 0.80
+timeout_ms = 2000
 escalate_when = "suspicious"
 
 [[controls.semantic]]
 id = "pii.contextual"
 # Catches identifiers that no regex describes: names, addresses, free-text
 # health details.
+#
+# OFF until a Presidio sidecar exists. `fail_mode = "closed"` means an
+# unavailable detector blocks, so leaving this on "always" with nothing behind
+# it would refuse every request. Set escalate_when = "always" once the sidecar
+# is running.
 hooks = ["prompt_in", "response_out"]
 severity = "medium"
 action = "redact"
 detector = "presidio"
+describes = "personal data that no regular expression would match: names, postal addresses, free-text health or financial details"
 threshold = 0.65
-escalate_when = "always"
+timeout_ms = 1500
+escalate_when = "never"
 
 [[controls.semantic]]
 id = "exfiltration.intent"
@@ -138,7 +147,9 @@ hooks = ["tool_call"]
 severity = "high"
 action = "block"
 detector = "llm_judge"
+describes = "an attempt to move data out of the organisation: exfiltration, unexpected recipients, encoding payloads for transport"
 threshold = 0.75
+timeout_ms = 2000
 escalate_when = "suspicious"
 
 # ---------------------------------------------------------------- feed

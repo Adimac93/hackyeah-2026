@@ -384,7 +384,10 @@ pub fn record_for<'a>(
         tool: None,
         verdict: evaluation.verdict,
         policy_version_id,
-        latency: serde_json::json!({ "deterministic_us": evaluation.deterministic_us }),
+        latency: serde_json::json!({
+            "deterministic_us": evaluation.deterministic_us,
+            "semantic_us": evaluation.semantic_us,
+        }),
         payload_sha256: sha256_hex(payload.as_bytes()),
         detections: &evaluation.detections,
     }

@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
 use crate::policy::{Hook, Policy, PolicyHandle, UnknownPrincipal};
+use crate::semantic::Registry;
 
 use federation::PROTOCOL_VERSION;
 
@@ -45,6 +46,7 @@ pub struct McpState {
     pub auditor: Arc<Auditor>,
     pub http: reqwest::Client,
     pub policy_version_id: Option<i64>,
+    pub detectors: Arc<Registry>,
 }
 
 pub async fn endpoint(
@@ -209,7 +211,8 @@ async fn tools_call(
     // --- hook 3: tool_call ------------------------------------------------
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let rendered = arguments.to_string();
-    let outbound = engine::evaluate(policy, Hook::ToolCall, &rendered);
+    let mut outbound = engine::evaluate(policy, Hook::ToolCall, &rendered);
+    engine::escalate(policy, Hook::ToolCall, &mut outbound, &state.detectors).await;
 
     record(
         state,
@@ -274,7 +277,8 @@ async fn tools_call(
     // --- hook 4: tool_result ---------------------------------------------
     // Nothing reaches the model's context unevaluated.
     let text = federation::result_text(&payload);
-    let inbound = engine::evaluate(policy, Hook::ToolResult, &text);
+    let mut inbound = engine::evaluate(policy, Hook::ToolResult, &text);
+    engine::escalate(policy, Hook::ToolResult, &mut inbound, &state.detectors).await;
 
     let mut inbound_record = audit::record_for(
         trace_id,
@@ -289,6 +293,7 @@ async fn tools_call(
     inbound_record.tool = Some(qualified);
     inbound_record.latency = json!({
         "deterministic_us": inbound.deterministic_us,
+        "semantic_us": inbound.semantic_us,
         "upstream_us": upstream_us,
     });
     state.auditor.record(inbound_record).await;
@@ -351,6 +356,7 @@ fn summarise(evaluation: &engine::Evaluation) -> Value {
         "verdict": evaluation.verdict,
         "controls_fired": evaluation.detections.iter().map(|d| &d.control_id).collect::<Vec<_>>(),
         "deterministic_us": evaluation.deterministic_us,
+        "semantic_us": evaluation.semantic_us,
     })
 }
 
