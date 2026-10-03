@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ExportDialog } from "@/components/export-dialog";
 import { LiveRefresh } from "@/components/live-refresh";
 import {
   ControlSeverityBadge,
@@ -86,13 +87,6 @@ export default async function ActivityPage({
     Principal,
     "id" | "slug" | "display_name"
   >[];
-  // Same filters as the table, minus `status`: that is a console view
-  // concept the gateway's export does not know.
-  const exportQuery = new URLSearchParams(
-    Object.entries({ verdict, channel, principal }).filter(([, v]) => v !== ""),
-  );
-  const exportHref = (format: "csv" | "json") =>
-    `/activity/export?${new URLSearchParams([...exportQuery, ["format", format]]).toString()}`;
 
   return (
     <>
@@ -102,72 +96,75 @@ export default async function ActivityPage({
       />
 
       <LiveRefresh {...liveEnv} />
-      <form className="mb-4 flex flex-wrap items-center gap-2">
-        <select name="status" defaultValue={status} className={FILTER_CLASS}>
-          <option value="">Any security status</option>
-          {SECURITY_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <select name="verdict" defaultValue={verdict} className={FILTER_CLASS}>
-          <option value="">All verdicts</option>
-          {VERDICTS.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-        <select name="channel" defaultValue={channel} className={FILTER_CLASS}>
-          <option value="">All channels</option>
-          {CHANNELS.map((c) => (
-            <option key={c} value={c}>
-              {c.toUpperCase()}
-            </option>
-          ))}
-        </select>
-        <select
-          name="principal"
-          defaultValue={principal}
-          className={FILTER_CLASS}
-        >
-          <option value="">All principals</option>
-          {principals.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name}
-            </option>
-          ))}
-        </select>
-        <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
-          Filter
-        </button>
-        {verdict || channel || principal || status ? (
-          <Link
-            href="/activity"
-            className="text-sm text-zinc-500 hover:text-zinc-300"
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <form className="flex flex-wrap items-center gap-2">
+          <select name="status" defaultValue={status} className={FILTER_CLASS}>
+            <option value="">Any security status</option>
+            {SECURITY_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            name="verdict"
+            defaultValue={verdict}
+            className={FILTER_CLASS}
           >
-            Reset
-          </Link>
-        ) : null}
-        <span className="ml-auto flex items-center gap-2">
-          {status ? (
-            <span className="text-xs text-zinc-500">
-              Exports ignore the status filter
-            </span>
-          ) : null}
-          {(["csv", "json"] as const).map((format) => (
-            <a
-              key={format}
-              href={exportHref(format)}
-              title="Up to 10,000 events with their hash-chain fields. Verify the file offline with `just verify-audit --file` (JSON)."
-              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+            <option value="">All verdicts</option>
+            {VERDICTS.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          <select
+            name="channel"
+            defaultValue={channel}
+            className={FILTER_CLASS}
+          >
+            <option value="">All channels</option>
+            {CHANNELS.map((c) => (
+              <option key={c} value={c}>
+                {c.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <select
+            name="principal"
+            defaultValue={principal}
+            className={FILTER_CLASS}
+          >
+            <option value="">All principals</option>
+            {principals.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}
+              </option>
+            ))}
+          </select>
+          <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
+            Filter
+          </button>
+          {verdict || channel || principal || status ? (
+            <Link
+              href="/activity"
+              className="text-sm text-zinc-500 hover:text-zinc-300"
             >
-              Export {format.toUpperCase()}
-            </a>
-          ))}
+              Reset
+            </Link>
+          ) : null}
+        </form>
+        {/* Outside the filter form: the dialog has a form of its own. */}
+        <span className="ml-auto">
+          <ExportDialog
+            principals={principals}
+            verdict={verdict}
+            channel={channel}
+            principal={principal}
+            statusFiltered={status !== ""}
+          />
         </span>
-      </form>
+      </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
         <table className={tableClass}>

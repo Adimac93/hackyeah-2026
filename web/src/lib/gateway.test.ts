@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  EXPORT_GROUPS,
   MAX_POLICY_BYTES,
   auditExportFilename,
   auditExportPath,
@@ -184,8 +185,10 @@ void test("auditExportPath forwards only the filters the gateway knows", () => {
       verdict: "block",
       channel: "mcp",
       principal: "demo-agent",
+      user: "anna@example.com",
+      control: "secret.aws-access-key",
     }),
-    "/admin/audit/export?format=json&verdict=block&channel=mcp&principal=demo-agent",
+    "/admin/audit/export?format=json&verdict=block&channel=mcp&principal=demo-agent&user=anna%40example.com&control=secret.aws-access-key",
   );
   // unknown values are dropped, not forwarded
   assert.equal(
@@ -193,6 +196,7 @@ void test("auditExportPath forwards only the filters the gateway knows", () => {
       verdict: "nope",
       channel: "x&limit=1",
       principal: "",
+      control: "a b",
     }),
     "/admin/audit/export?format=csv",
   );
@@ -201,6 +205,42 @@ void test("auditExportPath forwards only the filters the gateway knows", () => {
     auditExportPath("csv", { principal: "a&limit=1" }),
     "/admin/audit/export?format=csv&principal=a%26limit%3D1",
   );
+});
+
+void test("auditExportPath turns inclusive UTC days into the gateway's range", () => {
+  assert.equal(
+    auditExportPath("csv", { from: "2026-10-03", to: "2026-10-04" }),
+    "/admin/audit/export?format=csv&from=2026-10-03T00%3A00%3A00Z&to=2026-10-05T00%3A00%3A00Z",
+  );
+  // month end rolls over; garbage is dropped
+  assert.equal(
+    auditExportPath("csv", { to: "2026-10-31", from: "yesterday" }),
+    "/admin/audit/export?format=csv&to=2026-11-01T00%3A00%3A00Z",
+  );
+});
+
+void test("auditExportPath sends include only when it narrows the export", () => {
+  assert.equal(
+    auditExportPath("json", { include: ["identity", "integrity", "prompts"] }),
+    "/admin/audit/export?format=json&include=identity%2Cintegrity",
+  );
+  assert.equal(
+    auditExportPath("json", { include: EXPORT_GROUPS.map((g) => g.id) }),
+    "/admin/audit/export?format=json",
+  );
+});
+
+void test("auditExportPath sends a limit only below the gateway's cap", () => {
+  assert.equal(
+    auditExportPath("csv", { limit: "500" }),
+    "/admin/audit/export?format=csv&limit=500",
+  );
+  for (const limit of ["0", "-3", "2.5", "10000", "99999", "abc"]) {
+    assert.equal(
+      auditExportPath("csv", { limit }),
+      "/admin/audit/export?format=csv",
+    );
+  }
 });
 
 void test("auditExportFilename dates the download", () => {

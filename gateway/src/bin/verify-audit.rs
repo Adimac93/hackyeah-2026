@@ -57,8 +57,12 @@ async fn main() -> anyhow::Result<()> {
 
 fn verify_file(path: &str) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
-    let rows: Vec<gateway::admin::export::Row> = serde_json::from_str(&text)
-        .with_context(|| format!("{path} is not a JSON export from /admin/audit/export"))?;
+    let rows: Vec<gateway::admin::export::ChainRow> =
+        serde_json::from_str(&text).with_context(|| {
+            format!(
+                "{path} is not a JSON export from /admin/audit/export with the integrity columns"
+            )
+        })?;
     let report = gateway::admin::export::verify_export(&rows);
 
     if report.rows == 0 {

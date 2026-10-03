@@ -13,10 +13,10 @@ import { gatewayAsUser } from "@/lib/gateway-admin";
 const TIMEOUT_MS = 30_000;
 
 /**
- * Download the audit log as the Activity page currently filters it, through the
- * gateway's `GET /admin/audit/export` as the signed-in user (the gateway checks
- * their team role). Rows carry their hash-chain fields, so the file can be
- * checked offline with `just verify-audit --file`.
+ * Download the audit log with the settings chosen in the Activity page's export
+ * dialog, through the gateway's `GET /admin/audit/export` as the signed-in user
+ * (the gateway checks their team role). With the integrity columns, a JSON file
+ * can be checked offline with `just verify-audit --file`.
  */
 export async function GET(request: Request) {
   const { supabase, member } = await getSession();
@@ -55,6 +55,12 @@ export async function GET(request: Request) {
     verdict: sp.get("verdict") ?? undefined,
     channel: sp.get("channel") ?? undefined,
     principal,
+    user: sp.get("user") ?? undefined,
+    control: sp.get("control") ?? undefined,
+    from: sp.get("from") ?? undefined,
+    to: sp.get("to") ?? undefined,
+    include: sp.getAll("include"),
+    limit: sp.get("limit") ?? undefined,
   });
   let upstream: Response;
   try {

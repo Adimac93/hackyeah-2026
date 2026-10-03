@@ -1,9 +1,11 @@
 //! Audit log export for security teams (§4.5): JSON or CSV, filtered by time
 //! range, identity, control, verdict, channel and action.
 //!
-//! Every row carries its hash-chain fields (`payload_sha256`, `prev_hash`,
-//! `hash`), so an export is evidence an auditor can check without database
-//! access: `verify-audit --file export.json` runs [`verify_export`] over it.
+//! `include` picks column groups (identity, target, detections, usage,
+//! performance, policy, integrity); the event columns are always there. With
+//! `integrity` each row carries its hash-chain fields, so the export is
+//! evidence an auditor can check without database access:
+//! `verify-audit --file export.json` runs [`verify_export`] over it.
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -49,6 +51,94 @@ pub struct Filters {
     channel: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
+    /// Comma-separated column groups; every group when absent.
+    #[serde(default)]
+    include: Option<String>,
+}
+
+/// Optional column groups. The event columns (id, ts, trace_id, hook,
+/// channel, verdict) are always exported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    Identity,
+    Target,
+    Detections,
+    Usage,
+    Performance,
+    Policy,
+    Integrity,
+}
+
+impl Group {
+    pub const ALL: [Self; 7] = [
+        Self::Identity,
+        Self::Target,
+        Self::Detections,
+        Self::Usage,
+        Self::Performance,
+        Self::Policy,
+        Self::Integrity,
+    ];
+
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.name() == name)
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::Target => "target",
+            Self::Detections => "detections",
+            Self::Usage => "usage",
+            Self::Performance => "performance",
+            Self::Policy => "policy",
+            Self::Integrity => "integrity",
+        }
+    }
+}
+
+/// Every column in export order, with the group that switches it on.
+const COLUMNS: [(&str, Option<Group>); 18] = [
+    ("id", None),
+    ("ts", None),
+    ("trace_id", None),
+    ("hook", None),
+    ("channel", None),
+    ("principal", Some(Group::Identity)),
+    ("user", Some(Group::Identity)),
+    ("model", Some(Group::Target)),
+    ("tool", Some(Group::Target)),
+    ("verdict", None),
+    ("policy_version", Some(Group::Policy)),
+    ("controls", Some(Group::Detections)),
+    ("tokens", Some(Group::Usage)),
+    ("cost_usd", Some(Group::Usage)),
+    ("latency", Some(Group::Performance)),
+    ("payload_sha256", Some(Group::Integrity)),
+    ("prev_hash", Some(Group::Integrity)),
+    ("hash", Some(Group::Integrity)),
+];
+
+/// The columns an `include` list selects. Integrity brings detections with it:
+/// the hash covers them, so a file without them could not be verified.
+pub fn columns(include: Option<&str>) -> Result<Vec<&'static str>, String> {
+    let mut groups = match include.map(str::trim) {
+        None | Some("") => Group::ALL.to_vec(),
+        Some(list) => list
+            .split(',')
+            .map(|name| {
+                Group::parse(name.trim()).ok_or_else(|| format!("unknown column group {name:?}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    if groups.contains(&Group::Integrity) && !groups.contains(&Group::Detections) {
+        groups.push(Group::Detections);
+    }
+    Ok(COLUMNS
+        .iter()
+        .filter(|(_, group)| group.is_none_or(|g| groups.contains(&g)))
+        .map(|(name, _)| *name)
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -88,6 +178,10 @@ pub async fn export(
     {
         return response;
     }
+    let columns = match columns(filters.include.as_deref()) {
+        Ok(columns) => columns,
+        Err(message) => return refusal(StatusCode::BAD_REQUEST, "invalid_include", &message),
+    };
     let csv = match filters.format.as_deref() {
         None | Some("json") => false,
         Some("csv") => true,
@@ -164,44 +258,65 @@ pub async fn export(
                     "attachment; filename=\"audit-log.csv\"",
                 ),
             ],
-            to_csv(&rows),
+            to_csv(&rows, &columns),
         )
             .into_response()
     } else {
-        Json(rows).into_response()
+        Json(to_json(&rows, &columns)).into_response()
     }
 }
 
-pub fn to_csv(rows: &[Row]) -> String {
-    let mut out = String::from(
-        "id,ts,trace_id,hook,channel,principal,user,model,tool,verdict,policy_version,controls,tokens,cost_usd,latency,payload_sha256,prev_hash,hash\n",
-    );
+/// Rows as JSON objects holding only the selected columns, values typed.
+pub fn to_json(rows: &[Row], columns: &[&str]) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    rows.iter()
+        .map(|row| {
+            let serde_json::Value::Object(mut object) =
+                serde_json::to_value(row).unwrap_or_default()
+            else {
+                return serde_json::Map::new();
+            };
+            object.retain(|key, _| columns.contains(&key.as_str()));
+            object
+        })
+        .collect()
+}
+
+pub fn to_csv(rows: &[Row], columns: &[&str]) -> String {
+    let mut out = columns.join(",");
+    out.push('\n');
     for r in rows {
-        let fields = [
-            r.id.to_string(),
-            r.ts.clone(),
-            r.trace_id.clone(),
-            r.hook.clone(),
-            r.channel.clone(),
-            r.principal.clone().unwrap_or_default(),
-            r.user.clone().unwrap_or_default(),
-            r.model.clone().unwrap_or_default(),
-            r.tool.clone().unwrap_or_default(),
-            r.verdict.clone(),
-            r.policy_version.clone().unwrap_or_default(),
-            r.controls.clone(),
-            r.tokens.to_string(),
-            format!("{:.6}", r.cost_usd),
-            r.latency.clone(),
-            r.payload_sha256.clone().unwrap_or_default(),
-            r.prev_hash.clone(),
-            r.hash.clone(),
-        ];
-        let line: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
+        let line: Vec<String> = columns
+            .iter()
+            .map(|name| csv_field(&cell(r, name)))
+            .collect();
         out.push_str(&line.join(","));
         out.push('\n');
     }
     out
+}
+
+fn cell(r: &Row, column: &str) -> String {
+    match column {
+        "id" => r.id.to_string(),
+        "ts" => r.ts.clone(),
+        "trace_id" => r.trace_id.clone(),
+        "hook" => r.hook.clone(),
+        "channel" => r.channel.clone(),
+        "principal" => r.principal.clone().unwrap_or_default(),
+        "user" => r.user.clone().unwrap_or_default(),
+        "model" => r.model.clone().unwrap_or_default(),
+        "tool" => r.tool.clone().unwrap_or_default(),
+        "verdict" => r.verdict.clone(),
+        "policy_version" => r.policy_version.clone().unwrap_or_default(),
+        "controls" => r.controls.clone(),
+        "tokens" => r.tokens.to_string(),
+        "cost_usd" => format!("{:.6}", r.cost_usd),
+        "latency" => r.latency.clone(),
+        "payload_sha256" => r.payload_sha256.clone().unwrap_or_default(),
+        "prev_hash" => r.prev_hash.clone(),
+        "hash" => r.hash.clone(),
+        _ => String::new(),
+    }
 }
 
 /// RFC 4180 quoting, plus a leading `'` on values a spreadsheet would run as a
@@ -216,6 +331,36 @@ fn csv_field(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value
+    }
+}
+
+/// The fields of an exported row the hash chain covers: all the verifier
+/// reads, so an export narrowed with `include` still verifies as long as it
+/// has the integrity group.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChainRow {
+    pub id: i64,
+    pub trace_id: String,
+    pub hook: String,
+    pub verdict: String,
+    pub controls: String,
+    pub payload_sha256: Option<String>,
+    pub prev_hash: String,
+    pub hash: String,
+}
+
+impl From<&Row> for ChainRow {
+    fn from(row: &Row) -> Self {
+        Self {
+            id: row.id,
+            trace_id: row.trace_id.clone(),
+            hook: row.hook.clone(),
+            verdict: row.verdict.clone(),
+            controls: row.controls.clone(),
+            payload_sha256: row.payload_sha256.clone(),
+            prev_hash: row.prev_hash.clone(),
+            hash: row.hash.clone(),
+        }
     }
 }
 
@@ -238,12 +383,12 @@ pub struct ExportReport {
 /// segment rather than counting as broken, because filters leave gaps. Within
 /// a row, any edit to the verdict, hook, trace, payload hash or detections
 /// breaks it.
-pub fn verify_export(rows: &[Row]) -> ExportReport {
+pub fn verify_export(rows: &[ChainRow]) -> ExportReport {
     let mut report = ExportReport {
         rows: rows.len(),
         ..ExportReport::default()
     };
-    let mut previous: Option<&Row> = None;
+    let mut previous: Option<&ChainRow> = None;
 
     for row in rows {
         if previous.is_none_or(|p| p.hash != row.prev_hash) {
@@ -257,7 +402,7 @@ pub fn verify_export(rows: &[Row]) -> ExportReport {
     report
 }
 
-fn recomputed(row: &Row) -> Option<String> {
+fn recomputed(row: &ChainRow) -> Option<String> {
     let trace_id = Uuid::parse_str(&row.trace_id).ok()?;
     let prev = unhex(&row.prev_hash)?;
     let detections: Vec<(&str, &str)> = row
@@ -310,7 +455,7 @@ mod tests {
             prev_hash: prev_hash.into(),
             hash: String::new(),
         };
-        row.hash = recomputed(&row).expect("a well-formed row");
+        row.hash = recomputed(&ChainRow::from(&row)).expect("a well-formed row");
         row
     }
 
@@ -327,6 +472,14 @@ mod tests {
         vec![first, second, third]
     }
 
+    fn check(rows: &[Row]) -> ExportReport {
+        verify_export(&rows.iter().map(ChainRow::from).collect::<Vec<_>>())
+    }
+
+    fn all() -> Vec<&'static str> {
+        columns(None).unwrap()
+    }
+
     #[test]
     fn csv_quotes_and_neutralises_formulas() {
         assert_eq!(csv_field("plain"), "plain");
@@ -338,7 +491,7 @@ mod tests {
     #[test]
     fn csv_has_a_header_and_one_line_per_row() {
         let rows = chain();
-        let csv = to_csv(&rows[1..2]);
+        let csv = to_csv(&rows[1..2], &all());
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("id,ts,"));
@@ -355,10 +508,82 @@ mod tests {
     }
 
     #[test]
-    fn an_untouched_export_verifies_as_one_segment() {
-        let report = verify_export(&chain());
+    fn no_include_means_every_column() {
+        assert_eq!(all().len(), COLUMNS.len());
+        assert_eq!(columns(Some("")).unwrap(), all());
+    }
+
+    #[test]
+    fn include_keeps_the_event_columns_and_the_chosen_groups() {
         assert_eq!(
-            report,
+            columns(Some("identity")).unwrap(),
+            [
+                "id",
+                "ts",
+                "trace_id",
+                "hook",
+                "channel",
+                "principal",
+                "user",
+                "verdict"
+            ]
+        );
+        assert_eq!(
+            columns(Some("usage, performance")).unwrap(),
+            [
+                "id", "ts", "trace_id", "hook", "channel", "verdict", "tokens", "cost_usd",
+                "latency"
+            ]
+        );
+    }
+
+    #[test]
+    fn integrity_brings_the_detections_it_hashes() {
+        let chosen = columns(Some("integrity")).unwrap();
+        assert!(chosen.contains(&"controls"), "{chosen:?}");
+        assert!(chosen.ends_with(&["payload_sha256", "prev_hash", "hash"]));
+    }
+
+    #[test]
+    fn an_unknown_group_is_refused() {
+        assert!(columns(Some("identity,prompts")).is_err());
+    }
+
+    #[test]
+    fn narrowed_csv_and_json_hold_only_the_chosen_columns() {
+        let rows = chain();
+        let chosen = columns(Some("identity")).unwrap();
+        assert_eq!(
+            to_csv(&rows[..1], &chosen).lines().next(),
+            Some("id,ts,trace_id,hook,channel,principal,user,verdict")
+        );
+        let json = to_json(&rows[..1], &chosen);
+        let mut keys: Vec<&str> = json[0].keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "channel",
+                "hook",
+                "id",
+                "principal",
+                "trace_id",
+                "ts",
+                "user",
+                "verdict"
+            ]
+        );
+        assert_eq!(
+            json[0]["id"],
+            serde_json::json!(1),
+            "values keep their JSON types"
+        );
+    }
+
+    #[test]
+    fn an_untouched_export_verifies_as_one_segment() {
+        assert_eq!(
+            check(&chain()),
             ExportReport {
                 rows: 3,
                 broken: vec![],
@@ -371,23 +596,22 @@ mod tests {
     fn an_edited_verdict_breaks_its_row() {
         let mut rows = chain();
         rows[1].verdict = "allow".into(); // hide a block
-        assert_eq!(verify_export(&rows).broken, vec![2]);
+        assert_eq!(check(&rows).broken, vec![2]);
     }
 
     #[test]
     fn a_removed_detection_breaks_its_row() {
         let mut rows = chain();
         rows[2].controls = "pii.email:redact".into();
-        assert_eq!(verify_export(&rows).broken, vec![3]);
+        assert_eq!(check(&rows).broken, vec![3]);
     }
 
     #[test]
     fn a_dropped_row_is_a_gap_not_a_break() {
         // Filtered exports skip rows; the rows that remain still verify.
         let rows = chain();
-        let report = verify_export(&[rows[0].clone(), rows[2].clone()]);
         assert_eq!(
-            report,
+            check(&[rows[0].clone(), rows[2].clone()]),
             ExportReport {
                 rows: 2,
                 broken: vec![],
@@ -401,7 +625,7 @@ mod tests {
         let mut rows = chain();
         rows[1].verdict = "allow".into();
         rows[1].hash = "00".repeat(32); // the forger cannot reproduce it
-        let report = verify_export(&rows);
+        let report = check(&rows);
         assert_eq!(report.broken, vec![2]);
         assert_eq!(
             report.segments, 2,
@@ -410,9 +634,17 @@ mod tests {
     }
 
     #[test]
-    fn json_round_trips_into_the_verifier() {
-        let json = serde_json::to_string(&chain()).unwrap();
-        let back: Vec<Row> = serde_json::from_str(&json).unwrap();
+    fn a_narrowed_json_export_still_verifies() {
+        let chosen = columns(Some("integrity")).unwrap();
+        let json = serde_json::to_string(&to_json(&chain(), &chosen)).unwrap();
+        let back: Vec<ChainRow> = serde_json::from_str(&json).unwrap();
         assert_eq!(verify_export(&back).broken, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn an_export_without_integrity_cannot_be_verified() {
+        let chosen = columns(Some("identity,detections")).unwrap();
+        let json = serde_json::to_string(&to_json(&chain(), &chosen)).unwrap();
+        assert!(serde_json::from_str::<Vec<ChainRow>>(&json).is_err());
     }
 }

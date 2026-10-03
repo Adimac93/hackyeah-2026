@@ -296,38 +296,103 @@ export function describePolicySave(result: PolicySaveResult): string {
 export const EXPORT_FORMATS = ["csv", "json"] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
-/** The Activity page's filters that the gateway's export can apply. */
+/** The export's optional column groups (`include=`), as the dialog lists them. */
+export const EXPORT_GROUPS = [
+  {
+    id: "identity",
+    label: "Identity",
+    hint: "principal (agent or app) and the end user",
+  },
+  { id: "target", label: "Target", hint: "model and MCP tool" },
+  {
+    id: "detections",
+    label: "Detections",
+    hint: "controls that fired and what they did",
+  },
+  { id: "usage", label: "Usage", hint: "tokens and cost" },
+  { id: "performance", label: "Performance", hint: "per-stage latency" },
+  { id: "policy", label: "Policy", hint: "catalog version that decided" },
+  {
+    id: "integrity",
+    label: "Integrity",
+    hint: "payload hash and chain hashes, to verify the file",
+  },
+] as const;
+export type ExportGroup = (typeof EXPORT_GROUPS)[number]["id"];
+
+/** The gateway's cap on one export. */
+export const MAX_EXPORT_ROWS = 10_000;
+
+/** Everything the export dialog can ask for. */
 export interface AuditExportFilters {
   verdict?: string;
   channel?: string;
   /** Principal slug (the page filters by id; the export takes the slug). */
   principal?: string;
+  /** End user, exactly as recorded. */
+  user?: string;
+  /** Control id that fired. */
+  control?: string;
+  /** UTC days, `YYYY-MM-DD`; `to` is inclusive. */
+  from?: string;
+  to?: string;
+  /** Column groups; every group when empty or absent. */
+  include?: readonly string[];
+  limit?: string;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const CONTROL_ID = /^[\w.-]{1,100}$/;
+
+function utcDay(day: string, offsetDays = 0): string | null {
+  if (!DAY.test(day)) {
+    return null;
+  }
+  const date = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().replace(".000Z", "Z");
 }
 
 /**
- * Path + query for the gateway's audit export. Unknown verdicts and channels
- * are dropped rather than forwarded, so a tampered link cannot smuggle extra
- * query parameters through the console.
+ * Path + query for the gateway's audit export. Values outside what the gateway
+ * accepts are dropped rather than forwarded, so a tampered link cannot smuggle
+ * extra parameters through the console.
  */
 export function auditExportPath(
   format: ExportFormat,
   filters: AuditExportFilters,
 ): string {
   const query = new URLSearchParams({ format });
-  if (
-    filters.verdict !== undefined &&
-    (VERDICTS as readonly string[]).includes(filters.verdict)
-  ) {
-    query.set("verdict", filters.verdict);
+  const set = (key: string, value: string | null | undefined) => {
+    if (value !== undefined && value !== null && value.trim() !== "") {
+      query.set(key, value.trim());
+    }
+  };
+  if ((VERDICTS as readonly string[]).includes(filters.verdict ?? "")) {
+    set("verdict", filters.verdict);
   }
-  if (
-    filters.channel !== undefined &&
-    (CHANNELS as readonly string[]).includes(filters.channel)
-  ) {
-    query.set("channel", filters.channel);
+  if ((CHANNELS as readonly string[]).includes(filters.channel ?? "")) {
+    set("channel", filters.channel);
   }
-  if (filters.principal !== undefined && filters.principal !== "") {
-    query.set("principal", filters.principal);
+  set("principal", filters.principal);
+  set("user", filters.user);
+  if (CONTROL_ID.test(filters.control ?? "")) {
+    set("control", filters.control);
+  }
+  set("from", utcDay(filters.from ?? ""));
+  // `to` is inclusive in the dialog, exclusive at the gateway: the next midnight
+  set("to", utcDay(filters.to ?? "", 1));
+  const known = EXPORT_GROUPS.map((g) => g.id as string);
+  const include = (filters.include ?? []).filter((g) => known.includes(g));
+  if (include.length > 0 && include.length < known.length) {
+    set("include", [...new Set(include)].join(","));
+  }
+  const limit = Number(filters.limit);
+  if (Number.isInteger(limit) && limit >= 1 && limit < MAX_EXPORT_ROWS) {
+    set("limit", String(limit));
   }
   return `/admin/audit/export?${query.toString()}`;
 }
