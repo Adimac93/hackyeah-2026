@@ -26,6 +26,15 @@ pub struct Auditor {
     chain: Mutex<Vec<u8>>,
 }
 
+/// A registered caller: an agent, an application or a person.
+#[derive(Debug, Clone)]
+pub struct Principal {
+    pub id: Uuid,
+    pub allowed_models: Vec<String>,
+    /// Empty means "any tool", matching how `models.allowed` already behaves.
+    pub allowed_tools: Vec<String>,
+}
+
 /// One interception, ready to be written.
 pub struct EventRecord<'a> {
     pub trace_id: Uuid,
@@ -94,15 +103,32 @@ impl Auditor {
         }
     }
 
-    /// Resolve a principal slug to its id. Unknown slugs return `None`; the
-    /// gateway records the event without an owner rather than inventing one.
-    pub async fn principal_id(&self, slug: &str) -> Option<Uuid> {
+    /// Resolve a principal slug. Unknown slugs return `None`; the gateway
+    /// records the event without an owner rather than inventing one, and the
+    /// policy decides whether an unidentified caller may proceed.
+    pub async fn principal(&self, slug: &str) -> Option<Principal> {
         let pool = self.db.as_ref()?;
-        sqlx::query_scalar::<_, Uuid>("select id from principals where slug = $1 and enabled")
-            .bind(slug)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or_default()
+        let row = sqlx::query_as::<_, (Uuid, Vec<String>, Vec<String>)>(
+            "select id, allowed_models, allowed_tools
+             from principals where slug = $1 and enabled",
+        )
+        .bind(slug)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "principal lookup failed");
+            None
+        })?;
+
+        Some(Principal {
+            id: row.0,
+            allowed_models: row.1,
+            allowed_tools: row.2,
+        })
+    }
+
+    pub async fn principal_id(&self, slug: &str) -> Option<Uuid> {
+        self.principal(slug).await.map(|p| p.id)
     }
 
     /// Tokens spent by a principal inside the trailing window.

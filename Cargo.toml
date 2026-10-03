@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["gateway"]
+members = ["gateway", "mcp-demo"]
 
 [workspace.package]
 edition = "2024"

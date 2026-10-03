@@ -47,28 +47,28 @@ hard = false
 
 [[controls.deterministic]]
 id = "secret.aws-access-key"
-hooks = ["prompt_in", "response_out", "tool_result"]
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "critical"
 action = "block"
 pattern = '\bAKIA[0-9A-Z]{16}\b'
 
 [[controls.deterministic]]
 id = "secret.private-key"
-hooks = ["prompt_in", "response_out", "tool_result"]
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "critical"
 action = "block"
 pattern = '-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'
 
 [[controls.deterministic]]
 id = "secret.bearer-token"
-hooks = ["prompt_in", "response_out"]
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "high"
 action = "redact"
 pattern = '(?i)\b(bearer|api[_-]?key|authorization)\s*[:=]\s*[A-Za-z0-9._\-]{20,}'
 
 [[controls.deterministic]]
 id = "pii.email"
-hooks = ["prompt_in", "response_out"]
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "medium"
 action = "redact"
 pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
@@ -76,7 +76,7 @@ pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
 [[controls.deterministic]]
 id = "pii.pesel"
 # Polish national identification number — 11 digits.
-hooks = ["prompt_in", "response_out"]
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "high"
 action = "redact"
 pattern = '\b[0-9]{11}\b'
@@ -91,7 +91,7 @@ pattern = '(?i)\b(os\.system|subprocess\.(run|call|Popen)|eval\(|exec\(|__import
 
 [[controls.deterministic]]
 id = "exploit.unsafe-deserialization"
-hooks = ["tool_result"]
+hooks = ["tool_call", "tool_result"]
 severity = "critical"
 action = "block"
 pattern = '(?i)\b(pickle\.loads?|torch\.load|yaml\.load\s*\(|marshal\.loads)\b'
@@ -145,8 +145,23 @@ escalate_when = "suspicious"
 # §4.4. Signatures of known historical attacks, managed outside this file so a
 # feed update does not require a policy change.
 
+# ---------------------------------------------------------------- mcp
+# Upstream MCP servers sit behind this gateway, which is the only MCP server any
+# agent talks to. Disabling one here takes effect on save, no restart.
+
+[mcp]
+# A caller with no row in `principals`. "deny" is the right default for a
+# control layer: an unidentified agent gets no tools.
+unknown_principal = "deny"
+
+[[mcp.server]]
+name = "docs"
+url = "http://localhost:9310/mcp"
+enabled = true
+
+# ---------------------------------------------------------------- feed
 [signatures]
 source = "file"
-path = "policy/signatures.toml"
+path = "signatures.toml"   # resolved next to this file
 refresh_secs = 300
 enabled = true

@@ -41,9 +41,19 @@ fmt:
 db-new NAME:
     supabase migration new {{NAME}}
 
-# load deterministic demo data
+# load deterministic demo data into the Supabase project
 seed:
-    @echo "seed: TODO — demo principals, budgets and attack signatures"
+    psql "${DATABASE_URL:?set DATABASE_URL in .env}" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+
+# run the gateway and the deliberately vulnerable demo MCP server together
+demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p gateway -p mcp-demo
+    ./target/debug/mcp-demo &
+    demo_pid=$!
+    trap 'kill $demo_pid 2>/dev/null || true' EXIT
+    ./target/debug/gateway
 
 # ship to the demo URL. Wire this up on day one, not at hour 23.
 deploy:

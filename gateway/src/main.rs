@@ -18,6 +18,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use gateway::audit::Auditor;
+use gateway::mcp::{self, McpState};
 use gateway::policy::{self, Policy, PolicyHandle};
 use gateway::proxy::{self, ProxyState};
 
@@ -92,11 +93,20 @@ async fn main() -> anyhow::Result<()> {
     let upstream = std::env::var("UPSTREAM_URL").unwrap_or_else(|_| DEFAULT_UPSTREAM.to_owned());
     tracing::info!(%upstream, "forwarding model traffic upstream");
 
+    let http = reqwest::Client::new();
+
     let proxy_state = ProxyState {
         policy: policy.clone(),
-        auditor,
-        http: reqwest::Client::new(),
+        auditor: Arc::clone(&auditor),
+        http: http.clone(),
         upstream,
+        policy_version_id,
+    };
+
+    let mcp_state = McpState {
+        policy: policy.clone(),
+        auditor,
+        http,
         policy_version_id,
     };
 
@@ -108,6 +118,11 @@ async fn main() -> anyhow::Result<()> {
             Router::new()
                 .route("/v1/chat/completions", post(proxy::chat_completions))
                 .with_state(proxy_state),
+        )
+        .merge(
+            Router::new()
+                .route("/mcp", post(mcp::endpoint))
+                .with_state(mcp_state),
         );
 
     let listener = tokio::net::TcpListener::bind(addr)

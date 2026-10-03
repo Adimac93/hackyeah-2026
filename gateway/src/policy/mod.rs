@@ -10,7 +10,7 @@ mod watch;
 pub use watch::{PolicyHandle, spawn_watcher};
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,8 @@ struct RawCatalog {
     #[serde(default)]
     controls: RawControls,
     signatures: Option<SignatureFeed>,
+    #[serde(default)]
+    mcp: McpSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +224,42 @@ pub struct Budgets {
     pub model: HashMap<String, Budget>,
 }
 
+/// What to do with a caller we have no `principals` row for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnknownPrincipal {
+    /// Refuse tool access. The right default for a control layer.
+    #[default]
+    Deny,
+    Allow,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpServer {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct McpSettings {
+    #[serde(default)]
+    pub unknown_principal: UnknownPrincipal,
+    #[serde(default, rename = "server")]
+    pub servers: Vec<McpServer>,
+}
+
+impl McpSettings {
+    pub fn enabled_servers(&self) -> impl Iterator<Item = &McpServer> {
+        self.servers.iter().filter(|s| s.enabled)
+    }
+
+    pub fn server(&self, name: &str) -> Option<&McpServer> {
+        self.enabled_servers().find(|s| s.name == name)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SignatureFeed {
     pub source: String,
@@ -250,6 +288,11 @@ pub struct Policy {
     pub deterministic: Vec<DeterministicControl>,
     pub semantic: Vec<SemanticControl>,
     pub signatures: Option<SignatureFeed>,
+    /// Compiled from the external feed (§4.4). Kept separate from the catalog
+    /// controls because the two have different lifecycles: a feed refresh is an
+    /// operational event, a catalog edit is a policy change.
+    pub signature_controls: Vec<DeterministicControl>,
+    pub mcp: McpSettings,
 }
 
 impl Policy {
@@ -261,7 +304,34 @@ impl Policy {
             path: display.clone(),
             source,
         })?;
-        Self::from_str(&source, &display)
+        let mut policy = Self::from_str(&source, &display)?;
+
+        // §4.4: the feed only becomes a control once it is compiled. Its bytes
+        // join the version hash, so editing signatures.toml is a policy change
+        // the audit log can point at.
+        if let Some(feed) = policy.signatures.clone()
+            && feed.enabled
+            && let Some(feed_path) = feed.path.as_deref()
+        {
+            // Relative to the catalog, not to the working directory: a path
+            // written inside a config file means "next to this file", and the
+            // gateway must not care where it was launched from.
+            let resolved = path
+                .parent()
+                .map_or_else(|| PathBuf::from(feed_path), |dir| dir.join(feed_path));
+            let raw = std::fs::read_to_string(&resolved).map_err(|source| PolicyError::Read {
+                path: resolved.display().to_string(),
+                source,
+            })?;
+            policy.signature_controls = compile_feed(&raw, &resolved.display().to_string())?;
+            policy.sha256 = sha256_hex(&format!("{source}{raw}"));
+            tracing::debug!(
+                signatures = policy.signature_controls.len(),
+                "attack signature feed loaded"
+            );
+        }
+
+        Ok(policy)
     }
 
     /// Compile from an in-memory catalog. Kept separate from [`Policy::load`]
@@ -332,13 +402,18 @@ impl Policy {
             deterministic,
             semantic,
             signatures: raw.signatures,
+            signature_controls: Vec::new(),
+            mcp: raw.mcp,
         })
     }
 
-    /// Deterministic controls that apply at `hook`, in catalog order.
+    /// Deterministic controls that apply at `hook`: catalog controls first,
+    /// then anything the signature feed contributed. The engine does not need
+    /// to know the difference.
     pub fn deterministic_for(&self, hook: Hook) -> impl Iterator<Item = &DeterministicControl> {
         self.deterministic
             .iter()
+            .chain(self.signature_controls.iter())
             .filter(move |c| c.hooks.contains(&hook))
     }
 
@@ -366,6 +441,73 @@ impl Policy {
         }
         self.models.allowed.is_empty() || self.models.allowed.iter().any(|m| m == model)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFeed {
+    #[serde(default, rename = "signature")]
+    signatures: Vec<RawSignature>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSignature {
+    external_id: String,
+    title: String,
+    #[serde(default = "default_deterministic")]
+    kind: String,
+    severity: Severity,
+    pattern: Option<String>,
+    /// Signatures describe payloads that arrive through tools or come back from
+    /// a model, so those are the hooks they default to.
+    #[serde(default = "default_signature_hooks")]
+    hooks: Vec<Hook>,
+    action: Option<Action>,
+}
+
+fn default_deterministic() -> String {
+    "deterministic".to_owned()
+}
+
+fn default_signature_hooks() -> Vec<Hook> {
+    vec![Hook::ToolCall, Hook::ToolResult, Hook::ResponseOut]
+}
+
+/// Compile the external feed into the same shape as a catalog control, so one
+/// engine covers both. Semantic signatures need an embedding model and are
+/// skipped with a warning rather than silently dropped.
+fn compile_feed(source: &str, origin: &str) -> Result<Vec<DeterministicControl>, PolicyError> {
+    let feed: RawFeed = toml::from_str(source).map_err(|source| PolicyError::Parse {
+        path: origin.to_owned(),
+        source,
+    })?;
+
+    let mut compiled = Vec::with_capacity(feed.signatures.len());
+    for signature in feed.signatures {
+        let id = format!("signature.{}", signature.external_id);
+
+        if signature.kind != "deterministic" {
+            tracing::warn!(%id, kind = %signature.kind, "skipping: no semantic detector yet");
+            continue;
+        }
+        let Some(pattern) = signature.pattern else {
+            tracing::warn!(%id, title = %signature.title, "skipping: no pattern");
+            continue;
+        };
+
+        let regex = Regex::new(&pattern).map_err(|source| PolicyError::Pattern {
+            id: id.clone(),
+            source,
+        })?;
+
+        compiled.push(DeterministicControl {
+            id,
+            hooks: signature.hooks.into_iter().collect(),
+            severity: signature.severity,
+            action: signature.action.unwrap_or(Action::Block),
+            regex,
+        });
+    }
+    Ok(compiled)
 }
 
 /// sha2 0.11 no longer formats its digest as hex, and one loop is cheaper than
