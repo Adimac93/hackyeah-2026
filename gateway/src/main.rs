@@ -14,6 +14,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
@@ -35,6 +36,12 @@ struct AppState {
     /// local work before anyone has filled in `.env`.
     db: Option<sqlx::PgPool>,
     policy: PolicyHandle,
+    auditor: Arc<Auditor>,
+}
+
+#[derive(Deserialize)]
+struct PolicyUpload {
+    catalog_toml: String,
 }
 
 #[tokio::main]
@@ -81,8 +88,32 @@ async fn main() -> anyhow::Result<()> {
 
     let policy_path =
         std::env::var("POLICY_PATH").unwrap_or_else(|_| DEFAULT_POLICY_PATH.to_owned());
-    let loaded =
+    let mut loaded =
         Policy::load(&policy_path).with_context(|| format!("loading policy from {policy_path}"))?;
+    // An accepted upload is portable across instances/restarts.  Prefer it
+    // only when it is at least as new as the on-disk catalog; saving the file
+    // later deliberately takes control back through the normal watcher.
+    if let Some(pool) = &db {
+        let file_modified_secs = std::fs::metadata(&policy_path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0.0, |duration| duration.as_secs_f64());
+        let uploaded = sqlx::query_scalar::<_, String>(
+            "select catalog_toml from policy_versions
+             where active and catalog_toml is not null
+               and loaded_at >= to_timestamp($1)
+             order by loaded_at desc limit 1",
+        )
+        .bind(file_modified_secs)
+        .fetch_optional(pool)
+        .await;
+        if let Ok(Some(catalog)) = uploaded {
+            loaded = Policy::from_uploaded(&catalog, "database-upload", &policy_path)
+                .context("loading active uploaded policy")?;
+            tracing::info!(version = %loaded.sha256[..12], "using active uploaded policy");
+        }
+    }
     tracing::info!(
         version = %loaded.sha256[..12].to_owned(),
         deterministic = loaded.deterministic.len(),
@@ -147,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mcp_state = McpState {
         policy: policy.clone(),
-        auditor,
+        auditor: Arc::clone(&auditor),
         http,
         detectors,
     };
@@ -155,8 +186,16 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/health", get(health))
+        .route("/openapi.json", get(openapi))
+        .route("/admin/docs", get(swagger_ui))
         .route("/policy", get(active_policy))
-        .with_state(AppState { db, policy })
+        .route("/metrics", get(metrics))
+        .route("/admin/policy", post(upload_policy))
+        .with_state(AppState {
+            db,
+            policy,
+            auditor,
+        })
         .merge(
             Router::new()
                 .route("/v1/chat/completions", post(proxy::chat_completions))
@@ -217,6 +256,8 @@ fn index_json(state: &AppState) -> Value {
         },
         "endpoints": {
             "GET  /health": "liveness, and whether the audit database is reachable",
+            "GET  /admin/docs": "Swagger UI for the security-admin API",
+            "GET  /openapi.json": "OpenAPI 3.1 document for integration tooling",
             "GET  /policy": "the catalog currently being enforced",
             "POST /v1/chat/completions": "OpenAI-compatible. Hooks: prompt_in, response_out",
             "POST /mcp": "MCP 2026-07-28. Hooks: tool_call, tool_result",
@@ -247,7 +288,7 @@ fn index_html(facts: &Value) -> String {
         .unwrap_or_default();
 
     format!(
-        r#"<!doctype html>
+        r##"<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -292,7 +333,7 @@ fn index_html(facts: &Value) -> String {
   <footer>
     v{} · <span class="chip">this page is also JSON — request it with <code>Accept: application/json</code></span>
   </footer>
-</main></body></html>"#,
+</main></body></html>"##,
         facts["description"].as_str().unwrap_or_default(),
         policy["deterministic_controls"],
         policy["semantic_controls"],
@@ -316,10 +357,98 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "status": "ok", "database": database }))
 }
 
+/// Public documentation carries no live state or credentials. Every operation
+/// it describes is still protected by the Bearer security scheme below.
+async fn openapi() -> Json<Value> {
+    Json(openapi_document())
+}
+
+/// Swagger UI is intentionally a thin viewer. Operators enter a security-admin
+/// bearer key through its built-in Authorize dialog; no API key is embedded in
+/// the page, URL, server log, or OpenAPI document.
+async fn swagger_ui() -> Html<&'static str> {
+    Html(
+        r##"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Control Layer — Security Admin API</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head><body><div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui",persistAuthorization:false});</script>
+</body></html>"##,
+    )
+}
+
+fn openapi_document() -> Value {
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "AI Control Layer — Security Admin API",
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": "Live policy state, security telemetry, and validated policy uploads. All admin operations require a security_admin principal Bearer API key."
+        },
+        "paths": {
+            "/policy": {
+                "get": {
+                    "summary": "Get the active policy",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {"description": "Current policy metadata"},
+                        "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+                        "403": {"$ref": "#/components/responses/AdminRequired"}
+                    }
+                }
+            },
+            "/metrics": {
+                "get": {
+                    "summary": "Get 24-hour management and security metrics",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {"description": "Aggregated events, detections, budgets, incidents, audit-chain status and percentiles"},
+                        "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+                        "403": {"$ref": "#/components/responses/AdminRequired"},
+                        "503": {"description": "Metrics persistence is unavailable"}
+                    }
+                }
+            },
+            "/admin/policy": {
+                "post": {
+                    "summary": "Validate, persist, and activate a policy catalog",
+                    "description": "Invalid TOML leaves the active policy unchanged. Accepted uploads are retained with a version, administrator, and human-readable diff.",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PolicyUpload"}}}
+                    },
+                    "responses": {
+                        "200": {"description": "Policy accepted and activated"},
+                        "400": {"description": "Empty catalog"},
+                        "401": {"$ref": "#/components/responses/AuthenticationRequired"},
+                        "403": {"$ref": "#/components/responses/AdminRequired"},
+                        "422": {"description": "Invalid TOML or policy schema; prior policy remains active"},
+                        "503": {"description": "Policy database unavailable; policy remains unchanged"}
+                    }
+                }
+            }
+        },
+        "components": {
+            "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "API key", "description": "Per-principal gateway API key; only its SHA-256 hash is stored."}},
+            "schemas": {"PolicyUpload": {"type": "object", "additionalProperties": false, "required": ["catalog_toml"], "properties": {"catalog_toml": {"type": "string", "description": "Complete TOML control catalog", "example": "schema_version = 1\\n[defaults]\\non_detect = \\\"block\\\"\\nfail_mode = \\\"closed\\\""}}}},
+            "responses": {
+                "AuthenticationRequired": {"description": "Missing, malformed, invalid, or disabled Bearer API key"},
+                "AdminRequired": {"description": "Authenticated principal lacks the security_admin role"}
+            }
+        }
+    })
+}
+
 /// What the gateway is currently enforcing. The dashboard polls this to show
 /// which catalog version produced a given decision, and it is the fastest way
 /// to see a hot-reload land.
-async fn active_policy(State(state): State<AppState>) -> Json<Value> {
+async fn active_policy(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = security_admin(&state, &headers).await {
+        return response;
+    }
     let policy = state.policy.load();
     Json(json!({
         "version": policy.sha256,
@@ -333,6 +462,114 @@ async fn active_policy(State(state): State<AppState>) -> Json<Value> {
         "models": policy.models,
         "signatures": policy.signatures,
     }))
+    .into_response()
+}
+
+/// Prometheus-style dashboards can use the richer persisted report while the
+/// live endpoint stays deliberately small and requires a security-team key.
+async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = security_admin(&state, &headers).await {
+        return response;
+    }
+    let Some(pool) = &state.db else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "metrics persistence is not configured" })),
+        )
+            .into_response();
+    };
+    match gateway::metrics::collect(pool, 24).await {
+        Ok(report) => Json(json!(report)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "metrics query failed");
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "metrics temporarily unavailable" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn upload_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(upload): Json<PolicyUpload>,
+) -> Response {
+    let admin = match security_admin(&state, &headers).await {
+        Ok(admin) => admin,
+        Err(response) => return response,
+    };
+    if upload.catalog_toml.trim().is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "catalog_toml must not be empty" })),
+        )
+            .into_response();
+    }
+
+    let current = state.policy.load();
+    let origin = format!("uploaded:{}", &current.sha256[..12]);
+    let next = match Policy::from_uploaded(&upload.catalog_toml, &origin, state.policy.path()) {
+        Ok(policy) => policy,
+        Err(error) => {
+            // The old Arc remains active: invalid uploads never create a gap
+            // in enforcement.
+            return (
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "invalid_policy", "message": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let diff = format!(
+        "policy {} -> {}; deterministic controls {} -> {}, semantic controls {} -> {}",
+        &current.sha256[..12],
+        &next.sha256[..12],
+        current.deterministic.len(),
+        next.deterministic.len(),
+        current.semantic.len(),
+        next.semantic.len(),
+    );
+    drop(current);
+
+    if state
+        .auditor
+        .store_policy_upload(
+            &next.sha256,
+            &next.source,
+            &upload.catalog_toml,
+            admin.id,
+            &diff,
+        )
+        .await
+        .is_none()
+    {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "policy persistence is unavailable; active policy unchanged" })),
+        )
+            .into_response();
+    }
+
+    let changed = state.policy.replace(next);
+    Json(json!({ "accepted": true, "changed": changed, "diff": diff })).into_response()
+}
+
+async fn security_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<gateway::audit::Principal, Response> {
+    let principal = proxy::bearer_principal(&state.auditor, headers).await?;
+    if principal.role == "security_admin" {
+        Ok(principal)
+    } else {
+        Err((
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({ "error": { "type": "admin_required", "message": "security administrator role required" } })),
+        )
+            .into_response())
+    }
 }
 
 /// The dashboard is served from a different origin, so the browser will not
@@ -398,5 +635,30 @@ async fn shutdown() {
     tokio::select! {
         () = interrupt => tracing::info!("interrupted — shutting down"),
         () = terminate => tracing::info!("SIGTERM — draining"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_openapi_document_declares_bearer_auth_for_every_operation() {
+        let document = openapi_document();
+        assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(
+            document["components"]["securitySchemes"]["bearerAuth"]["scheme"],
+            "bearer"
+        );
+        for (path, method) in [
+            ("/policy", "get"),
+            ("/metrics", "get"),
+            ("/admin/policy", "post"),
+        ] {
+            assert!(
+                document["paths"][path][method]["security"].is_array(),
+                "{method} {path} must be protected in the contract"
+            );
+        }
     }
 }

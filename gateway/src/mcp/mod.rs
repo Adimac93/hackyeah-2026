@@ -26,7 +26,8 @@ use uuid::Uuid;
 
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
-use crate::policy::{Hook, Policy, PolicyHandle, UnknownPrincipal};
+use crate::policy::{Hook, Policy, PolicyHandle};
+use crate::proxy::bearer_principal;
 use crate::semantic::Registry;
 
 use federation::PROTOCOL_VERSION;
@@ -70,25 +71,24 @@ pub async fn endpoint(
         return error(&id, HEADER_MISMATCH, &problem);
     }
 
-    let slug = headers
-        .get("x-principal")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("anonymous")
-        .to_owned();
-    let principal = state.auditor.principal(&slug).await;
-
-    if principal.is_none() && policy.mcp.unknown_principal == UnknownPrincipal::Deny {
-        return error(
-            &id,
-            PRINCIPAL_DENIED,
-            &format!("principal {slug} is not registered"),
-        );
-    }
+    let principal = match bearer_principal(&state.auditor, &headers).await {
+        Ok(principal) => principal,
+        // Chat uses HTTP status for auth failure; JSON-RPC clients expect a
+        // JSON-RPC error envelope even for the same gateway rule.
+        Err(_) => {
+            return error(
+                &id,
+                PRINCIPAL_DENIED,
+                "missing, invalid or disabled API key",
+            );
+        }
+    };
+    let slug = principal.slug.clone();
 
     match method.as_str() {
         "server/discover" => discover(&id),
-        "tools/list" => tools_list(&state, &policy, principal.as_ref(), &id).await,
-        "tools/call" => tools_call(&state, &policy, principal.as_ref(), &slug, &id, &params).await,
+        "tools/list" => tools_list(&state, &policy, Some(&principal), &id).await,
+        "tools/call" => tools_call(&state, &policy, Some(&principal), &slug, &id, &params).await,
         // Deny by default: an unlisted method is not proxied to upstreams that
         // might implement it.
         other => error(

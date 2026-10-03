@@ -8,7 +8,8 @@ import type { ChatTurn, PolicySnippet } from "@/lib/assistant";
 import { requireChatUser } from "@/lib/auth";
 import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
-import { availableModels, findModel } from "@/lib/llm/models";
+import { loadModels } from "@/lib/llm/catalog";
+import { findModel } from "@/lib/llm/models";
 import { ProviderError, getAssistant } from "@/lib/llm/providers";
 
 /** Longest stored message; matches the chat_messages check constraint. */
@@ -30,15 +31,15 @@ export async function sendChatMessage(
     return { error: parsed.error };
   }
 
+  const { supabase } = session;
   const model = findModel(
     formString(formData, "model"),
-    availableModels(process.env),
+    await loadModels(supabase),
   );
   if (model === null) {
     return { error: "Pick one of the available models." };
   }
 
-  const { supabase } = session;
   let id = conversationId;
   if (id === null) {
     const { data, error } = await supabase

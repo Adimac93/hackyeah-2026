@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::audit::{self, Auditor};
+use crate::audit::{self, Auditor, Principal};
 use crate::engine::{self, Verdict};
 use crate::mock;
 use crate::policy::{Action, Budget, Hook, Policy, PolicyHandle, Severity};
@@ -29,6 +29,38 @@ pub struct ProxyState {
     pub detectors: std::sync::Arc<Registry>,
 }
 
+/// Authenticate the gateway's integration endpoints.  We intentionally do
+/// not accept an `X-Principal` escape hatch: identity arrives only from a
+/// per-principal Bearer key and the database maps its hash to the principal.
+pub async fn bearer_principal(
+    auditor: &Auditor,
+    headers: &HeaderMap,
+) -> Result<Principal, Response> {
+    let Some(value) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .filter(|key| !key.is_empty())
+    else {
+        return Err(authentication_refusal(
+            "missing or malformed Bearer API key",
+        ));
+    };
+
+    auditor
+        .principal_for_api_key(value)
+        .await
+        .ok_or_else(|| authentication_refusal("invalid or disabled API key"))
+}
+
+fn authentication_refusal(message: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": { "type": "authentication_required", "message": message } })),
+    )
+        .into_response()
+}
+
 pub async fn chat_completions(
     State(state): State<ProxyState>,
     headers: HeaderMap,
@@ -41,12 +73,12 @@ pub async fn chat_completions(
         .policy_version_id(&policy.sha256, &policy.source)
         .await;
 
-    let slug = headers
-        .get("x-principal")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("anonymous")
-        .to_owned();
-    let principal_id = state.auditor.principal_id(&slug).await;
+    let principal = match bearer_principal(&state.auditor, &headers).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let slug = &principal.slug;
+    let principal_id = Some(principal.id);
 
     let model = body
         .get("model")
@@ -68,11 +100,24 @@ pub async fn chat_completions(
             format!("model {model} is not in the allow list"),
         );
     }
+    if !principal.allowed_models.is_empty()
+        && !principal
+            .allowed_models
+            .iter()
+            .any(|allowed| allowed == &model)
+    {
+        inbound.gate(
+            MODEL_NOT_ALLOWED.to_owned(),
+            Severity::High,
+            Action::Block,
+            format!("model {model} is not allowed for this identity"),
+        );
+    }
     check_budgets(
         &policy,
         &state.auditor,
         principal_id,
-        &slug,
+        slug,
         &model,
         &mut inbound,
     )

@@ -53,6 +53,17 @@ impl PolicyHandle {
         self.inner.store(Arc::new(next));
         Ok(true)
     }
+
+    /// Atomically activate an already validated uploaded catalog.  Validation
+    /// happens before this swap, so callers always observe either the old
+    /// policy or the complete new policy—never a half-uploaded configuration.
+    pub fn replace(&self, next: Policy) -> bool {
+        if next.sha256 == self.inner.load().sha256 {
+            return false;
+        }
+        self.inner.store(Arc::new(next));
+        true
+    }
 }
 
 /// Watch the catalog and reload on change.
