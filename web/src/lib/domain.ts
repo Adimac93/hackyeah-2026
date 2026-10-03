@@ -44,6 +44,24 @@ export interface TeamMember {
   created_at: string;
 }
 
+/** Any signed-up account, as admins see it on the Team page; `role` is null without access. */
+export interface RegisteredUser {
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  role: TeamRole | null;
+  registered_at: string;
+  last_sign_in_at: string | null;
+}
+
+/** Role reserved for an email that has no account yet; claimed when that email is confirmed. */
+export interface TeamInvite {
+  email: string;
+  role: TeamRole;
+  invited_by: string | null;
+  created_at: string;
+}
+
 export interface Policy {
   id: string;
   title: string;
