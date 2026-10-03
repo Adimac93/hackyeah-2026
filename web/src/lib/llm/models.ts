@@ -78,7 +78,7 @@ export function availableModels(
 
   // through the AI Control Layer gateway: every prompt and answer is policed and audited.
   // First, so the demo default is the protected path.
-  if (configured(env.GATEWAY_URL)) {
+  if (configured(env.GATEWAY_URL) && configured(env.GATEWAY_API_KEY)) {
     for (const model of parseModelList(
       env.GATEWAY_MODELS,
       DEFAULT_GATEWAY_MODELS,
