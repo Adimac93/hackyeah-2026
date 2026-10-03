@@ -5,6 +5,7 @@
 # teaching the team a new command. The stack plugs in here and nowhere else.
 
 set shell := ["bash", "-uc"]
+set dotenv-load
 
 repo := justfile_directory()
 
@@ -13,28 +14,29 @@ default:
 
 # install dependencies
 setup:
-    @echo "setup: no stack yet — wire dependency install here"
+    cd web && pnpm install --frozen-lockfile
 
 # the one gate: `just check` green == done. Nothing else counts.
 check: typecheck lint test
     @echo "check: OK"
 
 typecheck:
-    @echo "typecheck: no stack yet"
+    cd web && pnpm typecheck
 
+# eslint + prettier (@solvro/config); `pnpm format` in web/ fixes formatting
 lint:
-    @echo "lint: no stack yet"
+    cd web && pnpm lint && pnpm format:check
 
 test:
-    @echo "test: no stack yet"
+    cd web && pnpm test
 
 # run the app locally
 dev:
-    @echo "dev: no stack yet"
+    cd web && pnpm dev
 
 # load deterministic demo data
 seed:
-    @echo "seed: no stack yet"
+    psql "${SUPABASE_DB_URL:?set SUPABASE_DB_URL (Supabase → Connect → connection string)}" -v ON_ERROR_STOP=1 -f web/supabase/seed.sql
 
 # ship to the demo URL. Wire this up on day one, not at hour 23.
 deploy:
