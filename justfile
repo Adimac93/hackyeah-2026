@@ -38,6 +38,10 @@ dev:
 seed:
     psql "${SUPABASE_DB_URL:?set SUPABASE_DB_URL (Supabase → Connect → connection string)}" -v ON_ERROR_STOP=1 -f web/supabase/seed.sql
 
+# apply new web/supabase/migrations to the database: just migrate (preview: just migrate --dry-run)
+migrate *FLAGS:
+    cd web && pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL (Supabase → Connect → connection string)}" {{FLAGS}}
+
 # ship to the demo URL. Wire this up on day one, not at hour 23.
 deploy:
     @echo "deploy: no stack yet"
