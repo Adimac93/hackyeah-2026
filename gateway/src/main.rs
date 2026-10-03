@@ -72,7 +72,17 @@ async fn main() -> anyhow::Result<()> {
     let policy = PolicyHandle::new(loaded, &policy_path);
 
     // Held for the lifetime of the process: dropping the watcher stops the watch.
-    let _watcher = policy::spawn_watcher(policy.clone()).context("watching the policy file")?;
+    //
+    // Hot-reload is a convenience; enforcement is not. If the platform will not
+    // give us a file watch — a read-only layer, an inotify limit — the gateway
+    // still serves under the policy it loaded rather than refusing to start.
+    let _watcher = match policy::spawn_watcher(policy.clone()) {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            tracing::warn!(%error, "policy hot-reload unavailable — edits need a restart");
+            None
+        }
+    };
 
     // A malformed PORT is a configuration error, not a reason to pick another
     // one. Platforms that inject PORT health-check that exact port, so binding
