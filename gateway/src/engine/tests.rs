@@ -124,6 +124,28 @@ fn a_redaction_is_visible_to_later_controls() {
     assert_eq!(out.detections.len(), 2);
 }
 
+#[test]
+fn payment_cards_require_a_luhn_checksum() {
+    let p = policy(
+        r#"
+[[controls.deterministic]]
+id = "pii.payment-card"
+hooks = ["prompt_in"]
+severity = "high"
+action = "redact"
+pattern = '\b(?:[0-9][ -]?){13,19}\b'
+"#,
+    );
+    assert_eq!(
+        evaluate(&p, Hook::PromptIn, "card 4111 1111 1111 1111").verdict,
+        Verdict::Redact
+    );
+    assert_eq!(
+        evaluate(&p, Hook::PromptIn, "order 4111 1111 1111 1112").verdict,
+        Verdict::Allow
+    );
+}
+
 // --------------------------------------------------------------- tier 2
 
 use crate::semantic::Registry;

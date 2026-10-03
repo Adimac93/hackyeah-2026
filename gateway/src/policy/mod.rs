@@ -103,6 +103,8 @@ pub enum PolicyError {
     DuplicateId { id: String },
     #[error("unsupported schema_version {found}, expected {expected}")]
     SchemaVersion { found: u32, expected: u32 },
+    #[error("active profile {name:?} is not defined")]
+    Profile { name: String },
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -113,6 +115,10 @@ const SCHEMA_VERSION: u32 = 1;
 #[serde(deny_unknown_fields)]
 struct RawCatalog {
     schema_version: u32,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    profiles: HashMap<String, RawDefaults>,
     #[serde(default)]
     defaults: RawDefaults,
     #[serde(default)]
@@ -128,7 +134,7 @@ struct RawCatalog {
     mcp: McpSettings,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDefaults {
     on_detect: Action,
@@ -265,6 +271,7 @@ pub struct Policy {
     pub source: String,
     pub on_detect: Action,
     pub fail_mode: FailMode,
+    pub profile: Option<String>,
     pub models: Models,
     pub budgets: Budgets,
     /// Per-model price, keyed by model name. An unpriced model costs nothing.
@@ -336,6 +343,17 @@ impl Policy {
             });
         }
 
+        let (on_detect, fail_mode) = match raw.profile.as_deref() {
+            Some(name) => raw
+                .profiles
+                .get(name)
+                .map(|profile| (profile.on_detect, profile.fail_mode))
+                .ok_or_else(|| PolicyError::Profile {
+                    name: name.to_owned(),
+                })?,
+            None => (raw.defaults.on_detect, raw.defaults.fail_mode),
+        };
+
         let mut seen = HashSet::new();
         let mut deterministic = Vec::with_capacity(raw.controls.deterministic.len());
         for control in raw.controls.deterministic {
@@ -354,7 +372,7 @@ impl Policy {
                 id: control.id,
                 hooks: control.hooks.into_iter().collect(),
                 severity: control.severity,
-                action: control.action.unwrap_or(raw.defaults.on_detect),
+                action: control.action.unwrap_or(on_detect),
                 regex,
                 feed: None,
             });
@@ -380,9 +398,9 @@ impl Policy {
                 id: control.id,
                 hooks: control.hooks.into_iter().collect(),
                 severity: control.severity,
-                action: control.action.unwrap_or(raw.defaults.on_detect),
+                action: control.action.unwrap_or(on_detect),
                 timeout: std::time::Duration::from_millis(control.timeout_ms),
-                fail_mode: control.fail_mode.unwrap_or(raw.defaults.fail_mode),
+                fail_mode: control.fail_mode.unwrap_or(fail_mode),
                 mock_keywords: control.mock_keywords,
                 detector: control.detector,
                 threshold: control.threshold,
@@ -393,8 +411,9 @@ impl Policy {
         Ok(Self {
             sha256: sha256_hex(source),
             source: origin.to_owned(),
-            on_detect: raw.defaults.on_detect,
-            fail_mode: raw.defaults.fail_mode,
+            on_detect,
+            fail_mode,
+            profile: raw.profile,
             models: raw.models,
             budgets: raw.budgets,
             pricing: raw.pricing,
@@ -405,6 +424,34 @@ impl Policy {
             feed_path: None,
             mcp: raw.mcp,
         })
+    }
+
+    /// Compile a catalog received through the admin API. Signature feeds stay
+    /// relative to the configured catalog directory, just as they are for a
+    /// file reload; an upload must not silently remove attack signatures.
+    pub fn from_uploaded(
+        source: &str,
+        origin: &str,
+        catalog_path: impl AsRef<Path>,
+    ) -> Result<Self, PolicyError> {
+        let mut policy = Self::from_str(source, origin)?;
+        if let Some(feed) = policy.signatures.clone()
+            && feed.enabled
+            && let Some(feed_path) = feed.path.as_deref()
+        {
+            let resolved = catalog_path
+                .as_ref()
+                .parent()
+                .map_or_else(|| PathBuf::from(feed_path), |dir| dir.join(feed_path));
+            let raw = std::fs::read_to_string(&resolved).map_err(|source| PolicyError::Read {
+                path: resolved.display().to_string(),
+                source,
+            })?;
+            policy.signature_controls = compile_feed(&raw, &resolved.display().to_string())?;
+            policy.sha256 = sha256_hex(&format!("{source}{raw}"));
+            policy.feed_path = Some(resolved);
+        }
+        Ok(policy)
     }
 
     /// Deterministic controls that apply at `hook`: catalog controls first,

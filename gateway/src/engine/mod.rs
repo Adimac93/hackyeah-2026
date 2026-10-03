@@ -248,9 +248,15 @@ const fn verdict_of(action: Action) -> Verdict {
 /// Match a control, returning evidence that identifies the finding without
 /// reproducing it.
 fn scan(control: &DeterministicControl, text: &str) -> Option<Evidence> {
-    let mut matches = control.regex.find_iter(text);
-    let first = matches.next()?;
-    let count = 1 + matches.count();
+    let matches: Vec<_> = control
+        .regex
+        .find_iter(text)
+        // A card-shaped number is PII only if it passes Luhn. This avoids
+        // redacting arbitrary long numbers such as invoice references.
+        .filter(|matched| control.id != "pii.payment-card" || luhn_valid(matched.as_str()))
+        .collect();
+    let first = matches.first()?;
+    let count = matches.len();
 
     Some(Evidence {
         matches: count,
@@ -258,6 +264,28 @@ fn scan(control: &DeterministicControl, text: &str) -> Option<Evidence> {
         excerpt: mask(first.as_str()),
         feed: control.feed.clone(),
     })
+}
+
+fn luhn_valid(candidate: &str) -> bool {
+    let digits: Vec<u32> = candidate.chars().filter_map(|c| c.to_digit(10)).collect();
+    if !(13..=19).contains(&digits.len()) {
+        return false;
+    }
+    digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                *digit
+            }
+        })
+        .sum::<u32>()
+        % 10
+        == 0
 }
 
 /// Keep the first four characters so a human can recognise the finding, and

@@ -43,6 +43,18 @@ fn action_falls_back_to_the_default() {
 }
 
 #[test]
+fn named_profile_supplies_the_control_defaults() {
+    let src = MINIMAL.replace(
+        "schema_version = 1",
+        "schema_version = 1\nprofile = \"permissive\"\n[profiles.permissive]\non_detect = \"flag\"\nfail_mode = \"open\"",
+    );
+    let policy = parse(&src).unwrap();
+    assert_eq!(policy.profile.as_deref(), Some("permissive"));
+    assert_eq!(policy.deterministic[0].action, Action::Flag);
+    assert_eq!(policy.fail_mode, FailMode::Open);
+}
+
+#[test]
 fn rejects_a_pattern_that_does_not_compile() {
     let src = MINIMAL.replace("pattern = 'foo'", "pattern = '([unclosed'");
     assert!(matches!(parse(&src), Err(PolicyError::Pattern { .. })));
