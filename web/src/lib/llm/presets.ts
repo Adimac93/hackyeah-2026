@@ -296,8 +296,3 @@ export function parseProviderInput(
     },
   };
 }
-
-/** What we show instead of the key: "sk-a…a1b2". Short keys reveal nothing. */
-export function keyHint(key: string): string {
-  return key.length < 12 ? "••••" : `${key.slice(0, 4)}…${key.slice(-4)}`;
-}

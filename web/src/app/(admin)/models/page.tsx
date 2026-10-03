@@ -25,6 +25,7 @@ interface ConnectionRow {
   kind: string;
   base_url: string | null;
   api_key_hint: string | null;
+  api_key_fingerprint: string | null;
   models: string[];
   enabled: boolean;
   updated_at: string;
@@ -48,7 +49,7 @@ export default async function ModelsPage() {
   const { data } = await supabase
     .from("llm_providers")
     .select(
-      "id, name, preset, kind, base_url, api_key_hint, models, enabled, updated_at",
+      "id, name, preset, kind, base_url, api_key_hint, api_key_fingerprint, models, enabled, updated_at",
     )
     .order("created_at");
   const connections = (data ?? []) as ConnectionRow[];
@@ -112,8 +113,20 @@ export default async function ModelsPage() {
                       </span>
                     </div>
                     <p className="mt-0.5 truncate text-xs text-zinc-500">
-                      {host(c.base_url)} · key {c.api_key_hint ?? "none"} ·
-                      updated {timeAgo(c.updated_at)}
+                      {host(c.base_url)} ·{" "}
+                      {c.api_key_hint === null ? (
+                        "no key"
+                      ) : (
+                        <span
+                          title={`SHA-256 fingerprint ${c.api_key_fingerprint ?? "—"}. The key itself is encrypted in Supabase Vault.`}
+                        >
+                          key {c.api_key_hint} · fp{" "}
+                          <code>
+                            {c.api_key_fingerprint?.slice(0, 8) ?? "—"}
+                          </code>
+                        </span>
+                      )}{" "}
+                      · updated {timeAgo(c.updated_at)}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-1">
                       {c.models.map((m) => (

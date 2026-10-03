@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import {
   PRESETS,
-  keyHint,
   parseProviderInput,
   presetForBaseUrl,
   validateBaseUrl,
@@ -88,9 +87,4 @@ void test("parseProviderInput rejects bad input", () => {
   assert.ok(
     parseProviderInput({ preset: "ollama", models: "llama3.1:8b" }, true).ok,
   );
-});
-
-void test("keyHint never reveals short keys", () => {
-  assert.equal(keyHint("sk-ant-api03-abcdefgh1234"), "sk-a…1234");
-  assert.equal(keyHint("short"), "••••");
 });
