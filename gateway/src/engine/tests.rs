@@ -287,10 +287,7 @@ fn a_gate_is_recorded_and_only_a_hard_one_blocks() {
 /// The dev demo path: the shipped catalog, the mock judge, an override.
 #[tokio::test]
 async fn the_shipped_catalog_blocks_an_override_under_the_mock_judge() {
-    let p = Policy::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../policy/control-catalog.toml"
-    ))
+    let p = Policy::builtin()
     .unwrap();
     let mut out = evaluate(
         &p,

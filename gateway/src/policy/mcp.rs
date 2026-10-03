@@ -1,5 +1,7 @@
 //! Which upstream MCP servers sit behind the gateway, and who may reach them.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::default_true;
@@ -21,6 +23,12 @@ pub struct McpServer {
     pub url: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Approved tools: name -> sha256 of the tool definition (name,
+    /// description, input schema) as the security team reviewed it. When any
+    /// tool is pinned, an unpinned or changed tool is hidden and reported —
+    /// a rug-pull or poisoned description never reaches the model.
+    #[serde(default)]
+    pub pinned: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
