@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 
 import { ShieldIcon } from "@/components/icons";
 import { getSession } from "@/lib/auth";
+import { demoAdmin } from "@/lib/demo-login";
 
+import { DemoAdminButton } from "./demo-admin-button";
 import { LoginForm } from "./login-form";
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
@@ -31,6 +33,16 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
             </p>
           )}
           <LoginForm next={typeof next === "string" ? next : undefined} />
+          {demoAdmin() === null ? null : (
+            <div className="mt-6 border-t border-zinc-800 pt-6">
+              <p className="mb-3 text-center text-xs text-zinc-500">
+                Demo access — no account needed
+              </p>
+              <DemoAdminButton
+                next={typeof next === "string" ? next : undefined}
+              />
+            </div>
+          )}
         </div>
         <p className="mt-6 text-center text-xs text-zinc-500">
           New accounts have no access until an admin adds them to the security

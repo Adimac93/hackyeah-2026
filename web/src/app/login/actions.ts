@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { demoAdmin } from "@/lib/demo-login";
 import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
 import { createClient } from "@/lib/supabase/server";
@@ -53,6 +54,29 @@ export async function authenticate(
     if (error !== null) {
       return { error: "Invalid email or password." };
     }
+  }
+
+  redirect(safeNext(formData.get("next")));
+}
+
+/** Demo only: sign in as the configured admin. Refuses unless DEMO_ADMIN_LOGIN is on. */
+export async function loginAsDemoAdmin(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const admin = demoAdmin();
+  if (admin === null) {
+    return { error: "Demo login is disabled." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword({
+    email: admin.email,
+    password: "Pa$$w0rd123456789",
+  });
+  if (error !== null) {
+    console.error("[auth] demo admin login failed", error.status, error.code);
+    return { error: "Demo admin login failed." };
   }
 
   redirect(safeNext(formData.get("next")));
