@@ -7,6 +7,7 @@ import type {
   Severity,
   TeamRole,
 } from "@/lib/domain";
+import type { ControlAction, ControlSeverity } from "@/lib/gateway";
 
 const SEVERITY_STYLE: Record<Severity, string> = {
   critical: "bg-red-500/15 text-red-300 ring-red-500/40",
@@ -47,6 +48,32 @@ function Pill({
 
 export function SeverityBadge({ severity }: { severity: Severity }) {
   return <Pill className={SEVERITY_STYLE[severity]}>{severity}</Pill>;
+}
+
+const CONTROL_SEVERITY_STYLE: Record<ControlSeverity, string> = {
+  ...SEVERITY_STYLE,
+  info: "bg-zinc-500/10 text-zinc-300 ring-zinc-500/30",
+};
+
+/** Gateway detection severity (adds `info` to the incident scale). */
+export function ControlSeverityBadge({
+  severity,
+}: {
+  severity: ControlSeverity;
+}) {
+  return <Pill className={CONTROL_SEVERITY_STYLE[severity]}>{severity}</Pill>;
+}
+
+const VERDICT_STYLE: Record<ControlAction, string> = {
+  allow: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
+  flag: "bg-amber-500/10 text-amber-300 ring-amber-500/30",
+  redact: "bg-violet-500/10 text-violet-300 ring-violet-500/30",
+  block: "bg-red-500/15 text-red-300 ring-red-500/40",
+};
+
+/** Gateway event verdict or a single control's action. */
+export function VerdictBadge({ verdict }: { verdict: ControlAction }) {
+  return <Pill className={VERDICT_STYLE[verdict]}>{verdict}</Pill>;
 }
 
 export function StatusBadge({

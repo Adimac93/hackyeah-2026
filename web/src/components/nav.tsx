@@ -4,15 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import {
+  ActivityIcon,
   AlertIcon,
   ChatIcon,
   DocumentIcon,
   GaugeIcon,
+  SlidersIcon,
   UsersIcon,
 } from "./icons";
 
 const LINKS = [
   { href: "/dashboard", label: "Overview", Icon: GaugeIcon },
+  { href: "/activity", label: "Activity", Icon: ActivityIcon },
+  { href: "/controls", label: "Controls", Icon: SlidersIcon },
   { href: "/incidents", label: "Incidents", Icon: AlertIcon },
   { href: "/policies", label: "Policies", Icon: DocumentIcon },
   { href: "/team", label: "Team", Icon: UsersIcon },

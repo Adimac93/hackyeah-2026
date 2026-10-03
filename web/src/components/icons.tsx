@@ -68,3 +68,16 @@ export function TrashIcon(p: IconProps) {
     />
   );
 }
+
+export function ActivityIcon(p: IconProps) {
+  return <Icon {...p} d="M3 12h4l3-8 4 16 3-8h4" />;
+}
+
+export function SlidersIcon(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4"
+    />
+  );
+}

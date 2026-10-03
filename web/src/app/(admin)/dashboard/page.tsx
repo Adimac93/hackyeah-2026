@@ -1,6 +1,12 @@
 import Link from "next/link";
 
-import { Card, PageHeader, SeverityBadge, StatusBadge } from "@/components/ui";
+import {
+  Card,
+  PageHeader,
+  SeverityBadge,
+  StatusBadge,
+  VerdictBadge,
+} from "@/components/ui";
 import { requireMember } from "@/lib/auth";
 import {
   SEVERITIES,
@@ -10,6 +16,15 @@ import {
 } from "@/lib/domain";
 import type { Incident, Policy } from "@/lib/domain";
 import { fmtDate, timeAgo } from "@/lib/format";
+import { fmtMicros, gatewayStats } from "@/lib/gateway";
+import type { GatewayEvent, Principal } from "@/lib/gateway";
+
+const DAY_MS = 86_400_000;
+
+type InterventionRow = Pick<
+  GatewayEvent,
+  "id" | "ts" | "hook" | "channel" | "tool" | "model" | "verdict"
+> & { principals: Pick<Principal, "display_name"> | null };
 
 const BAR_COLOR = {
   critical: "bg-red-500",
@@ -20,7 +35,13 @@ const BAR_COLOR = {
 
 export default async function DashboardPage() {
   const { supabase } = await requireMember();
-  const [{ data: incidentRows }, { data: policyRows }] = await Promise.all([
+  const since = new Date(Date.now() - DAY_MS).toISOString();
+  const [
+    { data: incidentRows },
+    { data: policyRows },
+    { data: eventRows },
+    { data: interventionRows },
+  ] = await Promise.all([
     supabase
       .from("incidents")
       .select("id, title, severity, status, category, detected_at, resolved_at")
@@ -29,9 +50,27 @@ export default async function DashboardPage() {
     supabase
       .from("policies")
       .select("id, title, status, review_due, category, version"),
+    supabase
+      .from("events")
+      .select("verdict, latency")
+      .gte("ts", since)
+      .limit(10_000),
+    supabase
+      .from("events")
+      .select(
+        "id, ts, hook, channel, tool, model, verdict, principals(display_name)",
+      )
+      .neq("verdict", "allow")
+      .order("ts", { ascending: false })
+      .limit(5)
+      .overrideTypes<InterventionRow[], { merge: false }>(),
   ]);
   const incidents = (incidentRows ?? []) as Incident[];
   const policies = (policyRows ?? []) as Policy[];
+  const gateway = gatewayStats(
+    (eventRows ?? []) as Pick<GatewayEvent, "verdict" | "latency">[],
+  );
+  const interventions = interventionRows ?? [];
 
   const stats = incidentStats(incidents);
   const urgent = stats.bySeverity.critical + stats.bySeverity.high;
@@ -69,12 +108,101 @@ export default async function DashboardPage() {
     },
   ];
 
+  const gatewayTiles = [
+    { label: "Requests", value: gateway.total, tone: "text-zinc-50" },
+    {
+      label: "Blocked",
+      value: gateway.byVerdict.block,
+      tone: gateway.byVerdict.block ? "text-red-400" : "text-zinc-50",
+      sub: `${String(gateway.byVerdict.redact)} redacted`,
+    },
+    {
+      label: "Intervention rate",
+      value: `${String(Math.round(gateway.interventionRate * 100))}%`,
+      tone: "text-zinc-50",
+    },
+    {
+      label: "p95 overhead",
+      value: fmtMicros(gateway.p95OverheadUs),
+      tone: "text-zinc-50",
+      sub: `p50 ${fmtMicros(gateway.p50OverheadUs)} · ${String(Math.round(gateway.semanticShare * 100))}% escalated to semantic`,
+    },
+  ];
+
   return (
     <>
       <PageHeader
         title="Security overview"
-        subtitle="Live posture across incidents and company policy"
+        subtitle="Live posture across the AI gateway, incidents and company policy"
       />
+
+      <div className="mb-3 flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold text-zinc-300">
+          AI gateway · last 24h
+        </h2>
+        <Link
+          href="/activity"
+          className="text-xs text-emerald-400 hover:underline"
+        >
+          All activity →
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {gatewayTiles.map((t) => (
+          <div
+            key={t.label}
+            className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
+          >
+            <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
+              {t.label}
+            </p>
+            <p className={`mt-2 text-3xl font-semibold tabular-nums ${t.tone}`}>
+              {t.value}
+            </p>
+            {t.sub === undefined ? null : (
+              <p className="mt-1 text-xs text-zinc-500">{t.sub}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <Card className="mt-6 mb-8" title="Latest interventions">
+        {interventions.length === 0 ? (
+          <p className="text-sm text-zinc-500">
+            The gateway hasn&apos;t blocked or redacted anything yet.
+          </p>
+        ) : (
+          <ul className="-my-2 divide-y divide-zinc-800">
+            {interventions.map((event) => (
+              <li key={event.id}>
+                <Link
+                  href={`/activity/${String(event.id)}`}
+                  className="flex items-center gap-3 py-3 hover:opacity-80"
+                >
+                  <VerdictBadge verdict={event.verdict} />
+                  <span className="min-w-0 flex-1 truncate text-sm text-zinc-100">
+                    {event.tool ?? event.model ?? "—"}
+                    <span className="ml-2 text-xs text-zinc-500">
+                      {event.channel.toUpperCase()} ·{" "}
+                      {event.hook.replace("_", " ")}
+                    </span>
+                  </span>
+                  <span className="hidden text-xs text-zinc-400 sm:block">
+                    {event.principals?.display_name ?? "Unknown"}
+                  </span>
+                  <span className="w-16 text-right text-xs text-zinc-500">
+                    {timeAgo(event.ts)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <h2 className="mb-3 text-sm font-semibold text-zinc-300">
+        Incidents & policy
+      </h2>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {tiles.map((t) => (
