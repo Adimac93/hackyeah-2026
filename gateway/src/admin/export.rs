@@ -11,21 +11,26 @@ use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::auth::{Access, refusal};
-use crate::audit::{chain_hash, hex};
+use crate::audit::{chain_hash, hex, unhex};
 use crate::state::AppState;
 
 const MAX_ROWS: i64 = 10_000;
+const VERDICTS: &[&str] = &["allow", "redact", "block"];
+const ACTIONS: &[&str] = &["allow", "flag", "redact", "block"];
+const CHANNELS: &[&str] = &["llm", "mcp", "a2a"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Filters {
     #[serde(default)]
     format: Option<String>,
-    /// RFC 3339 timestamps; `from` inclusive, `to` exclusive.
+    /// RFC 3339 timestamps or UTC days (`YYYY-MM-DD`); `from` inclusive, `to`
+    /// exclusive for a timestamp and inclusive for a day.
     #[serde(default)]
     from: Option<String>,
     #[serde(default)]
@@ -51,119 +56,104 @@ pub struct Filters {
     channel: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
-    /// Comma-separated column groups; every group when absent.
+    /// Comma-separated column groups: every group when absent, none (event
+    /// columns only) when empty.
     #[serde(default)]
     include: Option<String>,
 }
 
-/// Optional column groups. The event columns (id, ts, trace_id, hook,
-/// channel, verdict) are always exported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Group {
-    Identity,
-    Target,
-    Detections,
-    Usage,
-    Performance,
-    Policy,
-    Integrity,
-}
-
-impl Group {
-    pub const ALL: [Self; 7] = [
-        Self::Identity,
-        Self::Target,
-        Self::Detections,
-        Self::Usage,
-        Self::Performance,
-        Self::Policy,
-        Self::Integrity,
-    ];
-
-    fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|g| g.name() == name)
-    }
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Identity => "identity",
-            Self::Target => "target",
-            Self::Detections => "detections",
-            Self::Usage => "usage",
-            Self::Performance => "performance",
-            Self::Policy => "policy",
-            Self::Integrity => "integrity",
-        }
-    }
-}
-
-/// Every column in export order, with the group that switches it on.
-const COLUMNS: [(&str, Option<Group>); 18] = [
-    ("id", None),
-    ("ts", None),
-    ("trace_id", None),
-    ("hook", None),
-    ("channel", None),
-    ("principal", Some(Group::Identity)),
-    ("user", Some(Group::Identity)),
-    ("model", Some(Group::Target)),
-    ("tool", Some(Group::Target)),
-    ("verdict", None),
-    ("policy_version", Some(Group::Policy)),
-    ("controls", Some(Group::Detections)),
-    ("tokens", Some(Group::Usage)),
-    ("cost_usd", Some(Group::Usage)),
-    ("latency", Some(Group::Performance)),
-    ("payload_sha256", Some(Group::Integrity)),
-    ("prev_hash", Some(Group::Integrity)),
-    ("hash", Some(Group::Integrity)),
-];
-
-/// The columns an `include` list selects. Integrity brings detections with it:
-/// the hash covers them, so a file without them could not be verified.
-pub fn columns(include: Option<&str>) -> Result<Vec<&'static str>, String> {
-    let mut groups = match include.map(str::trim) {
-        None | Some("") => Group::ALL.to_vec(),
-        Some(list) => list
-            .split(',')
-            .map(|name| {
-                Group::parse(name.trim()).ok_or_else(|| format!("unknown column group {name:?}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    };
-    if groups.contains(&Group::Integrity) && !groups.contains(&Group::Detections) {
-        groups.push(Group::Detections);
-    }
-    Ok(COLUMNS
-        .iter()
-        .filter(|(_, group)| group.is_none_or(|g| groups.contains(&g)))
-        .map(|(name, _)| *name)
-        .collect())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Row {
+/// The fields of an exported event that the hash chain covers. They are all
+/// the verifier reads, so an export narrowed with `include` still verifies as
+/// long as it has the integrity group.
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
+pub struct ChainRow {
     pub id: i64,
-    pub ts: String,
     pub trace_id: String,
     pub hook: String,
+    pub verdict: String,
+    /// `[control_id, action]` in detection order, as `chain_hash` takes them.
+    pub controls: sqlx::types::Json<Vec<(String, String)>>,
+    pub payload_sha256: Option<String>,
+    pub prev_hash: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Row {
+    #[sqlx(flatten)]
+    pub chain: ChainRow,
+    pub ts: String,
     pub channel: String,
     pub principal: Option<String>,
     pub user: Option<String>,
     pub model: Option<String>,
     pub tool: Option<String>,
-    pub verdict: String,
     pub policy_version: Option<String>,
-    /// `control_id:action` pairs in detection order, space-separated.
-    pub controls: String,
     pub tokens: i64,
     pub cost_usd: f64,
     pub latency: String,
-    /// Hex. Together with the fields the chain covers, these let the export be
-    /// verified on its own.
-    pub payload_sha256: Option<String>,
-    pub prev_hash: String,
-    pub hash: String,
+}
+
+/// One exported column: its name, the `include` group that switches it on
+/// (`None`: always exported) and how to read it. CSV and JSON both render from
+/// this table, so a column is declared once.
+pub struct Column {
+    pub name: &'static str,
+    group: Option<&'static str>,
+    value: fn(&Row) -> Value,
+}
+
+#[rustfmt::skip] // one row per column reads as a table
+const COLUMNS: &[Column] = &[
+    Column { name: "id",             group: None,                value: |r| r.chain.id.into() },
+    Column { name: "ts",             group: None,                value: |r| r.ts.clone().into() },
+    Column { name: "trace_id",       group: None,                value: |r| r.chain.trace_id.clone().into() },
+    Column { name: "hook",           group: None,                value: |r| r.chain.hook.clone().into() },
+    Column { name: "channel",        group: None,                value: |r| r.channel.clone().into() },
+    Column { name: "principal",      group: Some("identity"),    value: |r| r.principal.clone().into() },
+    Column { name: "user",           group: Some("identity"),    value: |r| r.user.clone().into() },
+    Column { name: "model",          group: Some("target"),      value: |r| r.model.clone().into() },
+    Column { name: "tool",           group: Some("target"),      value: |r| r.tool.clone().into() },
+    Column { name: "verdict",        group: None,                value: |r| r.chain.verdict.clone().into() },
+    Column { name: "policy_version", group: Some("policy"),      value: |r| r.policy_version.clone().into() },
+    Column { name: "controls",       group: Some("detections"),  value: |r| serde_json::to_value(&r.chain.controls.0).unwrap_or_default() },
+    Column { name: "tokens",         group: Some("usage"),       value: |r| r.tokens.into() },
+    Column { name: "cost_usd",       group: Some("usage"),       value: |r| r.cost_usd.into() },
+    Column { name: "latency",        group: Some("performance"), value: |r| r.latency.clone().into() },
+    Column { name: "payload_sha256", group: Some("integrity"),   value: |r| r.chain.payload_sha256.clone().into() },
+    Column { name: "prev_hash",      group: Some("integrity"),   value: |r| r.chain.prev_hash.clone().into() },
+    Column { name: "hash",           group: Some("integrity"),   value: |r| r.chain.hash.clone().into() },
+];
+
+/// The columns an `include` list selects. Integrity brings detections with it:
+/// the hash covers them, so a file without them could not be verified.
+pub fn columns(include: Option<&str>) -> Result<Vec<&'static Column>, String> {
+    let groups: Option<Vec<&str>> = include.map(|list| {
+        list.split(',').map(str::trim).filter(|g| !g.is_empty()).collect()
+    });
+    if let Some(unknown) = groups
+        .iter()
+        .flatten()
+        .find(|g| !COLUMNS.iter().any(|c| c.group == Some(**g)))
+    {
+        return Err(format!("unknown column group {unknown:?}"));
+    }
+    let wanted = |group: &str| {
+        groups.as_ref().is_none_or(|g| {
+            g.contains(&group) || (group == "detections" && g.contains(&"integrity"))
+        })
+    };
+    Ok(COLUMNS
+        .iter()
+        .filter(|c| c.group.is_none_or(wanted))
+        .collect())
+}
+
+fn one_of(name: &str, value: Option<&str>, allowed: &[&str]) -> Result<(), String> {
+    match value {
+        Some(v) if !allowed.contains(&v) => Err(format!("{name} {v:?} is not one of {allowed:?}")),
+        _ => Ok(()),
+    }
 }
 
 pub async fn export(
@@ -178,33 +168,25 @@ pub async fn export(
     {
         return response;
     }
-    let columns = match columns(filters.include.as_deref()) {
+    let checked = one_of("format", filters.format.as_deref(), &["json", "csv"])
+        .and(one_of("verdict", filters.verdict.as_deref(), VERDICTS))
+        .and(one_of("action", filters.action.as_deref(), ACTIONS))
+        .and(one_of("channel", filters.channel.as_deref(), CHANNELS))
+        .and_then(|()| columns(filters.include.as_deref()));
+    let columns = match checked {
         Ok(columns) => columns,
-        Err(message) => return refusal(StatusCode::BAD_REQUEST, "invalid_include", &message),
+        Err(message) => return refusal(StatusCode::BAD_REQUEST, "invalid_filter", &message),
     };
-    let csv = match filters.format.as_deref() {
-        None | Some("json") => false,
-        Some("csv") => true,
-        Some(other) => {
-            return refusal(
-                StatusCode::BAD_REQUEST,
-                "invalid_format",
-                &format!("format {other:?} is not json or csv"),
-            );
-        }
-    };
+    let selected = |name: &str| columns.iter().any(|c| c.name == name);
 
+    // Detections and usage are per-event subqueries: skipped unless exported.
     let rows = sqlx::query_as::<_, Row>(
-        "select e.id,
-                to_char(e.ts at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') as ts,
+        r#"select e.id,
+                to_char(e.ts at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as ts,
                 e.trace_id::text as trace_id, e.hook::text as hook, e.channel::text as channel,
-                p.slug as principal, e.end_user as \"user\", e.model, e.tool,
+                p.slug as principal, e.end_user as "user", e.model, e.tool,
                 e.verdict::text as verdict, pv.sha256 as policy_version,
-                coalesce((select string_agg(d.control_id || ':' || d.action::text, ' ' order by d.id)
-                          from detections d where d.event_id = e.id), '') as controls,
-                coalesce((select sum(u.prompt_tokens + u.completion_tokens) from usage u
-                          where u.event_id = e.id), 0)::bigint as tokens,
-                coalesce((select sum(u.cost_usd) from usage u where u.event_id = e.id), 0)::float8 as cost_usd,
+                ds.controls, us.tokens, us.cost_usd,
                 e.latency::text as latency,
                 e.payload_sha256,
                 encode(coalesce(e.prev_hash, ''::bytea), 'hex') as prev_hash,
@@ -212,8 +194,18 @@ pub async fn export(
          from events e
          left join principals p on p.id = e.principal_id
          left join policy_versions pv on pv.id = e.policy_version_id
-         where ($1::text is null or e.ts >= $1::text::timestamptz)
-           and ($2::text is null or e.ts < $2::text::timestamptz)
+         left join lateral (
+                select coalesce(json_agg(json_build_array(d.control_id, d.action::text) order by d.id),
+                                '[]'::json) as controls
+                from detections d where $10 and d.event_id = e.id) ds on true
+         left join lateral (
+                select coalesce(sum(u.prompt_tokens + u.completion_tokens), 0)::bigint as tokens,
+                       coalesce(sum(u.cost_usd), 0)::float8 as cost_usd
+                from usage u where $11 and u.event_id = e.id) us on true
+         where ($1::text is null or e.ts >= case when $1 ~ '^\d{4}-\d{2}-\d{2}$'
+                    then $1::date::timestamp at time zone 'utc' else $1::timestamptz end)
+           and ($2::text is null or e.ts < case when $2 ~ '^\d{4}-\d{2}-\d{2}$'
+                    then ($2::date + 1)::timestamp at time zone 'utc' else $2::timestamptz end)
            and ($3::text is null or p.slug = $3)
            and ($7::text is null or e.end_user = $7)
            and ($4::text is null or exists (
@@ -223,7 +215,7 @@ pub async fn export(
            and ($8::text is null or e.verdict::text = $8)
            and ($9::text is null or e.channel::text = $9)
          order by e.id
-         limit $6",
+         limit $6"#,
     )
     .bind(&filters.from)
     .bind(&filters.to)
@@ -234,6 +226,8 @@ pub async fn export(
     .bind(&filters.user)
     .bind(&filters.verdict)
     .bind(&filters.channel)
+    .bind(selected("controls"))
+    .bind(selected("tokens"))
     .fetch_all(state.db())
     .await;
 
@@ -244,12 +238,14 @@ pub async fn export(
             return refusal(
                 StatusCode::BAD_REQUEST,
                 "invalid_filter",
-                "the export query failed; check the timestamp filters",
+                "the export query failed; check the from/to timestamps",
             );
         }
     };
 
-    if csv {
+    if filters.format.as_deref() == Some("json") || filters.format.is_none() {
+        Json(to_json(&rows, &columns)).into_response()
+    } else {
         (
             [
                 (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
@@ -261,33 +257,27 @@ pub async fn export(
             to_csv(&rows, &columns),
         )
             .into_response()
-    } else {
-        Json(to_json(&rows, &columns)).into_response()
     }
 }
 
-/// Rows as JSON objects holding only the selected columns, values typed.
-pub fn to_json(rows: &[Row], columns: &[&str]) -> Vec<serde_json::Map<String, serde_json::Value>> {
+pub fn to_json(rows: &[Row], columns: &[&Column]) -> Vec<serde_json::Map<String, Value>> {
     rows.iter()
         .map(|row| {
-            let serde_json::Value::Object(mut object) =
-                serde_json::to_value(row).unwrap_or_default()
-            else {
-                return serde_json::Map::new();
-            };
-            object.retain(|key, _| columns.contains(&key.as_str()));
-            object
+            columns
+                .iter()
+                .map(|c| (c.name.to_owned(), (c.value)(row)))
+                .collect()
         })
         .collect()
 }
 
-pub fn to_csv(rows: &[Row], columns: &[&str]) -> String {
-    let mut out = columns.join(",");
+pub fn to_csv(rows: &[Row], columns: &[&Column]) -> String {
+    let mut out = columns.iter().map(|c| c.name).collect::<Vec<_>>().join(",");
     out.push('\n');
-    for r in rows {
+    for row in rows {
         let line: Vec<String> = columns
             .iter()
-            .map(|name| csv_field(&cell(r, name)))
+            .map(|c| csv_field(&csv_text((c.value)(row))))
             .collect();
         out.push_str(&line.join(","));
         out.push('\n');
@@ -295,27 +285,20 @@ pub fn to_csv(rows: &[Row], columns: &[&str]) -> String {
     out
 }
 
-fn cell(r: &Row, column: &str) -> String {
-    match column {
-        "id" => r.id.to_string(),
-        "ts" => r.ts.clone(),
-        "trace_id" => r.trace_id.clone(),
-        "hook" => r.hook.clone(),
-        "channel" => r.channel.clone(),
-        "principal" => r.principal.clone().unwrap_or_default(),
-        "user" => r.user.clone().unwrap_or_default(),
-        "model" => r.model.clone().unwrap_or_default(),
-        "tool" => r.tool.clone().unwrap_or_default(),
-        "verdict" => r.verdict.clone(),
-        "policy_version" => r.policy_version.clone().unwrap_or_default(),
-        "controls" => r.controls.clone(),
-        "tokens" => r.tokens.to_string(),
-        "cost_usd" => format!("{:.6}", r.cost_usd),
-        "latency" => r.latency.clone(),
-        "payload_sha256" => r.payload_sha256.clone().unwrap_or_default(),
-        "prev_hash" => r.prev_hash.clone(),
-        "hash" => r.hash.clone(),
-        _ => String::new(),
+/// A JSON value as one CSV cell; detections read `control:action control:action`.
+fn csv_text(value: Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s,
+        Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                Value::Array(pair) => pair.into_iter().map(csv_text).collect::<Vec<_>>().join(":"),
+                other => csv_text(other),
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        other => other.to_string(),
     }
 }
 
@@ -331,36 +314,6 @@ fn csv_field(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value
-    }
-}
-
-/// The fields of an exported row the hash chain covers: all the verifier
-/// reads, so an export narrowed with `include` still verifies as long as it
-/// has the integrity group.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChainRow {
-    pub id: i64,
-    pub trace_id: String,
-    pub hook: String,
-    pub verdict: String,
-    pub controls: String,
-    pub payload_sha256: Option<String>,
-    pub prev_hash: String,
-    pub hash: String,
-}
-
-impl From<&Row> for ChainRow {
-    fn from(row: &Row) -> Self {
-        Self {
-            id: row.id,
-            trace_id: row.trace_id.clone(),
-            hook: row.hook.clone(),
-            verdict: row.verdict.clone(),
-            controls: row.controls.clone(),
-            payload_sha256: row.payload_sha256.clone(),
-            prev_hash: row.prev_hash.clone(),
-            hash: row.hash.clone(),
-        }
     }
 }
 
@@ -389,12 +342,11 @@ pub fn verify_export(rows: &[ChainRow]) -> ExportReport {
         ..ExportReport::default()
     };
     let mut previous: Option<&ChainRow> = None;
-
     for row in rows {
         if previous.is_none_or(|p| p.hash != row.prev_hash) {
             report.segments += 1;
         }
-        if recomputed(row).as_deref() != Some(row.hash.as_str()) {
+        if row.recomputed().as_deref() != Some(row.hash.as_str()) {
             report.broken.push(row.id);
         }
         previous = Some(row);
@@ -402,82 +354,90 @@ pub fn verify_export(rows: &[ChainRow]) -> ExportReport {
     report
 }
 
-fn recomputed(row: &ChainRow) -> Option<String> {
-    let trace_id = Uuid::parse_str(&row.trace_id).ok()?;
-    let prev = unhex(&row.prev_hash)?;
-    let detections: Vec<(&str, &str)> = row
-        .controls
-        .split_whitespace()
-        .map(|pair| pair.rsplit_once(':'))
-        .collect::<Option<_>>()?;
-    Some(hex(&chain_hash(
-        &prev,
-        trace_id,
-        &row.hook,
-        &row.verdict,
-        row.payload_sha256.as_deref().unwrap_or_default(),
-        &detections,
-    )))
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
-        return None;
+impl ChainRow {
+    fn recomputed(&self) -> Option<String> {
+        let detections: Vec<(&str, &str)> = self
+            .controls
+            .iter()
+            .map(|(c, a)| (c.as_str(), a.as_str()))
+            .collect();
+        Some(hex(&chain_hash(
+            &unhex(&self.prev_hash)?,
+            Uuid::parse_str(&self.trace_id).ok()?,
+            &self.hook,
+            &self.verdict,
+            self.payload_sha256.as_deref().unwrap_or_default(),
+            &detections,
+        )))
     }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(id: i64, prev_hash: &str, verdict: &str, controls: &str) -> Row {
+    fn row(id: i64, prev_hash: &str, verdict: &str, controls: &[(&str, &str)]) -> Row {
         let mut row = Row {
-            id,
+            chain: ChainRow {
+                id,
+                trace_id: "6f1c1b7e-58f0-4a53-9a43-2d2e8b2f0c11".into(),
+                hook: "prompt_in".into(),
+                verdict: verdict.into(),
+                controls: sqlx::types::Json(
+                    controls
+                        .iter()
+                        .map(|(c, a)| ((*c).to_owned(), (*a).to_owned()))
+                        .collect(),
+                ),
+                payload_sha256: Some("ab".repeat(32)),
+                prev_hash: prev_hash.into(),
+                hash: String::new(),
+            },
             ts: "2026-10-03T12:00:00.000Z".into(),
-            trace_id: "6f1c1b7e-58f0-4a53-9a43-2d2e8b2f0c11".into(),
-            hook: "prompt_in".into(),
             channel: "llm".into(),
             principal: Some("console-chat".into()),
             user: Some("anna@example.com".into()),
             model: None,
             tool: None,
-            verdict: verdict.into(),
             policy_version: None,
-            controls: controls.into(),
             tokens: 0,
             cost_usd: 0.0,
             latency: r#"{"deterministic_us": 12}"#.into(),
-            payload_sha256: Some("ab".repeat(32)),
-            prev_hash: prev_hash.into(),
-            hash: String::new(),
         };
-        row.hash = recomputed(&ChainRow::from(&row)).expect("a well-formed row");
+        row.chain.hash = row.chain.recomputed().expect("a well-formed row");
         row
     }
 
     /// Three linked events, as the gateway writes them.
     fn chain() -> Vec<Row> {
-        let first = row(1, "", "allow", "");
-        let second = row(2, &first.hash, "block", "secret.aws-access-key:block");
+        let first = row(1, "", "allow", &[]);
+        let second = row(
+            2,
+            &first.chain.hash,
+            "block",
+            &[("secret.aws-access-key", "block")],
+        );
         let third = row(
             3,
-            &second.hash,
+            &second.chain.hash,
             "redact",
-            "pii.email:redact pii.phone:redact",
+            &[("pii.email", "redact"), ("pii.phone", "redact")],
         );
         vec![first, second, third]
     }
 
     fn check(rows: &[Row]) -> ExportReport {
-        verify_export(&rows.iter().map(ChainRow::from).collect::<Vec<_>>())
+        verify_export(&rows.iter().map(|r| r.chain.clone()).collect::<Vec<_>>())
     }
 
-    fn all() -> Vec<&'static str> {
-        columns(None).unwrap()
+    fn names(include: Option<&str>) -> Vec<&'static str> {
+        columns(include).unwrap().iter().map(|c| c.name).collect()
+    }
+
+    /// JSON as the endpoint serves it, read back as the verifier reads it.
+    fn exported(rows: &[Row], include: Option<&str>) -> Result<Vec<ChainRow>, serde_json::Error> {
+        let json = serde_json::to_string(&to_json(rows, &columns(include).unwrap())).unwrap();
+        serde_json::from_str(&json)
     }
 
     #[test]
@@ -491,32 +451,32 @@ mod tests {
     #[test]
     fn csv_has_a_header_and_one_line_per_row() {
         let rows = chain();
-        let csv = to_csv(&rows[1..2], &all());
+        let csv = to_csv(&rows[2..], &columns(None).unwrap());
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("id,ts,"));
         assert!(lines[0].ends_with(",payload_sha256,prev_hash,hash"));
         assert!(lines[1].starts_with(
-            "2,2026-10-03T12:00:00.000Z,6f1c1b7e-58f0-4a53-9a43-2d2e8b2f0c11,prompt_in,llm,console-chat,anna@example.com,,,block,"
+            "3,2026-10-03T12:00:00.000Z,6f1c1b7e-58f0-4a53-9a43-2d2e8b2f0c11,prompt_in,llm,console-chat,anna@example.com,,,redact,,pii.email:redact pii.phone:redact,0,0.0,"
         ));
         assert!(lines[1].ends_with(&format!(
             ",{},{},{}",
             "ab".repeat(32),
-            rows[0].hash,
-            rows[1].hash
+            rows[1].chain.hash,
+            rows[2].chain.hash
         )));
     }
 
     #[test]
-    fn no_include_means_every_column() {
-        assert_eq!(all().len(), COLUMNS.len());
-        assert_eq!(columns(Some("")).unwrap(), all());
-    }
-
-    #[test]
-    fn include_keeps_the_event_columns_and_the_chosen_groups() {
+    fn include_selects_groups_and_keeps_the_event_columns() {
+        assert_eq!(names(None).len(), COLUMNS.len());
         assert_eq!(
-            columns(Some("identity")).unwrap(),
+            names(Some("")),
+            ["id", "ts", "trace_id", "hook", "channel", "verdict"],
+            "an empty list asks for the event columns only"
+        );
+        assert_eq!(
+            names(Some("identity")),
             [
                 "id",
                 "ts",
@@ -529,55 +489,45 @@ mod tests {
             ]
         );
         assert_eq!(
-            columns(Some("usage, performance")).unwrap(),
+            names(Some("usage, performance")),
             [
                 "id", "ts", "trace_id", "hook", "channel", "verdict", "tokens", "cost_usd",
                 "latency"
             ]
         );
+        assert!(columns(Some("identity,prompts")).is_err());
     }
 
     #[test]
     fn integrity_brings_the_detections_it_hashes() {
-        let chosen = columns(Some("integrity")).unwrap();
+        let chosen = names(Some("integrity"));
         assert!(chosen.contains(&"controls"), "{chosen:?}");
         assert!(chosen.ends_with(&["payload_sha256", "prev_hash", "hash"]));
     }
 
     #[test]
-    fn an_unknown_group_is_refused() {
-        assert!(columns(Some("identity,prompts")).is_err());
-    }
-
-    #[test]
-    fn narrowed_csv_and_json_hold_only_the_chosen_columns() {
-        let rows = chain();
-        let chosen = columns(Some("identity")).unwrap();
-        assert_eq!(
-            to_csv(&rows[..1], &chosen).lines().next(),
-            Some("id,ts,trace_id,hook,channel,principal,user,verdict")
-        );
-        let json = to_json(&rows[..1], &chosen);
+    fn json_holds_only_the_chosen_columns_with_typed_values() {
+        let json = to_json(&chain()[1..2], &columns(Some("detections")).unwrap());
         let mut keys: Vec<&str> = json[0].keys().map(String::as_str).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
             [
-                "channel",
-                "hook",
-                "id",
-                "principal",
-                "trace_id",
-                "ts",
-                "user",
-                "verdict"
+                "channel", "controls", "hook", "id", "trace_id", "ts", "verdict"
             ]
         );
+        assert_eq!(json[0]["id"], serde_json::json!(2));
         assert_eq!(
-            json[0]["id"],
-            serde_json::json!(1),
-            "values keep their JSON types"
+            json[0]["controls"],
+            serde_json::json!([["secret.aws-access-key", "block"]])
         );
+    }
+
+    #[test]
+    fn filters_outside_the_known_values_are_refused() {
+        assert!(one_of("verdict", Some("blocked"), VERDICTS).is_err());
+        assert!(one_of("verdict", Some("block"), VERDICTS).is_ok());
+        assert!(one_of("verdict", None, VERDICTS).is_ok());
     }
 
     #[test]
@@ -593,17 +543,11 @@ mod tests {
     }
 
     #[test]
-    fn an_edited_verdict_breaks_its_row() {
+    fn an_edited_verdict_or_detection_breaks_its_row() {
         let mut rows = chain();
-        rows[1].verdict = "allow".into(); // hide a block
-        assert_eq!(check(&rows).broken, vec![2]);
-    }
-
-    #[test]
-    fn a_removed_detection_breaks_its_row() {
-        let mut rows = chain();
-        rows[2].controls = "pii.email:redact".into();
-        assert_eq!(check(&rows).broken, vec![3]);
+        rows[1].chain.verdict = "allow".into(); // hide a block
+        rows[2].chain.controls.0.pop(); // drop a detection
+        assert_eq!(check(&rows).broken, vec![2, 3]);
     }
 
     #[test]
@@ -623,8 +567,8 @@ mod tests {
     #[test]
     fn a_forged_hash_does_not_verify() {
         let mut rows = chain();
-        rows[1].verdict = "allow".into();
-        rows[1].hash = "00".repeat(32); // the forger cannot reproduce it
+        rows[1].chain.verdict = "allow".into();
+        rows[1].chain.hash = "00".repeat(32); // the forger cannot reproduce it
         let report = check(&rows);
         assert_eq!(report.broken, vec![2]);
         assert_eq!(
@@ -634,17 +578,19 @@ mod tests {
     }
 
     #[test]
-    fn a_narrowed_json_export_still_verifies() {
-        let chosen = columns(Some("integrity")).unwrap();
-        let json = serde_json::to_string(&to_json(&chain(), &chosen)).unwrap();
-        let back: Vec<ChainRow> = serde_json::from_str(&json).unwrap();
-        assert_eq!(verify_export(&back).broken, Vec::<i64>::new());
+    fn a_json_export_with_integrity_verifies_even_when_narrowed() {
+        for include in [None, Some("integrity")] {
+            let back = exported(&chain(), include).unwrap();
+            assert_eq!(
+                verify_export(&back).broken,
+                Vec::<i64>::new(),
+                "{include:?}"
+            );
+        }
     }
 
     #[test]
     fn an_export_without_integrity_cannot_be_verified() {
-        let chosen = columns(Some("identity,detections")).unwrap();
-        let json = serde_json::to_string(&to_json(&chain(), &chosen)).unwrap();
-        assert!(serde_json::from_str::<Vec<ChainRow>>(&json).is_err());
+        assert!(exported(&chain(), Some("identity,detections")).is_err());
     }
 }

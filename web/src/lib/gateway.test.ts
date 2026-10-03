@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  EXPORT_GROUPS,
   MAX_POLICY_BYTES,
   auditExportFilename,
   auditExportPath,
@@ -178,69 +177,44 @@ void test("describePolicySave summarises the diff", () => {
   );
 });
 
-void test("auditExportPath forwards only the filters the gateway knows", () => {
-  assert.equal(auditExportPath("csv", {}), "/admin/audit/export?format=csv");
+void test("auditExportPath passes the dialog's non-empty fields through", () => {
+  const search = new URLSearchParams({
+    format: "json",
+    verdict: "block",
+    principal: "demo-agent",
+    from: "2026-10-03",
+    user: "  anna@example.com ",
+    control: "",
+  });
   assert.equal(
-    auditExportPath("json", {
-      verdict: "block",
-      channel: "mcp",
-      principal: "demo-agent",
-      user: "anna@example.com",
-      control: "secret.aws-access-key",
-    }),
-    "/admin/audit/export?format=json&verdict=block&channel=mcp&principal=demo-agent&user=anna%40example.com&control=secret.aws-access-key",
+    auditExportPath(search),
+    "/admin/audit/export?format=json&verdict=block&principal=demo-agent&from=2026-10-03&user=anna%40example.com",
   );
-  // unknown values are dropped, not forwarded
+  // a value cannot add parameters of its own
   assert.equal(
-    auditExportPath("csv", {
-      verdict: "nope",
-      channel: "x&limit=1",
-      principal: "",
-      control: "a b",
-    }),
-    "/admin/audit/export?format=csv",
-  );
-  // a slug cannot add parameters of its own
-  assert.equal(
-    auditExportPath("csv", { principal: "a&limit=1" }),
-    "/admin/audit/export?format=csv&principal=a%26limit%3D1",
+    auditExportPath(new URLSearchParams({ principal: "a&limit=1" })),
+    "/admin/audit/export?principal=a%26limit%3D1",
   );
 });
 
-void test("auditExportPath turns inclusive UTC days into the gateway's range", () => {
+void test("auditExportPath joins the include checkboxes and keeps an empty choice", () => {
+  // the dialog always sends a blank `include`, so unticking everything is
+  // "event columns only" rather than "no preference"
   assert.equal(
-    auditExportPath("csv", { from: "2026-10-03", to: "2026-10-04" }),
-    "/admin/audit/export?format=csv&from=2026-10-03T00%3A00%3A00Z&to=2026-10-05T00%3A00%3A00Z",
-  );
-  // month end rolls over; garbage is dropped
-  assert.equal(
-    auditExportPath("csv", { to: "2026-10-31", from: "yesterday" }),
-    "/admin/audit/export?format=csv&to=2026-11-01T00%3A00%3A00Z",
-  );
-});
-
-void test("auditExportPath sends include only when it narrows the export", () => {
-  assert.equal(
-    auditExportPath("json", { include: ["identity", "integrity", "prompts"] }),
-    "/admin/audit/export?format=json&include=identity%2Cintegrity",
+    auditExportPath(
+      new URLSearchParams([
+        ["include", ""],
+        ["include", "identity"],
+        ["include", "integrity"],
+      ]),
+    ),
+    "/admin/audit/export?include=identity%2Cintegrity",
   );
   assert.equal(
-    auditExportPath("json", { include: EXPORT_GROUPS.map((g) => g.id) }),
-    "/admin/audit/export?format=json",
+    auditExportPath(new URLSearchParams([["include", ""]])),
+    "/admin/audit/export?include=",
   );
-});
-
-void test("auditExportPath sends a limit only below the gateway's cap", () => {
-  assert.equal(
-    auditExportPath("csv", { limit: "500" }),
-    "/admin/audit/export?format=csv&limit=500",
-  );
-  for (const limit of ["0", "-3", "2.5", "10000", "99999", "abc"]) {
-    assert.equal(
-      auditExportPath("csv", { limit }),
-      "/admin/audit/export?format=csv",
-    );
-  }
+  assert.equal(auditExportPath(new URLSearchParams()), "/admin/audit/export?");
 });
 
 void test("auditExportFilename dates the download", () => {

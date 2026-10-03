@@ -320,79 +320,24 @@ export const EXPORT_GROUPS = [
 ] as const;
 export type ExportGroup = (typeof EXPORT_GROUPS)[number]["id"];
 
-/** The gateway's cap on one export. */
+/** The gateway's cap on one export; it clamps `limit` to this itself. */
 export const MAX_EXPORT_ROWS = 10_000;
 
-/** Everything the export dialog can ask for. */
-export interface AuditExportFilters {
-  verdict?: string;
-  channel?: string;
-  /** Principal slug (the page filters by id; the export takes the slug). */
-  principal?: string;
-  /** End user, exactly as recorded. */
-  user?: string;
-  /** Control id that fired. */
-  control?: string;
-  /** UTC days, `YYYY-MM-DD`; `to` is inclusive. */
-  from?: string;
-  to?: string;
-  /** Column groups; every group when empty or absent. */
-  include?: readonly string[];
-  limit?: string;
-}
-
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const CONTROL_ID = /^[\w.-]{1,100}$/;
-
-function utcDay(day: string, offsetDays = 0): string | null {
-  if (!DAY.test(day)) {
-    return null;
-  }
-  const date = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  date.setUTCDate(date.getUTCDate() + offsetDays);
-  return date.toISOString().replace(".000Z", "Z");
-}
-
 /**
- * Path + query for the gateway's audit export. Values outside what the gateway
- * accepts are dropped rather than forwarded, so a tampered link cannot smuggle
- * extra parameters through the console.
+ * Path for the gateway's audit export from the export dialog's fields. Values
+ * pass through as they are (URL-encoded, so none can add parameters of its
+ * own) and the gateway validates them. The repeated `include` checkboxes
+ * become the one comma-separated list the gateway reads.
  */
-export function auditExportPath(
-  format: ExportFormat,
-  filters: AuditExportFilters,
-): string {
-  const query = new URLSearchParams({ format });
-  const set = (key: string, value: string | null | undefined) => {
-    if (value !== undefined && value !== null && value.trim() !== "") {
+export function auditExportPath(search: URLSearchParams): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of search) {
+    if (key !== "include" && value.trim() !== "") {
       query.set(key, value.trim());
     }
-  };
-  if ((VERDICTS as readonly string[]).includes(filters.verdict ?? "")) {
-    set("verdict", filters.verdict);
   }
-  if ((CHANNELS as readonly string[]).includes(filters.channel ?? "")) {
-    set("channel", filters.channel);
-  }
-  set("principal", filters.principal);
-  set("user", filters.user);
-  if (CONTROL_ID.test(filters.control ?? "")) {
-    set("control", filters.control);
-  }
-  set("from", utcDay(filters.from ?? ""));
-  // `to` is inclusive in the dialog, exclusive at the gateway: the next midnight
-  set("to", utcDay(filters.to ?? "", 1));
-  const known = EXPORT_GROUPS.map((g) => g.id as string);
-  const include = (filters.include ?? []).filter((g) => known.includes(g));
-  if (include.length > 0 && include.length < known.length) {
-    set("include", [...new Set(include)].join(","));
-  }
-  const limit = Number(filters.limit);
-  if (Number.isInteger(limit) && limit >= 1 && limit < MAX_EXPORT_ROWS) {
-    set("limit", String(limit));
+  if (search.has("include")) {
+    query.set("include", search.getAll("include").filter(Boolean).join(","));
   }
   return `/admin/audit/export?${query.toString()}`;
 }

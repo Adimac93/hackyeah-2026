@@ -2,69 +2,35 @@ import { NextResponse } from "next/server";
 
 import { getSession } from "@/lib/auth";
 import { canAccessConsole } from "@/lib/domain";
-import {
-  EXPORT_FORMATS,
-  auditExportFilename,
-  auditExportPath,
-} from "@/lib/gateway";
-import type { ExportFormat } from "@/lib/gateway";
+import { auditExportFilename, auditExportPath } from "@/lib/gateway";
 import { gatewayAsUser } from "@/lib/gateway-admin";
+import { liveError } from "@/lib/gateway-live";
 
 const TIMEOUT_MS = 30_000;
 
 /**
- * Download the audit log with the settings chosen in the Activity page's export
- * dialog, through the gateway's `GET /admin/audit/export` as the signed-in user
- * (the gateway checks their team role). With the integrity columns, a JSON file
- * can be checked offline with `just verify-audit --file`.
+ * Download the audit log with the Activity page's export settings, through the
+ * gateway's `GET /admin/audit/export` as the signed-in user. The gateway checks
+ * their role and validates the settings; this route only forwards them and
+ * streams the file back.
  */
 export async function GET(request: Request) {
-  const { supabase, member } = await getSession();
+  const { member } = await getSession();
   if (member === null || !canAccessConsole(member.role)) {
     return new NextResponse("Not found", { status: 404 });
   }
-
-  const sp = new URL(request.url).searchParams;
-  const requested = sp.get("format") ?? "csv";
-  if (!(EXPORT_FORMATS as readonly string[]).includes(requested)) {
-    return new NextResponse("format must be csv or json", { status: 400 });
-  }
-  const format = requested as ExportFormat;
-
-  // The page filters by principal id; the export takes the slug.
-  let principal: string | undefined;
-  const principalId = sp.get("principal") ?? "";
-  if (principalId !== "") {
-    const { data } = await supabase
-      .from("principals")
-      .select("slug")
-      .eq("id", principalId)
-      .maybeSingle<{ slug: string }>();
-    if (data === null) {
-      return new NextResponse("Unknown principal", { status: 400 });
-    }
-    principal = data.slug;
-  }
-
   const gateway = await gatewayAsUser();
   if ("error" in gateway) {
     return new NextResponse(gateway.error, { status: 503 });
   }
 
-  const path = auditExportPath(format, {
-    verdict: sp.get("verdict") ?? undefined,
-    channel: sp.get("channel") ?? undefined,
-    principal,
-    user: sp.get("user") ?? undefined,
-    control: sp.get("control") ?? undefined,
-    from: sp.get("from") ?? undefined,
-    to: sp.get("to") ?? undefined,
-    include: sp.getAll("include"),
-    limit: sp.get("limit") ?? undefined,
-  });
+  const search = new URL(request.url).searchParams;
+  const format = search.get("format") === "json" ? "json" : "csv";
+  search.set("format", format);
+
   let upstream: Response;
   try {
-    upstream = await fetch(`${gateway.base}${path}`, {
+    upstream = await fetch(`${gateway.base}${auditExportPath(search)}`, {
       headers: { Authorization: `Bearer ${gateway.token}` },
       cache: "no-store",
       redirect: "error",
@@ -78,14 +44,10 @@ export async function GET(request: Request) {
     return new NextResponse("The gateway is unreachable.", { status: 502 });
   }
   if (!upstream.ok) {
-    const status =
-      upstream.status === 401 || upstream.status === 403 ? 403 : 502;
-    return new NextResponse(
-      status === 403
-        ? "Your role may not export the audit log."
-        : "The gateway could not export the audit log.",
-      { status },
-    );
+    const body: unknown = await upstream.json().catch(() => null);
+    return new NextResponse(liveError(upstream.status, body), {
+      status: upstream.status >= 500 ? 502 : upstream.status,
+    });
   }
 
   return new NextResponse(upstream.body, {

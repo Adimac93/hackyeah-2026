@@ -160,7 +160,7 @@ export default async function ActivityPage({
             principals={principals}
             verdict={verdict}
             channel={channel}
-            principal={principal}
+            principal={principals.find((p) => p.id === principal)?.slug ?? ""}
             statusFiltered={status !== ""}
           />
         </span>

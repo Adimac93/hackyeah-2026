@@ -342,6 +342,18 @@ pub fn hex(bytes: &[u8]) -> String {
     out
 }
 
+/// The inverse of [`hex`]; `None` for anything that is not lowercase or
+/// uppercase hex of even length.
+pub fn unhex(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 const fn hook_name(hook: Hook) -> &'static str {
     match hook {
         Hook::PromptIn => "prompt_in",

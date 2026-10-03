@@ -150,6 +150,9 @@ export function PageHeader({
   );
 }
 
+export const primaryButtonClass =
+  "rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400";
+
 export function ButtonLink({
   href,
   children,
@@ -158,10 +161,7 @@ export function ButtonLink({
   children: ReactNode;
 }) {
   return (
-    <Link
-      href={href}
-      className="rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
-    >
+    <Link href={href} className={primaryButtonClass}>
       {children}
     </Link>
   );
