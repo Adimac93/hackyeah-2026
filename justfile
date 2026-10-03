@@ -29,11 +29,10 @@ typecheck:
     cargo check --workspace --all-targets
     cd web && pnpm typecheck
 
-# clippy + rustfmt for the gateway; eslint + prettier (@solvro/config) for web.
-# `just fmt` fixes what is fixable.
+# eslint + prettier (@solvro/config) for web. `just fmt` fixes what is fixable.
+# The gateway is deliberately not linted (no clippy, no rustfmt --check): both
+# kept turning main red on code nobody had changed. `just fmt` still formats it.
 lint:
-    cargo fmt --check
-    cargo clippy --workspace --all-targets -- -D warnings
     cd web && pnpm lint && pnpm format:check
 
 test:

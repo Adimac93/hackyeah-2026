@@ -90,3 +90,7 @@ export function ChipIcon(p: IconProps) {
     />
   );
 }
+
+export function PlugIcon(p: IconProps) {
+  return <Icon {...p} d="M9 3v5M15 3v5M6 8h12v3a6 6 0 01-12 0V8zM12 17v4" />;
+}

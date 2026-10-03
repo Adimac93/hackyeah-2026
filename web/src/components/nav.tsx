@@ -10,6 +10,7 @@ import {
   ChipIcon,
   DocumentIcon,
   GaugeIcon,
+  PlugIcon,
   SlidersIcon,
   UsersIcon,
 } from "./icons";
@@ -17,6 +18,7 @@ import {
 const LINKS = [
   { href: "/dashboard", label: "Overview", Icon: GaugeIcon },
   { href: "/activity", label: "Activity", Icon: ActivityIcon },
+  { href: "/mcp", label: "MCP", Icon: PlugIcon },
   { href: "/controls", label: "Controls", Icon: SlidersIcon },
   { href: "/incidents", label: "Incidents", Icon: AlertIcon },
   { href: "/policies", label: "Policies", Icon: DocumentIcon },
