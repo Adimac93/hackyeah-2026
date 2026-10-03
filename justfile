@@ -75,24 +75,27 @@ verify-audit:
 db-new NAME:
     supabase migration new {{NAME}}
 
-# apply new web/supabase/migrations to the database: just migrate (preview: just migrate --dry-run)
+# One migration directory for one database: the gateway's schema and the web
+# app's share a timeline, so a single ordering is the only one that can be
+# correct.
+#
+# apply pending supabase/migrations: just migrate (preview: just migrate --dry-run)
 migrate *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd web
     # the URL may live in web/.env.local next to the other Supabase settings
-    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
-    pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL in .env or web/.env.local (Supabase → Connect → connection string)}" {{FLAGS}}
+    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f web/.env.local ]; then set -a; . ./web/.env.local; set +a; fi
+    url="${SUPABASE_DB_URL:-${DATABASE_URL:-}}"
+    : "${url:?set DATABASE_URL or SUPABASE_DB_URL (Supabase → Connect → connection string)}"
+    pnpm dlx supabase@2.119.0 db push --db-url "$url" {{FLAGS}}
 
-# load demo data for both apps: gateway principals and budgets, then web fixtures
+# load demo data: gateway identities and budgets, then the web fixtures
 seed:
     #!/usr/bin/env bash
     set -euo pipefail
-    gateway_url="${DATABASE_URL:-${SUPABASE_DB_URL:-}}"
-    web_url="${SUPABASE_DB_URL:-${DATABASE_URL:-}}"
-    : "${gateway_url:?set DATABASE_URL (or SUPABASE_DB_URL) in .env}"
-    psql "$gateway_url" -v ON_ERROR_STOP=1 -f supabase/seed.sql
-    psql "$web_url" -v ON_ERROR_STOP=1 -f web/supabase/seed.sql
+    url="${DATABASE_URL:-${SUPABASE_DB_URL:-}}"
+    : "${url:?set DATABASE_URL (or SUPABASE_DB_URL) in .env}"
+    psql "$url" -v ON_ERROR_STOP=1 -f supabase/seed.sql
 
 # run the gateway and the deliberately vulnerable demo MCP server together
 demo:

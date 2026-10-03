@@ -21,6 +21,10 @@ rather than invent.
 
 ### Database rules
 
+- **One migration directory: `supabase/migrations/`.** The gateway's schema and
+  the web app's share a database, so they share a timeline — two directories
+  cannot express a single correct ordering. `just migrate` applies them,
+  `just db-new <name>` creates one.
 - **Change the schema with a migration, never in the Supabase console.** `supabase
   migration new <name>`, edit the file, apply, commit. A console edit is invisible to
   everyone else's checkout.
