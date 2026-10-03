@@ -40,7 +40,12 @@ seed:
 
 # apply new web/supabase/migrations to the database: just migrate (preview: just migrate --dry-run)
 migrate *FLAGS:
-    cd web && pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL (Supabase → Connect → connection string)}" {{FLAGS}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd web
+    # the URL may live in web/.env.local next to the other Supabase settings
+    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
+    pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL in .env or web/.env.local (Supabase → Connect → connection string)}" {{FLAGS}}
 
 # ship to the demo URL. Wire this up on day one, not at hour 23.
 deploy:
