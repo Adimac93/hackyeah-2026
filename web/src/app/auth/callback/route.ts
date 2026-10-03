@@ -19,7 +19,12 @@ export async function GET(request: NextRequest) {
         : await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
       : await supabase.auth.exchangeCodeForSession(code);
 
+  // only same-origin relative paths — never `//evil.com`
+  const next = searchParams.get("next") ?? "";
+  const destination =
+    next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+
   return NextResponse.redirect(
-    new URL(error === null ? "/dashboard" : "/login?error=link", origin),
+    new URL(error === null ? destination : "/login?error=link", origin),
   );
 }

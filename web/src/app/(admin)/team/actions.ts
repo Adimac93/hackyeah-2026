@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 
 import { getSession } from "@/lib/auth";
 import { TEAM_ROLES, formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 async function requireAdmin() {
   const session = await getSession();
@@ -85,11 +87,36 @@ export async function inviteMember(
   }
 
   revalidatePath("/team");
+  if (data === "granted") {
+    return {
+      ok: `${email} already has an account and now has ${role} access.`,
+    };
+  }
+
+  // the invite is stored either way; the email is a convenience on top
+  const admin = createAdminClient();
+  if (admin === null) {
+    return {
+      ok: `Invite saved for ${email} as ${role}. No email sent (SUPABASE_SECRET_KEY isn't set) — ask them to sign up at /login.`,
+    };
+  }
+  const requestHeaders = await headers();
+  const origin = requestHeaders.get("origin") ?? "";
+  const { error: mailError } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${origin}/auth/accept`,
+  });
+  if (mailError !== null) {
+    console.error(
+      "[team] invite email failed",
+      mailError.status,
+      mailError.code,
+    );
+    return {
+      error: `Invite saved for ${email}, but the email couldn't be sent (${mailError.message}). They can still sign up at /login.`,
+    };
+  }
   return {
-    ok:
-      data === "granted"
-        ? `${email} already has an account and now has ${role} access.`
-        : `Invited ${email} as ${role}. They get access once they sign up and confirm their email.`,
+    ok: `Invitation email sent to ${email}. They get ${role} access once they accept it.`,
   };
 }
 
