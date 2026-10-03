@@ -9,11 +9,15 @@
 //! catalog decides who pays: by default a semantic control runs only once a
 //! deterministic control has flagged the traffic as suspicious.
 //!
-//! Every detector here is local. task.md §7 provides no paid API subscriptions,
-//! so the judge runs against Ollama on the same machine.
+//! Every detector here is self-hosted. task.md §7 provides no paid API
+//! subscriptions, so the judge is our own Ollama: on the same machine in
+//! development, on a VPC-internal Vertex AI endpoint in production
+//! (`SEMANTIC_BACKEND=vertex`, see `infra/`).
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -65,13 +69,30 @@ impl Registry {
     pub fn from_env(http: reqwest::Client) -> Self {
         let mut detectors = HashMap::new();
 
-        let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
         let model = std::env::var("SEMANTIC_MODEL").unwrap_or_else(|_| "llama3.1:8b".into());
-        tracing::info!(%url, %model, "semantic tier: llm_judge");
-        detectors.insert(
-            "llm_judge".to_owned(),
-            Detector::LlmJudge(LlmJudge { http, url, model }),
-        );
+        let judge = if std::env::var("SEMANTIC_BACKEND").as_deref() == Ok("vertex") {
+            LlmJudge::vertex(http, model)
+        } else {
+            let base =
+                std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+            Ok(LlmJudge {
+                http,
+                url: format!("{base}/api/generate"),
+                model,
+                auth: None,
+            })
+        };
+
+        match judge {
+            Ok(judge) => {
+                tracing::info!(url = %judge.url, model = %judge.model, "semantic tier: llm_judge");
+                detectors.insert("llm_judge".to_owned(), Detector::LlmJudge(judge));
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                "semantic tier: llm_judge misconfigured, controls that use it will fail per fail_mode"
+            ),
+        }
 
         Self { detectors }
     }
@@ -115,17 +136,57 @@ impl Registry {
 
 pub struct LlmJudge {
     http: reqwest::Client,
+    /// Where Ollama's `/api/generate` body is POSTed: Ollama itself, or a
+    /// Vertex `:rawPredict` URL that forwards the body to Ollama untouched.
     url: String,
     model: String,
+    auth: Option<TokenSource>,
 }
 
 impl LlmJudge {
+    /// The judge behind a Vertex AI Private Service Connect endpoint. The
+    /// endpoint serves a self-signed certificate, which is pinned as the only
+    /// trusted root rather than turning verification off.
+    fn vertex(metadata: reqwest::Client, model: String) -> Result<Self, String> {
+        let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
+        let url = var("VERTEX_JUDGE_URL")?;
+        let certs = reqwest::Certificate::from_pem_bundle(var("VERTEX_JUDGE_CA")?.as_bytes())
+            .map_err(|e| format!("VERTEX_JUDGE_CA is not a PEM bundle: {e}"))?;
+        let mut builder = reqwest::Client::builder().tls_certs_only(certs);
+
+        // The endpoint's hostname resolves only through a private DNS zone.
+        // Pinning it to the PSC address keeps the judge reachable whatever
+        // resolver the runtime happens to use.
+        if let Ok(ip) = std::env::var("VERTEX_JUDGE_IP") {
+            let ip: IpAddr = ip
+                .parse()
+                .map_err(|e| format!("VERTEX_JUDGE_IP is not an IP: {e}"))?;
+            let parsed = reqwest::Url::parse(&url).map_err(|e| format!("VERTEX_JUDGE_URL: {e}"))?;
+            let host = parsed.host_str().ok_or("VERTEX_JUDGE_URL has no host")?;
+            builder = builder.resolve(host, SocketAddr::new(ip, 443));
+        }
+
+        Ok(Self {
+            http: builder.build().map_err(|e| e.to_string())?,
+            url,
+            model,
+            auth: Some(TokenSource::new(metadata)),
+        })
+    }
+
     async fn score(&self, text: &str, looking_for: &str) -> Result<f32, DetectorError> {
         let prompt = build_prompt(text, looking_for);
 
-        let response = self
-            .http
-            .post(format!("{}/api/generate", self.url))
+        let mut request = self.http.post(&self.url);
+        if let Some(auth) = &self.auth {
+            let token = auth
+                .token()
+                .await
+                .map_err(|e| DetectorError::Unreachable("llm_judge".into(), e))?;
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
             .json(&json!({
                 "model": self.model,
                 "prompt": prompt,
@@ -150,6 +211,67 @@ impl LlmJudge {
 
         parse_score(body)
             .ok_or_else(|| DetectorError::Unusable("llm_judge".into(), body.to_owned()))
+    }
+}
+
+/// OAuth access tokens from the metadata server of the Google runtime the
+/// gateway runs on. Vertex endpoints refuse unauthenticated calls even when
+/// they are reachable only from inside the VPC.
+struct TokenSource {
+    http: reqwest::Client,
+    cached: Mutex<Option<(String, Instant)>>,
+}
+
+const METADATA_TOKEN_URL: &str =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+
+/// Refresh this long before expiry, so a token never lapses mid-request.
+const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(60);
+
+fn token_is_fresh(expires_at: Instant, now: Instant) -> bool {
+    now + TOKEN_REFRESH_MARGIN < expires_at
+}
+
+impl TokenSource {
+    fn new(http: reqwest::Client) -> Self {
+        Self {
+            http,
+            cached: Mutex::new(None),
+        }
+    }
+
+    /// The lock is never held across the fetch: two requests racing a refresh
+    /// both fetch, which is cheap, and neither blocks the other.
+    async fn token(&self) -> Result<String, String> {
+        if let Some((token, expires_at)) = self.cached.lock().map_err(|e| e.to_string())?.as_ref()
+            && token_is_fresh(*expires_at, Instant::now())
+        {
+            return Ok(token.clone());
+        }
+
+        let body: Value = self
+            .http
+            .get(METADATA_TOKEN_URL)
+            .header("Metadata-Flavor", "Google")
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| format!("metadata server: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("metadata server: {e}"))?;
+
+        let token = body
+            .get("access_token")
+            .and_then(Value::as_str)
+            .ok_or("metadata server returned no access_token")?
+            .to_owned();
+        let lifetime =
+            Duration::from_secs(body.get("expires_in").and_then(Value::as_u64).unwrap_or(0));
+
+        *self.cached.lock().map_err(|e| e.to_string())? =
+            Some((token.clone(), Instant::now() + lifetime));
+        Ok(token)
     }
 }
 

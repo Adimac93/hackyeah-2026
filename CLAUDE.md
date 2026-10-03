@@ -16,8 +16,10 @@ rather than invent.
 - **Semantic tier** — an `llm_judge` detector calling a local Ollama model. Runs only
   when a deterministic control flags the traffic (`escalate_when`), so clean requests pay
   nothing. **Ollama must be running for the demo**: with no detector the controls fail
-  closed and suspicious traffic is refused. A Presidio sidecar for contextual PII is still
-  unbuilt; that control ships disabled.
+  closed and suspicious traffic is refused. In production the same Ollama image runs on
+  a Vertex AI endpoint reachable only inside the VPC (`infra/`, `SEMANTIC_BACKEND=vertex`);
+  it bills ~$25/day while deployed — tear it down after the demo (`infra/README.md`).
+  A Presidio sidecar for contextual PII is still unbuilt; that control ships disabled.
 
 ### Database rules
 

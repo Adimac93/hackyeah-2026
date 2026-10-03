@@ -14,6 +14,8 @@ default:
 # install dependencies
 setup:
     cargo fetch
+    command -v terraform >/dev/null || brew install hashicorp/tap/terraform
+    terraform -chdir=infra init -input=false
 
 # the one gate: `just check` green == done. Nothing else counts.
 check: typecheck lint test
@@ -64,8 +66,10 @@ demo:
     ./target/debug/gateway
 
 # ship to the demo URL. Wire this up on day one, not at hour 23.
+# Infra for the semantic judge (Vertex AI, VPC-internal). Shows the plan and
+# waits for a yes; the GPU is billed while deployed. See infra/README.md.
 deploy:
-    @echo "deploy: TODO — docker build + push. Do this before building features."
+    terraform -chdir=infra apply
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:
