@@ -1,3 +1,4 @@
+import { ActionForm } from "@/components/action-form";
 import {
   Card,
   ControlSeverityBadge,
@@ -9,7 +10,7 @@ import {
 } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
-import { budgetSpend, fmtWindow } from "@/lib/gateway";
+import { budgetSpend, fmtWindow, isUploadedVersion } from "@/lib/gateway";
 import type {
   AttackSignature,
   Budget,
@@ -17,6 +18,8 @@ import type {
   Principal,
   UsageRow,
 } from "@/lib/gateway";
+
+import { importPolicy } from "./actions";
 
 const DAY_MS = 86_400_000;
 
@@ -39,7 +42,8 @@ function Chips({ items, empty }: { items: string[]; empty: string }) {
 }
 
 export default async function ControlsPage() {
-  const { supabase } = await requireMember();
+  const { supabase, member } = await requireMember();
+  const isAdmin = member.role === "admin";
   // longest budget window is a day; usage older than that never counts
   const since = new Date(Date.now() - DAY_MS).toISOString();
 
@@ -61,7 +65,7 @@ export default async function ControlsPage() {
       .limit(10_000),
     supabase
       .from("policy_versions")
-      .select("id, sha256, source, loaded_at, active, note")
+      .select("id, sha256, source, loaded_at, active, note, diff_summary")
       .order("loaded_at", { ascending: false })
       .limit(20),
     supabase
@@ -212,16 +216,61 @@ export default async function ControlsPage() {
                       </p>
                       <p
                         className="truncate text-xs text-zinc-500"
-                        title={fmtDateTime(v.loaded_at)}
+                        title={v.diff_summary ?? fmtDateTime(v.loaded_at)}
                       >
-                        {v.note ?? v.source.split("\n")[0]} · loaded{" "}
-                        {timeAgo(v.loaded_at)}
+                        {isUploadedVersion(v.source)
+                          ? "imported in console"
+                          : (v.note ?? v.source.split("\n")[0])}{" "}
+                        · loaded {timeAgo(v.loaded_at)}
                       </p>
                     </div>
+                    {isUploadedVersion(v.source) ? (
+                      <a
+                        href={`/controls/policy/${String(v.id)}`}
+                        className="shrink-0 text-xs text-zinc-400 hover:text-zinc-100"
+                      >
+                        Download .toml
+                      </a>
+                    ) : null}
                   </li>
                 ))}
               </ul>
             )}
+            {isAdmin ? (
+              <details className="group mt-5 border-t border-zinc-800 pt-4">
+                <summary className="cursor-pointer text-sm font-medium text-emerald-400 hover:text-emerald-300">
+                  Import policy from TOML
+                </summary>
+                <ActionForm
+                  action={importPolicy}
+                  submitLabel="Validate & activate"
+                  pendingLabel="Importing…"
+                  className="mt-4 space-y-3"
+                >
+                  <p className="text-xs text-zinc-500">
+                    Upload a complete control catalog (same format as{" "}
+                    <code>policy/control-catalog.toml</code>). The gateway
+                    validates it and switches over without a restart; an invalid
+                    file is rejected and the current policy keeps running.
+                  </p>
+                  <input
+                    type="file"
+                    name="file"
+                    accept=".toml,application/toml,text/plain"
+                    className="block w-full text-sm text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-sm file:text-zinc-200 hover:file:bg-zinc-700"
+                  />
+                  <textarea
+                    name="catalog"
+                    rows={5}
+                    spellCheck={false}
+                    placeholder={
+                      '…or paste it here\nschema_version = 1\nprofile = "balanced"'
+                    }
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none"
+                  />
+                </ActionForm>
+              </details>
+            ) : null}
           </Card>
         </div>
 

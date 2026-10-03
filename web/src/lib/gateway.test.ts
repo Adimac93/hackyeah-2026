@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  MAX_POLICY_BYTES,
   budgetSpend,
+  checkPolicyUpload,
+  describePolicyUpload,
   fmtMicros,
   fmtWindow,
   gatewayStats,
@@ -155,4 +158,43 @@ void test("formatters", () => {
   assert.equal(fmtWindow(90), "90s");
   assert.equal(shortHash(String.raw`\xdeadbeef00112233aabb`, 8), "deadbeef");
   assert.equal(shortHash(null), "—");
+});
+
+void test("checkPolicyUpload wants a complete, text, size-limited catalog", () => {
+  assert.equal(checkPolicyUpload("   ").ok, false);
+  assert.equal(checkPolicyUpload("[defaults]\non_detect = 'block'").ok, false);
+  assert.equal(checkPolicyUpload("schema_version = 1\0").ok, false);
+  assert.equal(
+    checkPolicyUpload(`schema_version = 1\n# ${"x".repeat(MAX_POLICY_BYTES)}`)
+      .ok,
+    false,
+  );
+  assert.ok(checkPolicyUpload("# catalog\n  schema_version = 1\n").ok);
+});
+
+void test("describePolicyUpload maps gateway answers", () => {
+  const accepted = describePolicyUpload(200, {
+    accepted: true,
+    changed: true,
+    diff: "policy a -> b",
+  });
+  assert.ok(accepted.ok);
+  assert.match(accepted.message, /policy a -> b/);
+
+  const same = describePolicyUpload(200, { accepted: true, changed: false });
+  assert.ok(same.ok);
+  assert.match(same.message, /nothing changed/);
+
+  const invalid = describePolicyUpload(422, {
+    error: "invalid_policy",
+    message: "unknown field `on_detct`",
+  });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.error, /on_detct/);
+
+  const forbidden = describePolicyUpload(403, {});
+  assert.equal(forbidden.ok, false);
+  assert.match(forbidden.error, /GATEWAY_ADMIN_KEY/);
+
+  assert.equal(describePolicyUpload(500, null).ok, false);
 });
