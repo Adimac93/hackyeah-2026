@@ -36,7 +36,7 @@ gcloud projects add-iam-policy-binding "$PROJECT" \
 ## 3. Artifact Registry
 
 ```bash
-gcloud artifacts repositories create gateway \
+gcloud artifacts repositories create cloud-run-source-deploy \
   --repository-format=docker --location="$REGION"
 ```
 
@@ -65,9 +65,30 @@ just deploy                      # defaults: europe-west1, service "backend"
 just deploy us-central1 gateway  # or pick your own
 ```
 
-`cloudbuild.yaml` sets a 30-minute timeout and an 8-core machine. A release
-build of this workspace does not finish inside Cloud Build's 10-minute default,
-and that failure looks like a code problem when it is not.
+`cloudbuild.yaml` builds with buildx and keeps a layer cache at
+`<image>:buildcache` in Artifact Registry. A push that changes only our own
+code reuses the compiled dependencies and rebuilds just the gateway crate. A
+`Cargo.lock` change rebuilds the dependencies on the 8-core machine. The
+console builds the same way from `web/cloudbuild.yaml` and `web/Dockerfile`.
+
+### Deploy on push (triggers)
+
+The `backend` and `frontend` triggers build from the repo's config files, so a
+change to how we build lands through a PR like any other code:
+
+```bash
+# backend → cloudbuild.yaml, frontend → web/cloudbuild.yaml
+gcloud builds triggers export <trigger> --region="$REGION" --destination=t.yaml
+# in t.yaml: delete the inline `build:` block and add `filename: cloudbuild.yaml`
+gcloud builds triggers import --region="$REGION" --source=t.yaml
+```
+
+Or in the console: Cloud Build → Triggers → the trigger → Configuration →
+"Cloud Build configuration file (yaml or json)", with the location above.
+
+Do not go back to the auto-generated Cloud Run buildpack trigger for the
+console. It pulls a ~1 GB builder and then runs `docker pull --all-tags`, which
+downloads every image ever pushed. That step alone took longer than the build.
 
 ## 6. Configure the service
 
@@ -76,8 +97,10 @@ gcloud run services update backend --region="$REGION" \
   --update-env-vars=CORS_ORIGINS=https://<dashboard-origin>,UPSTREAM_URL=<openai-compatible-model-url>,OLLAMA_URL=<ollama-url>
 ```
 
-`cloudbuild.yaml` already sets `ENVIRONMENT=prod` and the `DATABASE_URL` secret on
-every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
+The first deploy creates the service with `ENVIRONMENT=prod` and the
+`DATABASE_URL` secret. Later deploys change only the image and keep everything
+set on the service. `--update-env-vars` keeps what is there; `--set-env-vars`
+would wipe it.
 
 ### Judge and upstream on a Cloud Run Ollama (instead of Vertex)
 
@@ -112,7 +135,7 @@ Never set `ingress=all` on `ollama` while `allUsers` can invoke it.
 | `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |
 | `DATABASE_URL` | from Secret Manager. Required in every environment: the policy, identities, grants and budgets live there. An empty database is seeded with the built-in sample policy on first start |
 
-**One instance.** `cloudbuild.yaml` deploys with `--max-instances=1`: a pending
+**One instance.** `cloudbuild.yaml` creates the service with `--max-instances=1`: a pending
 access approval (`control__request_access`) lives in the gateway's memory, so the
 agent's blocked call and the console's decision must land on the same instance.
 Cloud Run's request timeout (default 300 s) also closes the console's SSE stream
@@ -130,6 +153,11 @@ gcloud run services logs read backend --region="$REGION" --limit=50
 ```
 
 **Builds time out** — raise `timeout` in `cloudbuild.yaml`.
+
+**A build is slow again** — check its log for `CACHED` on the `cargo chef cook`
+(or `pnpm install`) step. If it is missing, the cache was busted, usually by a
+new base image tag or by copying a file the stage does not need. Dependencies
+come only from `Cargo.lock` and `pnpm-lock.yaml`.
 
 **"ENVIRONMENT=prod refuses a mock"** — `UPSTREAM_URL` is unset, or the judge is
 not a real `OLLAMA_URL`. The very first
@@ -149,6 +177,7 @@ path needs an upstream MCP server too: the catalog's `docs` server is the local
 
 - **`mcp-demo`** — serves poisoned documents by design. Run it locally.
 - **`just report`** — needs the `typst` binary, which is not in the runtime image.
-- **The web console** — not deployed by this repo; set its `GATEWAY_URL` to the
+- **The web console** is not deployed by `just deploy`. The `frontend` trigger
+  ships it with `web/cloudbuild.yaml`. Set its `GATEWAY_URL` to the
   service URL and add its origin to `CORS_ORIGINS`. Set `GATEWAY_ADMIN_KEY` (server
   side only) to a `security_admin` principal's key so the access-request popup works.
