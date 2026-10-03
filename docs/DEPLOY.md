@@ -79,6 +79,26 @@ gcloud run services update backend --region="$REGION" \
 `cloudbuild.yaml` already sets `ENVIRONMENT=prod` and the `DATABASE_URL` secret on
 every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
 
+### Judge and upstream on a Cloud Run Ollama (instead of Vertex)
+
+The `ollama` Cloud Run service (GPU, `sentinel/ollama` image) serves both the
+judge (`/api/generate`) and an OpenAI-compatible chat upstream (`/v1`). Its
+ingress is `internal`, so the backend must send its traffic through the VPC, and
+because the gateway calls the judge without an identity token, `ollama` grants
+`roles/run.invoker` to `allUsers` — internal ingress is what keeps it private.
+
+```bash
+gcloud compute networks subnets update default --region="$REGION" \
+  --enable-private-ip-google-access
+gcloud run services add-iam-policy-binding ollama --region="$REGION" \
+  --member=allUsers --role=roles/run.invoker
+gcloud run services update backend --region="$REGION" \
+  --network=default --subnet=default --vpc-egress=private-ranges-only \
+  --update-env-vars=OLLAMA_URL=https://<ollama-url>,UPSTREAM_URL=https://<ollama-url>/v1,SEMANTIC_MODEL=llama3.1:8b
+```
+
+Never set `ingress=all` on `ollama` while `allUsers` can invoke it.
+
 | variable | effect |
 |---|---|
 | `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, stops allowing every origin, and refuses to start without `DATABASE_URL` or with a `mock` upstream/judge |
