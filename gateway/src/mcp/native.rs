@@ -14,8 +14,9 @@ use crate::approvals::{self, Outcome, Target};
 use crate::audit::{self, EventRecord, Principal};
 use crate::engine::{self, Verdict};
 use crate::policy::{Hook, Policy};
+use crate::state::AppState;
 
-use super::McpState;
+use super::listing;
 
 pub const LIST_CONTROLS: &str = "control__list_controls";
 pub const MY_ACCESS: &str = "control__my_access";
@@ -31,7 +32,7 @@ pub fn descriptors() -> Vec<Value> {
         }),
         json!({
             "name": MY_ACCESS,
-            "description": "Show what you may use: allowed tools and models, budget and \
+            "description": "Show what you may use: allowed tools and models, budgets and \
                             usage, active temporary grants, and tools you could request.",
             "inputSchema": { "type": "object", "properties": {} },
         }),
@@ -95,7 +96,7 @@ pub fn public_controls(policy: &Policy) -> Value {
 /// Returns the MCP `tools/call` result (or an error string for the caller to
 /// wrap in a JSON-RPC error).
 pub async fn call(
-    state: &McpState,
+    state: &AppState,
     policy: &Policy,
     principal: &Principal,
     name: &str,
@@ -111,55 +112,43 @@ pub async fn call(
     }
 }
 
-async fn my_access(state: &McpState, policy: &Policy, principal: &Principal) -> Value {
-    let budget = policy
+async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> Value {
+    let budgets: Vec<Value> = state
         .budgets
-        .principal
-        .get(&principal.slug)
-        .or(policy.budgets.global.as_ref());
-    let budget = match budget {
-        Some(budget) => {
-            let (tokens, usd) = state
-                .auditor
-                .usage_in_window(Some(principal.id), None, budget.window_secs)
-                .await;
-            json!({
-                "window_secs": budget.window_secs,
-                "limit_usd": budget.limit_usd,
-                "limit_tokens": budget.limit_tokens,
-                "used_usd": usd,
-                "used_tokens": tokens,
-            })
-        }
-        None => Value::Null,
-    };
+        .standing(principal)
+        .await
+        .into_iter()
+        .map(|(row, used)| json!({ "limit": row, "used": used }))
+        .collect();
 
     let grants = state.approvals.active_grants(principal.id);
-    let requestable: Vec<String> = if principal.allowed_tools.is_empty() {
-        Vec::new()
-    } else {
-        super::federated_tools(state, policy)
-            .await
-            .into_iter()
-            .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
-            .filter(|name| {
-                !principal.allowed_tools.contains(name) && !grants.iter().any(|g| &g.tool == name)
-            })
-            .collect()
-    };
+    let (tools, _) = listing::catalog(state, policy).await;
+    let requestable: Vec<String> = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .filter(|name| {
+            approvals::validate_target(
+                policy,
+                principal,
+                grants.iter().any(|g| g.tool == *name),
+                name,
+            ) == Target::Requestable
+        })
+        .map(str::to_owned)
+        .collect();
 
     json!({
         "principal": principal.slug,
-        "allowed_tools": if principal.allowed_tools.is_empty() { json!("any") } else { json!(principal.allowed_tools) },
-        "allowed_models": if principal.allowed_models.is_empty() { json!("any") } else { json!(principal.allowed_models) },
-        "budget": budget,
+        "allowed_tools": principal.allowed_tools,
+        "allowed_models": principal.allowed_models,
+        "budgets": budgets,
         "grants": grants,
         "requestable_tools": requestable,
     })
 }
 
 async fn request_access(
-    state: &McpState,
+    state: &AppState,
     policy: &Policy,
     principal: &Principal,
     arguments: &Value,
@@ -197,10 +186,7 @@ async fn request_access(
     // same tool_call controls as any other argument, so an injected reason
     // cannot phish the approver.
     let trace_id = Uuid::new_v4();
-    let policy_version_id = state
-        .auditor
-        .policy_version_id(&policy.sha256, &policy.source)
-        .await;
+    let policy_version_id = policy.version_id;
     let mut evaluation = engine::evaluate(policy, Hook::ToolCall, reason);
     engine::escalate(policy, Hook::ToolCall, &mut evaluation, &state.detectors).await;
 

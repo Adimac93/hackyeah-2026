@@ -1,16 +1,22 @@
 # AI Control Layer — control catalog.
 #
-# This file is the single configuration source (task.md §4.1). The gateway
-# watches it and hot-reloads on save: no restart, and in-flight requests finish
-# under the policy they started with. If an edit is invalid, the gateway keeps
-# serving the last good version and surfaces the error — a config typo must
-# never take the control layer offline.
+# The catalog is the single configuration source (task.md §4.1). It lives in
+# the database: this file is the documented sample, compiled into the gateway
+# and seeded on first start. To change the running policy, upload an edited
+# copy (console, or POST /admin/policy); every instance activates it within
+# 5 s, and in-flight requests finish under the policy they started with. An
+# invalid upload is rejected with the error and the last good version keeps
+# serving — a config typo must never take the control layer offline.
+#
+# Budgets are not set here: they are rows in the `budgets` table, edited
+# through PUT /admin/budgets. Model and tool grants per identity live in
+# `principals` and are deny-by-default.
 #
 # Patterns use TOML literal strings ('...'), so regex backslashes need no
 # escaping. Write the regex exactly as you would test it.
 #
 # Every control takes `enabled = false` to switch it off without deleting it.
-# Unknown keys are rejected, so a misspelled setting fails the reload loudly
+# Unknown keys are rejected, so a misspelled setting fails the upload loudly
 # instead of being ignored.
 
 schema_version = 1
@@ -38,7 +44,8 @@ on_detect = "block"
 fail_mode = "closed"
 
 [models]
-# Deny wins over allow. Empty allowed list means "any model not denied".
+# Deny wins over allow. Empty allowed list means "any model not denied". Each
+# identity's `allowed_models` then narrows this further.
 allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b"]
 denied = []
 
@@ -59,26 +66,38 @@ output_per_mtok = 0.20
 input_per_mtok = 0.20
 output_per_mtok = 0.20
 
-# ---------------------------------------------------------------- budgets
-# §4.3. Hard budgets reject the call; soft budgets record and warn.
-# A budget may set `limit_tokens`, `limit_usd` or both; the first one reached
-# applies. Scopes: global (everyone), principal.<slug>, model.<name>.
+# ---------------------------------------------------------------- history
+# §4.4. The risk score is the sum of recent blocked/flagged detections for an
+# identity (critical 1.0, high 0.65, medium 0.35, low 0.15). Past
+# `escalate_at`, every request runs the semantic tier; past `block_at`, the
+# identity is refused until the window passes.
 
-[budgets.global]
-window_secs = 86_400
-limit_usd = 25.0
-limit_tokens = 2_000_000
-hard = true
-
-[budgets.principal.demo-agent]
+[risk]
 window_secs = 3_600
-limit_tokens = 50_000
-hard = true
+escalate_at = 1.0
+block_at = 5.0
 
-[budgets.principal.red-team]
-window_secs = 3_600
-limit_tokens = 10_000
-hard = false
+# ---------------------------------------------------------------- runaway
+# §4.3 runaway agent protection, per identity, counted over the window. An
+# agent reports its nesting depth in `_meta.depth` of a tool call.
+
+[runaway]
+window_secs = 60
+max_tool_calls = 30
+max_identical_calls = 5
+max_depth = 4
+
+# ---------------------------------------------------------------- resources
+# Tables of the `resources` schema each identity may query through the
+# gateway's `resources__describe` / `resources__query` tools. Deny-by-default.
+# The model only ever sees structure and a row count; the rows go to the user.
+
+[resources]
+max_rows = 200
+statement_timeout_ms = 2_000
+
+[resources.grants]
+demo-agent = ["customers", "invoices"]
 
 # ---------------------------------------------------------------- tier 1
 # Deterministic controls. Microseconds, no model, no network. Every request
@@ -243,13 +262,15 @@ timeout_ms = 2000
 escalate_when = "suspicious"
 mock_keywords = ["exfiltrate", "send it to", "upload to", "pastebin", "webhook"]
 
-# ---------------------------------------------------------------- feed
-# §4.4. Signatures of known historical attacks, managed outside this file so a
-# feed update does not require a policy change.
-
 # ---------------------------------------------------------------- mcp
 # Upstream MCP servers sit behind this gateway, which is the only MCP server any
-# agent talks to. Disabling one here takes effect on save, no restart.
+# agent talks to. Disabling one takes effect when the upload activates.
+#
+# `pinned` approves tools by the sha256 of their definition (name, description,
+# input schema). Once a server pins anything, an unpinned tool or one whose
+# definition changed is hidden and reported: a rug-pull or poisoned
+# description never reaches the model. Leave it empty to only scan
+# descriptions.
 
 [mcp]
 # A caller with no row in `principals`. "deny" is the right default for a
@@ -262,8 +283,6 @@ url = "http://localhost:9310/mcp"
 enabled = true
 
 # ---------------------------------------------------------------- feed
-[signatures]
-source = "file"
-path = "signatures.toml"   # resolved next to this file
-refresh_secs = 300
-enabled = true
+# §4.4. Signatures of known historical attacks are a separate document
+# (`signatures.toml` next to this file), uploaded with the catalog as
+# `signatures_toml` and versioned with it.

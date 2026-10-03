@@ -11,21 +11,24 @@
 
 insert into principals (slug, display_name, kind, allowed_models, allowed_tools, api_key_hash, role)
 values
-  -- A well-behaved agent with a narrow tool grant. It may read documents but
-  -- not enumerate them.
+  -- A well-behaved agent with a narrow tool grant. It may read documents and
+  -- query customer data, but not enumerate documents.
   ('demo-agent', 'Demo agent', 'agent',
    array['llama3.1:8b', 'qwen2.5:7b'],
-   array['docs__read', 'docs__search'],
-   '191b558a694b9c5081fc238f779c811e6de37e92b1ca8471cb29ea96d4393a45', 'security_admin'),
+   array['docs__read', 'docs__search', 'resources__describe', 'resources__query'],
+   '191b558a694b9c5081fc238f779c811e6de37e92b1ca8471cb29ea96d4393a45', 'member'),
 
-  -- Deliberately unrestricted models, deliberately no tools: used to show the
-  -- tool grant doing the work rather than the controls.
-  ('red-team', 'Red team harness', 'agent', array[]::text[], array['docs__search'],
+  -- Broad model grant, one tool: used to show the tool grant doing the work
+  -- rather than the controls. Grants are deny-by-default, so every model is
+  -- listed explicitly.
+  ('red-team', 'Red team harness', 'agent',
+   array['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'],
+   array['docs__search'],
    'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member'),
 
   -- The SecOps console's server-side identity (GATEWAY_ADMIN_KEY): streams and
   -- decides access requests. No models, no tools — it administers, never acts.
-  ('secops-console', 'SecOps console', 'app', array[]::text[], array['control__none'],
+  ('secops-console', 'SecOps console', 'app', array[]::text[], array[]::text[],
    '943d28b8ad70296dff2b65fb4a17aaca0dffe92482b233100e4698390c1d89a0', 'security_admin')
 on conflict (slug) do update
   set allowed_models = excluded.allowed_models,
@@ -33,15 +36,38 @@ on conflict (slug) do update
       api_key_hash   = excluded.api_key_hash,
       role           = excluded.role;
 
-insert into budgets (scope, scope_id, window_secs, limit_tokens, hard)
+-- Hard budgets refuse the call; soft ones record and warn. A row may combine
+-- token, USD, request-count and concurrency limits; the first one reached
+-- applies. Edited at runtime through the gateway's PUT /admin/budgets.
+insert into budgets (scope, scope_id, window_secs, limit_tokens, limit_usd, limit_requests, limit_concurrency, hard)
 values
-  ('global',    null,         86400, 2000000, true),
-  ('principal', 'demo-agent',  3600,   50000, true),
-  ('principal', 'red-team',    3600,   10000, false)
+  ('global',    null,          86400, 2000000, 25.0, null, null, true),
+  ('principal', 'demo-agent',   3600,   50000, null, null,    4, true),
+  ('principal', 'red-team',     3600,   10000, null,  120, null, false)
 on conflict (scope, coalesce(scope_id, '')) do update
-  set window_secs  = excluded.window_secs,
-      limit_tokens = excluded.limit_tokens,
-      hard         = excluded.hard;
+  set window_secs       = excluded.window_secs,
+      limit_tokens      = excluded.limit_tokens,
+      limit_usd         = excluded.limit_usd,
+      limit_requests    = excluded.limit_requests,
+      limit_concurrency = excluded.limit_concurrency,
+      hard              = excluded.hard;
+
+-- ======================= resources: protected demo data ======================
+
+-- Fake customers for the `resources__query` tool. The PII here is what the
+-- output guardrails redact before rows reach the user, and what the model never
+-- sees at all.
+truncate resources.invoices, resources.customers restart identity;
+insert into resources.customers (full_name, email, phone, country, plan, mrr_usd)
+values
+  ('Anna Nowak',      'anna.nowak@example.com',    '+48 601 234 567', 'PL', 'enterprise', 4200.00),
+  ('Jan Kowalski',    'jan.kowalski@example.com',  '+48 502 111 222', 'PL', 'team',        890.00),
+  ('Maria Garcia',    'maria.garcia@example.com',  '+34 612 345 678', 'ES', 'team',        640.00),
+  ('Tom Fischer',     'tom.fischer@example.com',   '+49 151 2345678', 'DE', 'starter',      49.00),
+  ('Ola Wisniewska',  'ola.w@example.com',         '+48 698 765 432', 'PL', 'enterprise', 3900.00);
+insert into resources.invoices (customer_id, amount_usd, status)
+values (1, 4200.00, 'paid'), (2, 890.00, 'overdue'), (3, 640.00, 'paid'),
+       (4, 49.00, 'paid'), (5, 3900.00, 'overdue');
 
 -- ============================ web: policies and incidents ===================
 

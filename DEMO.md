@@ -38,12 +38,16 @@ Console open and signed in as an analyst. `just demo` running (gateway + `mcp-de
 ## What it depends on
 
 - Seeded data: `just seed` — two gateway principals with public demo keys:
-  `demo-agent` (key `demo-agent-dev-key`, `security_admin`, tools `docs__read` and
-  `docs__search`) and `red-team` (key `red-team-dev-key`, `member`, `docs__search` only),
+  `demo-agent` (key `demo-agent-dev-key`, tools `docs__read`, `docs__search` and the
+  `resources__*` tools) and `red-team` (key `red-team-dev-key`, `docs__search` only),
   plus `secops-console` (key `secops-console-dev-key`, `security_admin`, no tools) — the
-  console's `GATEWAY_ADMIN_KEY` for the access-request popup.
-  Budgets come from `policy/control-catalog.toml`: global 2M tokens / $25 a day,
-  `demo-agent` 50k tokens/hour hard, `red-team` 10k tokens/hour soft.
+  console's `GATEWAY_ADMIN_KEY` for the access-request popup. Budgets are `budgets` rows:
+  global 2M tokens / $25 a day, `demo-agent` 50k tokens/hour hard, `red-team` 10k
+  tokens/hour soft.
+- The policy lives in the database. On first start the gateway seeds the sample in
+  `policy/`; to change it live, upload an edited catalog (console policy page, or
+  `POST /admin/policy` with an admin's Supabase access token). Every instance picks it
+  up within 5 s.
 - Services that must be up:
   - locally: `just dev` (gateway + console) or `just demo` (gateway + `mcp-demo` on
     :9310 for the MCP path). Dev uses the mock upstream and mock judge — no model needed.
@@ -74,4 +78,11 @@ Be honest with yourself here so nothing surprises you on stage.
   event. Fixed (column now `control_action`; a failed statement rolls back without
   advancing the chain), but the log is append-only, so that one gap stays. Either
   present it — "the verifier caught a real gap" — or demo on a fresh database.
+- The gateway needs `DATABASE_URL` in every environment now, and the
+  `20261003210000_gateway_db_policy` migration applied.
+- Concurrency budgets count per gateway instance, not across the fleet.
+- The `balanced` and `strict` profiles currently set the same defaults.
+- The resource tools need `RESOURCES_DATABASE_URL` pointing at a role with
+  `SELECT` on schema `resources` only; the gateway's own checks (single SELECT,
+  read-only transaction, planner-verified table grants) are a second line.
 - The Vertex judge bills ~$25/day while deployed; tear it down after the demo.

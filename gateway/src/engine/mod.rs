@@ -1,15 +1,17 @@
 //! Control evaluation: run the catalog against one piece of text at one hook
 //! and decide what happens to it.
 //!
-//! Pure except for the clock. The semantic tier is not wired yet; the shape
-//! below is what it plugs into — `suspicious` is the signal tier 1 hands it.
+//! Pure except for the clock. `suspicious` is the signal tier 1 hands the
+//! semantic tier.
 
 use std::borrow::Cow;
 use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::policy::{Action, DeterministicControl, FailMode, Hook, Policy, Severity};
+use crate::policy::{
+    Action, DeterministicControl, EscalateWhen, FailMode, Hook, Policy, SemanticControl, Severity,
+};
 use crate::semantic::Registry;
 
 /// What the caller observes. Distinct from [`Action`], which is what a single
@@ -124,13 +126,7 @@ pub fn evaluate(policy: &Policy, hook: Hook, text: &str) -> Evaluation {
             Action::Block => verdict = verdict.merge(Verdict::Block),
             Action::Redact => {
                 verdict = verdict.merge(Verdict::Redact);
-                let replacement = format!("[REDACTED:{}]", control.id);
-                current = Cow::Owned(
-                    control
-                        .regex
-                        .replace_all(&current, replacement.as_str())
-                        .into_owned(),
-                );
+                current = Cow::Owned(redact_with(control, &current));
             }
             // `flag` and `allow` do not change the outcome; `flag` marks the
             // request for the semantic tier.
@@ -166,6 +162,40 @@ pub fn evaluate(policy: &Policy, hook: Hook, text: &str) -> Evaluation {
     }
 }
 
+/// Apply every `redact` control registered at `hook` to one piece of text.
+/// Used to redact each part of a structured payload (chat messages) after the
+/// whole payload was evaluated together.
+pub fn redact(policy: &Policy, hook: Hook, text: &str) -> String {
+    policy
+        .deterministic_for(hook)
+        .filter(|control| control.action == Action::Redact)
+        .fold(text.to_owned(), |text, control| redact_with(control, &text))
+}
+
+/// Replace the control's matches with `[REDACTED:<id>]`. Only matches that
+/// `scan` would count are replaced, so a card pattern leaves numbers that fail
+/// Luhn alone.
+fn redact_with(control: &DeterministicControl, text: &str) -> String {
+    let replacement = format!("[REDACTED:{}]", control.id);
+    control
+        .regex
+        .replace_all(text, |captures: &regex::Captures<'_>| {
+            let matched = captures.get(0).map_or("", |m| m.as_str());
+            if counts(control, matched) {
+                replacement.clone()
+            } else {
+                matched.to_owned()
+            }
+        })
+        .into_owned()
+}
+
+/// A card-shaped number is PII only if it passes Luhn. This avoids redacting
+/// arbitrary long numbers such as invoice references.
+fn counts(control: &DeterministicControl, matched: &str) -> bool {
+    control.id != "pii.payment-card" || luhn_valid(matched)
+}
+
 /// Run the semantic tier over an evaluation that tier 1 has already produced.
 ///
 /// Only the controls that `escalate_when` admits actually run, so a clean
@@ -178,10 +208,41 @@ pub async fn escalate(
     evaluation: &mut Evaluation,
     detectors: &Registry,
 ) {
+    let controls: Vec<&SemanticControl> = policy.semantic_for(hook, evaluation.suspicious).collect();
+    run_semantic(&controls, evaluation, detectors).await;
+}
+
+/// The asynchronous half of the semantic tier (§4.2.2): the `suspicious`
+/// controls a clean request skipped, run after it was answered. Their verdicts
+/// cannot change that request; they feed the history and risk score that
+/// govern the next one.
+pub async fn deferred(policy: &Policy, hook: Hook, text: &str, detectors: &Registry) -> Evaluation {
+    let controls: Vec<&SemanticControl> = policy
+        .semantic
+        .iter()
+        .filter(|c| c.hooks.contains(&hook) && c.escalate_when == EscalateWhen::Suspicious)
+        .collect();
+    let mut evaluation = Evaluation {
+        verdict: Verdict::Allow,
+        text: text.to_owned(),
+        detections: Vec::new(),
+        suspicious: false,
+        deterministic_us: 0,
+        semantic_us: 0,
+    };
+    run_semantic(&controls, &mut evaluation, detectors).await;
+    evaluation
+}
+
+async fn run_semantic(
+    controls: &[&SemanticControl],
+    evaluation: &mut Evaluation,
+    detectors: &Registry,
+) {
     let started = Instant::now();
     let mut ran = false;
 
-    for control in policy.semantic_for(hook, evaluation.suspicious) {
+    for control in controls {
         ran = true;
         let outcome = detectors.score(control, &evaluation.text).await;
 
@@ -251,9 +312,7 @@ fn scan(control: &DeterministicControl, text: &str) -> Option<Evidence> {
     let matches: Vec<_> = control
         .regex
         .find_iter(text)
-        // A card-shaped number is PII only if it passes Luhn. This avoids
-        // redacting arbitrary long numbers such as invoice references.
-        .filter(|matched| control.id != "pii.payment-card" || luhn_valid(matched.as_str()))
+        .filter(|matched| counts(control, matched.as_str()))
         .collect();
     let first = matches.first()?;
     let count = matches.len();

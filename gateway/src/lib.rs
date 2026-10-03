@@ -4,12 +4,20 @@
 //! engine and the enforcement hooks can be driven directly from tests and from
 //! the scenario runner.
 
+pub mod admin;
 pub mod approvals;
 pub mod audit;
+pub mod background;
+pub mod budget;
 pub mod engine;
+pub mod helper;
 pub mod mcp;
 pub mod metrics;
 pub mod mock;
+pub mod openapi;
 pub mod policy;
 pub mod proxy;
+pub mod risk;
 pub mod semantic;
+pub mod state;
+pub mod telemetry;

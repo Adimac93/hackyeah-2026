@@ -18,11 +18,7 @@ fn parse(src: &str) -> Result<Policy, PolicyError> {
 /// have caught every policy typo made during the build.
 #[test]
 fn shipped_catalog_compiles() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../policy/control-catalog.toml"
-    );
-    let policy = Policy::load(path).expect("shipped catalog must load");
+    let policy = Policy::builtin().expect("shipped catalog must load");
     assert!(!policy.deterministic.is_empty());
     assert!(!policy.semantic.is_empty());
     assert_eq!(policy.sha256.len(), 64);
@@ -197,9 +193,11 @@ pattern = 'evil'
 
 #[test]
 fn feed_signatures_carry_their_feed_version() {
-    let compiled = compile_feed(FEED, "test").unwrap();
+    let (feed, compiled) = compile_feed(FEED, "test").unwrap();
     assert_eq!(compiled[0].id, "signature.T-1");
     assert_eq!(compiled[0].feed.as_deref(), Some("test-feed@7"));
+    assert_eq!(feed.entries[0].title, "test");
+    assert_eq!(feed.text, FEED);
 }
 
 #[test]
@@ -212,19 +210,84 @@ fn rejects_an_unknown_feed_key() {
 }
 
 #[test]
-fn shipped_feed_is_loaded_and_tracked_for_reload() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../policy/control-catalog.toml"
-    );
-    let policy = Policy::load(path).unwrap();
+fn shipped_feed_is_compiled_into_the_builtin_policy() {
+    let policy = Policy::builtin().unwrap();
     assert!(!policy.signature_controls.is_empty());
-    assert!(
-        policy
-            .feed_path
-            .as_deref()
-            .is_some_and(|p| p.ends_with("signatures.toml"))
+    assert_eq!(
+        policy.feed.as_ref().map(|f| f.source.as_str()),
+        Some("local-demo-feed")
     );
+}
+
+#[test]
+fn the_feed_joins_the_version_and_an_empty_feed_is_none() {
+    let alone = Policy::compile(MINIMAL, None, "test").unwrap();
+    let blank = Policy::compile(MINIMAL, Some("  "), "test").unwrap();
+    let fed = Policy::compile(MINIMAL, Some(FEED), "test").unwrap();
+    assert_eq!(alone.sha256, blank.sha256);
+    assert!(blank.feed.is_none());
+    assert_ne!(alone.sha256, fed.sha256, "a feed edit is a policy change");
+    assert_eq!(fed.signature_controls.len(), 1);
+}
+
+#[test]
+fn an_invalid_feed_rejects_the_whole_upload() {
+    let broken = FEED.replace("pattern = 'evil'", "pattern = '([unclosed'");
+    assert!(matches!(
+        Policy::compile(MINIMAL, Some(&broken), "test"),
+        Err(PolicyError::Pattern { .. })
+    ));
+}
+
+/// An upload that removes or disables a control must show it in the diff and
+/// stop it from firing as soon as it is active.
+#[test]
+fn removing_a_control_disables_it_and_the_diff_says_so() {
+    let before = parse(MINIMAL).unwrap();
+    let after = parse("schema_version = 1\n").unwrap();
+    assert_eq!(before.deterministic_for(Hook::PromptIn).count(), 1);
+    assert_eq!(after.deterministic_for(Hook::PromptIn).count(), 0);
+    assert_eq!(diff(&before, &after), ["- control a (removed or disabled)"]);
+
+    let disabled = parse(&MINIMAL.replace(r#"id = "a""#, "id = \"a\"\nenabled = false")).unwrap();
+    assert_eq!(diff(&before, &disabled), ["- control a (removed or disabled)"]);
+}
+
+#[test]
+fn the_diff_names_each_changed_field() {
+    let before = parse(MINIMAL).unwrap();
+    let after = parse(&MINIMAL.replace("severity = \"high\"", "severity = \"low\"\naction = \"redact\"")).unwrap();
+    assert_eq!(
+        diff(&before, &after),
+        ["~ control a: action block -> redact; severity high -> low"]
+    );
+    assert!(diff(&before, &parse(MINIMAL).unwrap()).is_empty());
+
+    let added = parse(&format!("{MINIMAL}\n[models]\ndenied = [\"x\"]\n")).unwrap();
+    assert_eq!(
+        diff(&before, &added),
+        [r#"~ models: {"allowed":[],"denied":[]} -> {"allowed":[],"denied":["x"]}"#]
+    );
+}
+
+#[test]
+fn a_threshold_change_shows_in_the_diff() {
+    let semantic = |threshold: &str| {
+        parse(&format!(
+            "{MINIMAL}\n[[controls.semantic]]\nid = \"s\"\nhooks = [\"prompt_in\"]\nseverity = \"high\"\ndetector = \"d\"\nthreshold = {threshold}\n"
+        ))
+        .unwrap()
+    };
+    assert_eq!(
+        diff(&semantic("0.8"), &semantic("0.5")),
+        ["~ control s: threshold 0.8 -> 0.5"]
+    );
+}
+
+#[test]
+fn budgets_are_not_catalog_settings_any_more() {
+    let src = format!("{MINIMAL}\n[budgets.global]\nlimit_tokens = 1\n");
+    assert!(matches!(parse(&src), Err(PolicyError::Parse { .. })));
 }
 
 #[test]

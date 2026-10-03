@@ -1,23 +1,28 @@
 //! The policy engine: parse, validate and compile the control catalog.
 //!
-//! The TOML file is the authored source of truth (task.md §4.1). Everything
-//! here is pure — parsing and validation with no I/O beyond reading the file —
-//! so it is cheap to test, which is where most of the real bugs in a policy
-//! engine live.
+//! The TOML catalog is the authored source of truth (task.md §4.1). It lives
+//! in the database (`store`); everything else here is pure — parsing and
+//! validation with no I/O — so it is cheap to test, which is where most of the
+//! real bugs in a policy engine live.
 
-mod budget;
+mod diff;
 mod feed;
+mod handle;
+mod limits;
 mod mcp;
-mod watch;
+mod pricing;
+pub mod store;
 
-pub use budget::{Budget, Budgets, Price};
+pub use diff::diff;
+pub use feed::{Feed, FeedEntry};
+pub use handle::PolicyHandle;
+pub use limits::{Resources, Risk, Runaway};
 pub use mcp::{McpServer, McpSettings, UnknownPrincipal};
-pub use watch::{PolicyHandle, spawn_watcher};
+pub use pricing::Price;
 
 use feed::compile_feed;
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -111,6 +116,11 @@ pub enum PolicyError {
 
 const SCHEMA_VERSION: u32 = 1;
 
+/// The documented sample, compiled into the binary. The gateway never reads
+/// these files at runtime; they seed an empty database on first start.
+pub const BUILTIN_CATALOG: &str = include_str!("../../../policy/control-catalog.toml");
+pub const BUILTIN_SIGNATURES: &str = include_str!("../../../policy/signatures.toml");
+
 // ------------------------------------------------------------------ raw TOML
 
 #[derive(Debug, Deserialize)]
@@ -126,14 +136,17 @@ struct RawCatalog {
     #[serde(default)]
     models: Models,
     #[serde(default)]
-    budgets: Budgets,
-    #[serde(default)]
     pricing: HashMap<String, Price>,
     #[serde(default)]
     controls: RawControls,
-    signatures: Option<SignatureFeed>,
     #[serde(default)]
     mcp: McpSettings,
+    #[serde(default)]
+    risk: Risk,
+    #[serde(default)]
+    runaway: Runaway,
+    #[serde(default)]
+    resources: Resources,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -249,89 +262,66 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignatureFeed {
-    pub source: String,
-    pub path: Option<String>,
-    #[serde(default = "default_refresh")]
-    pub refresh_secs: u64,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_refresh() -> u64 {
-    300
-}
-
-/// A validated, compiled catalog. Swapped in atomically on reload.
+/// A validated, compiled catalog. Swapped in atomically on activation.
 #[derive(Debug)]
 pub struct Policy {
-    /// sha256 of the file this was built from — the version recorded against
-    /// every decision in the audit log.
+    /// sha256 of the catalog and feed text this was built from.
     pub sha256: String,
+    /// `policy_versions.id` of that text — what every decision in the audit
+    /// log points at. `None` only for a policy that was never stored (tests).
+    pub version_id: Option<i64>,
     pub source: String,
     pub on_detect: Action,
     pub fail_mode: FailMode,
     pub profile: Option<String>,
     pub models: Models,
-    pub budgets: Budgets,
     /// Per-model price, keyed by model name. An unpriced model costs nothing.
     pub pricing: HashMap<String, Price>,
     pub deterministic: Vec<DeterministicControl>,
     pub semantic: Vec<SemanticControl>,
-    pub signatures: Option<SignatureFeed>,
-    /// Compiled from the external feed (§4.4). Kept separate from the catalog
-    /// controls because the two have different lifecycles: a feed refresh is an
-    /// operational event, a catalog edit is a policy change.
+    /// The external feed (§4.4) uploaded alongside the catalog, if any.
+    pub feed: Option<Feed>,
+    /// Compiled from the feed. Kept separate from the catalog controls so the
+    /// dashboard can tell a feed match from a catalog rule.
     pub signature_controls: Vec<DeterministicControl>,
-    /// The resolved feed file, so the watcher can reload when it changes.
-    pub feed_path: Option<PathBuf>,
     pub mcp: McpSettings,
+    pub risk: Risk,
+    pub runaway: Runaway,
+    pub resources: Resources,
 }
 
 impl Policy {
-    /// Read, parse, validate and compile a catalog from disk.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, PolicyError> {
-        let path = path.as_ref();
-        let display = path.display().to_string();
-        let source = std::fs::read_to_string(path).map_err(|source| PolicyError::Read {
-            path: display.clone(),
-            source,
-        })?;
-        let mut policy = Self::from_str(&source, &display)?;
-
-        // §4.4: the feed only becomes a control once it is compiled. Its bytes
-        // join the version hash, so editing signatures.toml is a policy change
-        // the audit log can point at.
-        if let Some(feed) = policy.signatures.clone()
-            && feed.enabled
-            && let Some(feed_path) = feed.path.as_deref()
-        {
-            // Relative to the catalog, not to the working directory: a path
-            // written inside a config file means "next to this file", and the
-            // gateway must not care where it was launched from.
-            let resolved = path
-                .parent()
-                .map_or_else(|| PathBuf::from(feed_path), |dir| dir.join(feed_path));
-            let raw = std::fs::read_to_string(&resolved).map_err(|source| PolicyError::Read {
-                path: resolved.display().to_string(),
-                source,
-            })?;
-            policy.signature_controls = compile_feed(&raw, &resolved.display().to_string())?;
-            policy.sha256 = sha256_hex(&format!("{source}{raw}"));
-            policy.feed_path = Some(resolved);
-            tracing::debug!(
-                signatures = policy.signature_controls.len(),
-                "attack signature feed loaded"
-            );
+    /// Compile a catalog and, optionally, the attack-signature feed uploaded
+    /// with it. Both texts join the version hash, so a feed edit is a policy
+    /// change the audit log can point at.
+    pub fn compile(
+        catalog: &str,
+        signatures: Option<&str>,
+        origin: &str,
+    ) -> Result<Self, PolicyError> {
+        let mut policy = Self::from_str(catalog, origin)?;
+        if let Some(raw) = signatures.filter(|raw| !raw.trim().is_empty()) {
+            let (feed, controls) = compile_feed(raw, &format!("{origin} (signatures)"))?;
+            for control in &controls {
+                if policy.deterministic.iter().any(|c| c.id == control.id) {
+                    return Err(PolicyError::DuplicateId {
+                        id: control.id.clone(),
+                    });
+                }
+            }
+            policy.signature_controls = controls;
+            policy.feed = Some(feed);
+            policy.sha256 = sha256_hex(&format!("{catalog}{raw}"));
         }
-
         Ok(policy)
     }
 
-    /// Compile from an in-memory catalog. Kept separate from [`Policy::load`]
-    /// so the tests never touch the filesystem.
+    /// The documented sample shipped in the binary.
+    pub fn builtin() -> Result<Self, PolicyError> {
+        Self::compile(BUILTIN_CATALOG, Some(BUILTIN_SIGNATURES), "builtin")
+    }
+
+    /// Compile a catalog alone, without a feed.
     pub fn from_str(source: &str, origin: &str) -> Result<Self, PolicyError> {
         let raw: RawCatalog = toml::from_str(source).map_err(|source| PolicyError::Parse {
             path: origin.to_owned(),
@@ -420,48 +410,22 @@ impl Policy {
 
         Ok(Self {
             sha256: sha256_hex(source),
+            version_id: None,
             source: origin.to_owned(),
             on_detect,
             fail_mode,
             profile: raw.profile,
             models: raw.models,
-            budgets: raw.budgets,
             pricing: raw.pricing,
             deterministic,
             semantic,
-            signatures: raw.signatures,
+            feed: None,
             signature_controls: Vec::new(),
-            feed_path: None,
             mcp: raw.mcp,
+            risk: raw.risk,
+            runaway: raw.runaway,
+            resources: raw.resources,
         })
-    }
-
-    /// Compile a catalog received through the admin API. Signature feeds stay
-    /// relative to the configured catalog directory, just as they are for a
-    /// file reload; an upload must not silently remove attack signatures.
-    pub fn from_uploaded(
-        source: &str,
-        origin: &str,
-        catalog_path: impl AsRef<Path>,
-    ) -> Result<Self, PolicyError> {
-        let mut policy = Self::from_str(source, origin)?;
-        if let Some(feed) = policy.signatures.clone()
-            && feed.enabled
-            && let Some(feed_path) = feed.path.as_deref()
-        {
-            let resolved = catalog_path
-                .as_ref()
-                .parent()
-                .map_or_else(|| PathBuf::from(feed_path), |dir| dir.join(feed_path));
-            let raw = std::fs::read_to_string(&resolved).map_err(|source| PolicyError::Read {
-                path: resolved.display().to_string(),
-                source,
-            })?;
-            policy.signature_controls = compile_feed(&raw, &resolved.display().to_string())?;
-            policy.sha256 = sha256_hex(&format!("{source}{raw}"));
-            policy.feed_path = Some(resolved);
-        }
-        Ok(policy)
     }
 
     /// Deterministic controls that apply at `hook`: catalog controls first,
