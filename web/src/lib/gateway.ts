@@ -9,6 +9,13 @@ export const HOOKS = [
   "tool_result",
 ] as const;
 export const CHANNELS = ["llm", "mcp", "a2a"] as const;
+/** `activity.status`: what the gateway did to the request, from hash-chained fields. */
+export const SECURITY_STATUSES = [
+  "secure",
+  "flagged",
+  "redacted",
+  "blocked",
+] as const;
 export const CONTROL_SEVERITIES = [
   "info",
   "low",

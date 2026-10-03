@@ -94,3 +94,19 @@ void test("transport failures stay errors", () => {
     error: "The gateway answered 500. Try again or pick another model.",
   });
 });
+
+void test("a deterministic refusal says the prompt fails the deterministic requirements", () => {
+  const outcome = interpretGatewayResponse(403, {
+    error: {
+      type: "blocked_by_control",
+      message: "request blocked by secret.aws-access-key",
+      stage: "deterministic",
+    },
+  });
+  assert.ok(
+    outcome.ok &&
+      outcome.reply.includes(
+        "doesn't meet the deterministic security requirements",
+      ),
+  );
+});
