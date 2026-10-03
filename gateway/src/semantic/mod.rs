@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::model_auth::ModelAuth;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DetectorError {
     #[error("no detector named {0} is configured")]
@@ -62,7 +64,7 @@ impl Registry {
     /// Build from the environment. A detector whose backing service is not
     /// configured is simply absent, and controls that name it fail according to
     /// the catalog's `fail_mode` rather than silently passing.
-    pub fn from_env(http: reqwest::Client) -> Self {
+    pub fn from_env(http: reqwest::Client, auth: ModelAuth) -> Self {
         let mut detectors = HashMap::new();
 
         let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
@@ -70,7 +72,12 @@ impl Registry {
         tracing::info!(%url, %model, "semantic tier: llm_judge");
         detectors.insert(
             "llm_judge".to_owned(),
-            Detector::LlmJudge(LlmJudge { http, url, model }),
+            Detector::LlmJudge(LlmJudge {
+                http,
+                auth,
+                url,
+                model,
+            }),
         );
 
         Self { detectors }
@@ -115,6 +122,7 @@ impl Registry {
 
 pub struct LlmJudge {
     http: reqwest::Client,
+    auth: ModelAuth,
     url: String,
     model: String,
 }
@@ -123,9 +131,11 @@ impl LlmJudge {
     async fn score(&self, text: &str, looking_for: &str) -> Result<f32, DetectorError> {
         let prompt = build_prompt(text, looking_for);
 
+        let url = format!("{}/api/generate", self.url);
         let response = self
-            .http
-            .post(format!("{}/api/generate", self.url))
+            .auth
+            .apply(self.http.post(&url), &url)
+            .await
             .json(&json!({
                 "model": self.model,
                 "prompt": prompt,

@@ -84,6 +84,52 @@ gcloud run services update backend --region="$REGION" \
 | `POLICY_PATH` | defaults to `policy/control-catalog.toml`, shipped inside the image |
 | `UPSTREAM_URL` | where model traffic goes. Defaults to `localhost:11434`, which is nothing on Cloud Run |
 | `DATABASE_URL` | from Secret Manager. Absent, the gateway still enforces but persists nothing |
+| `OLLAMA_URL` | the semantic judge. Same model host as `UPSTREAM_URL` on Cloud Run |
+| `MODEL_AUTH` | `google` sends a Google identity token to the model host. Required for the private `ollama` service |
+
+## 7. The model host
+
+Ollama on Cloud Run with one NVIDIA L4, the model baked into the image
+(`ollama/`). One service serves both model traffic (`UPSTREAM_URL`) and the
+semantic judge (`OLLAMA_URL`).
+
+**Cost.** About $1 per hour while an instance runs (L4 plus 4 vCPU / 16 GiB),
+nothing when scaled to zero. `--max-instances=1` caps it at one GPU whatever
+the traffic. Before judging, set `--min-instances=1` to skip the cold start,
+and set it back to 0 afterwards.
+
+**Private.** The service rejects unauthenticated calls; an open Ollama is a
+free GPU for anyone who finds the URL. The gateway's service account is
+granted `run.invoker` and mints identity tokens itself (`MODEL_AUTH=google`).
+
+```bash
+# build, push, deploy: ~10 minutes, most of it pulling the 5 GB model
+gcloud builds submit --config ollama/cloudbuild.yaml ollama
+
+OLLAMA=$(gcloud run services describe ollama --region="$REGION" --format='value(status.url)')
+SA=$(gcloud run services describe backend --region="$REGION" \
+  --format='value(spec.template.spec.serviceAccountName)')
+gcloud run services add-iam-policy-binding ollama --region="$REGION" \
+  --member="serviceAccount:$SA" --role=roles/run.invoker
+
+gcloud run services update backend --region="$REGION" \
+  --update-env-vars=UPSTREAM_URL=$OLLAMA,OLLAMA_URL=$OLLAMA,MODEL_AUTH=google
+
+# demo window
+gcloud run services update ollama --region="$REGION" --min-instances=1
+# after
+gcloud run services update ollama --region="$REGION" --min-instances=0
+```
+
+Talk to it directly with your own identity:
+
+```bash
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$OLLAMA/api/tags"
+```
+
+A first request after idle waits for an instance and the model load, tens of
+seconds. GPU quota is per region; a "quota exceeded" deploy means requesting
+Cloud Run L4 quota for the region in IAM → Quotas.
 
 ## Troubleshooting
 
@@ -98,9 +144,10 @@ gcloud run services logs read backend --region="$REGION" --limit=50
 
 **Builds time out** — raise `timeout` in `cloudbuild.yaml`.
 
-**Chat requests return 502** — `UPSTREAM_URL` points at nothing. There is no
-Ollama on Cloud Run; either point it at a reachable model host or demo the MCP
-path, which does not need one.
+**Chat requests return 502** — `UPSTREAM_URL` points at nothing reachable.
+Check section 7: the `ollama` service exists, `UPSTREAM_URL` is its URL, and
+`MODEL_AUTH=google` is set. A 403 from the model host in the logs means the
+gateway's service account is missing `run.invoker` on `ollama`.
 
 ## What is deliberately not deployed
 

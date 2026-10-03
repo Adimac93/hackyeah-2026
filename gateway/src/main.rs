@@ -22,6 +22,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use gateway::audit::Auditor;
 use gateway::mcp::{self, McpState};
+use gateway::model_auth::ModelAuth;
 use gateway::policy::{self, Policy, PolicyHandle};
 use gateway::proxy::{self, ProxyState};
 use gateway::semantic::Registry;
@@ -129,13 +130,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%upstream, "forwarding model traffic upstream");
 
     let http = reqwest::Client::new();
-    let detectors = Arc::new(Registry::from_env(http.clone()));
+    let model_auth = ModelAuth::from_env(http.clone());
+    let detectors = Arc::new(Registry::from_env(http.clone(), model_auth.clone()));
 
     let proxy_state = ProxyState {
         policy: policy.clone(),
         auditor: Arc::clone(&auditor),
         http: http.clone(),
         upstream,
+        model_auth,
         detectors: Arc::clone(&detectors),
     };
 

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
+use crate::model_auth::ModelAuth;
 use crate::policy::{Action, Budget, Hook, Policy, PolicyHandle, Severity};
 use crate::semantic::Registry;
 
@@ -25,6 +26,7 @@ pub struct ProxyState {
     pub auditor: std::sync::Arc<Auditor>,
     pub http: reqwest::Client,
     pub upstream: String,
+    pub model_auth: ModelAuth,
     pub detectors: std::sync::Arc<Registry>,
 }
 
@@ -125,9 +127,11 @@ pub async fn chat_completions(
 
     // --- upstream ---------------------------------------------------------
     let started = std::time::Instant::now();
+    let url = format!("{}/v1/chat/completions", state.upstream);
     let upstream = state
-        .http
-        .post(format!("{}/v1/chat/completions", state.upstream))
+        .model_auth
+        .apply(state.http.post(&url), &url)
+        .await
         .json(&upstream_body)
         .send()
         .await;
