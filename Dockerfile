@@ -13,7 +13,9 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release -p gateway
+# --locked: build the dependency versions in Cargo.lock, not whatever
+# resolves today. A deploy that differs from what was tested is not a deploy.
+RUN cargo build --release --locked -p gateway
 
 FROM debian:bookworm-slim AS runtime
 # rustls verifies upstream TLS against the system roots

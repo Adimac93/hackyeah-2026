@@ -11,10 +11,12 @@ use anyhow::Context as _;
 use axum::{
     Json, Router,
     extract::State,
+    http::{HeaderValue, Method},
     routing::{get, post},
 };
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
+use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use gateway::audit::Auditor;
@@ -39,9 +41,25 @@ struct AppState {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // docs/BACKEND.md: the service runs locally (dev) or on Google Cloud (prod)
+    // depending on ENVIRONMENT. It changes how we log and who may call us, never
+    // what we enforce — the controls are identical in both.
+    let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "dev".to_owned());
+    let production = environment == "prod";
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    if production {
+        // Cloud Logging parses JSON lines and reads `severity` from them. A flat
+        // text log arrives as an untyped string with every level and field lost.
+        fmt()
+            .json()
+            .with_current_span(false)
+            .with_env_filter(filter)
+            .init();
+    } else {
+        fmt().with_env_filter(filter).init();
+    }
+    tracing::info!(environment = %environment, "starting");
 
     let db = match std::env::var("DATABASE_URL") {
         Ok(url) => {
@@ -142,7 +160,8 @@ async fn main() -> anyhow::Result<()> {
             Router::new()
                 .route("/mcp", post(mcp::endpoint))
                 .with_state(mcp_state),
-        );
+        )
+        .layer(cors(&environment));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -191,7 +210,61 @@ async fn active_policy(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// The dashboard is served from a different origin, so the browser will not
+/// read a response without these. In production the allowed origins must be
+/// listed explicitly: this API serves blocked-secret evidence, and a wildcard
+/// would let any page on the internet read a security team's audit trail.
+fn cors(environment: &str) -> CorsLayer {
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
+
+    match std::env::var("CORS_ORIGINS") {
+        Ok(list) => {
+            let origins: Vec<HeaderValue> = list
+                .split(',')
+                .filter_map(|origin| origin.trim().parse().ok())
+                .collect();
+            tracing::info!(
+                count = origins.len(),
+                "CORS restricted to configured origins"
+            );
+            layer.allow_origin(origins)
+        }
+        Err(_) if environment == "prod" => {
+            tracing::warn!(
+                "CORS_ORIGINS is unset in production — no cross-origin caller is allowed"
+            );
+            layer
+        }
+        Err(_) => {
+            tracing::info!("dev: any origin may call this gateway");
+            layer.allow_origin(Any)
+        }
+    }
+}
+
+/// Cloud Run sends SIGTERM and waits before killing the container. Without
+/// handling it the process dies mid-request on every revision change.
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutting down");
+    let interrupt = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => tracing::error!(%error, "cannot listen for SIGTERM"),
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = interrupt => tracing::info!("interrupted — shutting down"),
+        () = terminate => tracing::info!("SIGTERM — draining"),
+    }
 }

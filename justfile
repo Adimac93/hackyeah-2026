@@ -63,9 +63,11 @@ demo:
     trap 'kill $demo_pid 2>/dev/null || true' EXIT
     ./target/debug/gateway
 
-# ship to the demo URL. Wire this up on day one, not at hour 23.
-deploy:
-    @echo "deploy: TODO — docker build + push. Do this before building features."
+# ship the gateway to Cloud Run. See docs/DEPLOY.md for first-time setup.
+deploy region="europe-central2" service="backend":
+    gcloud builds submit \
+      --config cloudbuild.yaml \
+      --substitutions=_REGION={{region}},_SERVICE={{service}}
 
 # new isolated worktree for an agent or a task: just wt my-feature
 wt NAME:

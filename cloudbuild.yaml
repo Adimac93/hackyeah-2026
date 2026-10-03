@@ -1,0 +1,49 @@
+# Cloud Build for the gateway.
+#
+# `gcloud run deploy --source .` would auto-detect the Dockerfile, but a release
+# build of a Rust workspace does not finish inside the default 10-minute timeout
+# on the default machine. This sets both explicitly rather than letting the
+# first deploy fail on a timeout that looks like a code problem.
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - --tag=$_IMAGE
+      # cargo-chef caches dependency compilation in its own layer, which is
+      # only reused when the builder can read a previous image.
+      - --cache-from=$_IMAGE
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args: [push, $_IMAGE]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_SERVICE
+      - --image=$_IMAGE
+      - --region=$_REGION
+      - --platform=managed
+      - --port=8080
+      - --set-env-vars=ENVIRONMENT=prod
+      # DATABASE_URL holds a password, so it comes from Secret Manager rather
+      # than from this file or a --set-env-vars flag that lands in build logs.
+      - --set-secrets=DATABASE_URL=gateway-database-url:latest
+
+substitutions:
+  _SERVICE: backend
+  _REGION: europe-central2
+  _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/gateway/backend:${SHORT_SHA}
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+# A Rust release build of this workspace takes well over the 600s default.
+timeout: 1800s
