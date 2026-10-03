@@ -84,6 +84,26 @@ impl Evaluation {
     pub fn blocked_by(&self) -> Option<&Detection> {
         self.detections.iter().find(|d| d.action == Action::Block)
     }
+
+    /// Record a request-level decision taken outside the catalog controls — the
+    /// model allow list, a budget — so it reaches the audit log like any other
+    /// detection.
+    pub fn gate(&mut self, control_id: String, severity: Severity, action: Action, reason: String) {
+        self.verdict = self.verdict.merge(verdict_of(action));
+        self.detections.push(Detection {
+            control_id,
+            kind: ControlKind::Deterministic,
+            severity,
+            action,
+            score: None,
+            evidence: Evidence {
+                matches: 1,
+                first_offset: 0,
+                excerpt: reason,
+                feed: None,
+            },
+        });
+    }
 }
 
 /// Run every deterministic control registered at `hook`.

@@ -236,3 +236,28 @@ async fn a_control_can_fail_open_under_a_closed_default() {
 
     assert_eq!(out.verdict, Verdict::Allow);
 }
+
+#[test]
+fn a_gate_is_recorded_and_only_a_hard_one_blocks() {
+    let p = policy(EMAIL);
+    let mut out = evaluate(&p, Hook::PromptIn, "hello");
+
+    out.gate(
+        "budget.global".into(),
+        Severity::Low,
+        Action::Allow,
+        "soft".into(),
+    );
+    assert_eq!(out.verdict, Verdict::Allow);
+    assert!(out.blocked_by().is_none());
+
+    out.gate(
+        "model.not-allowed".into(),
+        Severity::High,
+        Action::Block,
+        "no".into(),
+    );
+    assert_eq!(out.verdict, Verdict::Block);
+    assert_eq!(out.blocked_by().unwrap().control_id, "model.not-allowed");
+    assert_eq!(out.detections.len(), 2);
+}

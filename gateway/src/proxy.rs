@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
-use crate::policy::{Budget, Hook, Policy, PolicyHandle};
+use crate::policy::{Action, Budget, Hook, Policy, PolicyHandle, Severity};
 use crate::semantic::Registry;
 
 /// Everything a request needs. Cloned per request, so each field is cheap.
@@ -53,30 +53,34 @@ pub async fn chat_completions(
         .unwrap_or_default()
         .to_owned();
 
-    // --- model allow list (§4.1) -----------------------------------------
-    if !policy.model_allowed(&model) {
-        return refusal(
-            trace_id,
-            StatusCode::FORBIDDEN,
-            "model_not_allowed",
-            &format!("model {model} is not in the allow list"),
-        );
-    }
-
-    // --- budget (§4.3) ----------------------------------------------------
-    if let Some(reason) = over_budget(&policy, &state.auditor, principal_id, &slug, &model).await {
-        return refusal(
-            trace_id,
-            StatusCode::TOO_MANY_REQUESTS,
-            "budget_exceeded",
-            &reason,
-        );
-    }
-
     // --- hook 1: prompt_in ------------------------------------------------
     let prompt = extract_prompt(&body);
     let mut inbound = engine::evaluate(&policy, Hook::PromptIn, &prompt);
-    engine::escalate(&policy, Hook::PromptIn, &mut inbound, &state.detectors).await;
+
+    // --- model allow list (§4.1) and budget (§4.3) ------------------------
+    // Gated on the same evaluation, so a refusal is audited like any control.
+    if !policy.model_allowed(&model) {
+        inbound.gate(
+            MODEL_NOT_ALLOWED.to_owned(),
+            Severity::High,
+            Action::Block,
+            format!("model {model} is not in the allow list"),
+        );
+    }
+    check_budgets(
+        &policy,
+        &state.auditor,
+        principal_id,
+        &slug,
+        &model,
+        &mut inbound,
+    )
+    .await;
+
+    // A request already refused should not also pay for the semantic tier.
+    if inbound.verdict != Verdict::Block {
+        engine::escalate(&policy, Hook::PromptIn, &mut inbound, &state.detectors).await;
+    }
 
     let event_id = state
         .auditor
@@ -91,16 +95,26 @@ pub async fn chat_completions(
         ))
         .await;
 
-    if inbound.verdict == Verdict::Block {
-        let control = inbound
-            .blocked_by()
-            .map_or("policy", |d| d.control_id.as_str());
-        return refusal(
-            trace_id,
-            StatusCode::FORBIDDEN,
-            "blocked_by_control",
-            &format!("request blocked by {control}"),
-        );
+    if let Some(blocker) = inbound.blocked_by() {
+        let control = blocker.control_id.as_str();
+        let reason = blocker.evidence.excerpt.as_str();
+        return if control == MODEL_NOT_ALLOWED {
+            refusal(trace_id, StatusCode::FORBIDDEN, "model_not_allowed", reason)
+        } else if control.starts_with(BUDGET_PREFIX) {
+            refusal(
+                trace_id,
+                StatusCode::TOO_MANY_REQUESTS,
+                "budget_exceeded",
+                reason,
+            )
+        } else {
+            refusal(
+                trace_id,
+                StatusCode::FORBIDDEN,
+                "blocked_by_control",
+                &format!("request blocked by {control}"),
+            )
+        };
     }
 
     // Forward the redacted text, never the original.
@@ -230,31 +244,39 @@ fn refusal(trace_id: Uuid, status: StatusCode, code: &str, message: &str) -> Res
         .into_response()
 }
 
+/// Detection id for a model outside the allow list.
+const MODEL_NOT_ALLOWED: &str = "model.not-allowed";
+
+/// Budget detections are `budget.global`, `budget.principal.<slug>` and
+/// `budget.model.<name>`, mirroring where the budget sits in the catalog.
+const BUDGET_PREFIX: &str = "budget.";
+
 /// Budget check. The global budget applies to everyone, a model budget to all
-/// traffic on that model, a principal budget to that caller. A soft budget
-/// warns instead of refusing.
-async fn over_budget(
+/// traffic on that model, a principal budget to that caller. A hard budget
+/// blocks; a soft one is recorded and lets the request through.
+async fn check_budgets(
     policy: &Policy,
     auditor: &Auditor,
     principal_id: Option<Uuid>,
     slug: &str,
     model: &str,
-) -> Option<String> {
+    evaluation: &mut engine::Evaluation,
+) {
     if !auditor.enabled() {
-        return None;
+        return;
     }
 
-    let mut checks: Vec<(&str, Option<Uuid>, Option<&str>, &Budget)> = Vec::new();
+    let mut checks: Vec<(String, Option<Uuid>, Option<&str>, &Budget)> = Vec::new();
     if let Some(budget) = policy.budgets.global.as_ref() {
-        checks.push(("global", None, None, budget));
+        checks.push(("global".to_owned(), None, None, budget));
     }
     // Without a resolved principal the usage cannot be attributed, and summing
     // everyone's would charge this caller for the whole organisation.
     if let (Some(budget), Some(id)) = (policy.budgets.principal.get(slug), principal_id) {
-        checks.push((slug, Some(id), None, budget));
+        checks.push((format!("principal.{slug}"), Some(id), None, budget));
     }
     if let Some(budget) = policy.budgets.model.get(model) {
-        checks.push((model, None, Some(model), budget));
+        checks.push((format!("model.{model}"), None, Some(model), budget));
     }
 
     for (scope, owner, model, budget) in checks {
@@ -266,15 +288,18 @@ async fn over_budget(
             (_, Some(limit)) if usd >= limit => format!("${usd:.4}/${limit:.2}"),
             _ => continue,
         };
-        if budget.hard {
-            return Some(format!(
-                "{scope} budget exhausted: {spent} in the last {}s",
-                budget.window_secs
-            ));
-        }
-        tracing::warn!(scope, %spent, "soft budget exceeded");
+        let reason = format!(
+            "{scope} budget exhausted: {spent} in the last {}s",
+            budget.window_secs
+        );
+        let (severity, action) = if budget.hard {
+            (Severity::High, Action::Block)
+        } else {
+            tracing::warn!(%scope, %spent, "soft budget exceeded");
+            (Severity::Low, Action::Allow)
+        };
+        evaluation.gate(format!("{BUDGET_PREFIX}{scope}"), severity, action, reason);
     }
-    None
 }
 
 // ---------------------------------------------------------------- payloads
