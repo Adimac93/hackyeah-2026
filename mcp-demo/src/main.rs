@@ -11,6 +11,7 @@
 //!
 //! NOT FOR DEPLOYMENT. It exists to be caught.
 
+use anyhow::Context as _;
 use axum::{Json, Router, http::HeaderMap, routing::post};
 use serde_json::{Value, json};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -64,10 +65,13 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let port: u16 = std::env::var("DEMO_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(9310);
+    // Same rule as the gateway: a malformed port is a configuration error.
+    let port: u16 = match std::env::var("DEMO_PORT") {
+        Ok(value) => value.parse().with_context(|| {
+            format!("DEMO_PORT is set to {value:?}, which is not a port number")
+        })?,
+        Err(_) => 9310,
+    };
 
     let app = Router::new().route("/mcp", post(endpoint));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;

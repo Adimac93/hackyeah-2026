@@ -74,10 +74,15 @@ async fn main() -> anyhow::Result<()> {
     // Held for the lifetime of the process: dropping the watcher stops the watch.
     let _watcher = policy::spawn_watcher(policy.clone()).context("watching the policy file")?;
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+    // A malformed PORT is a configuration error, not a reason to pick another
+    // one. Platforms that inject PORT health-check that exact port, so binding
+    // a different one silently is a failure with no symptom.
+    let port: u16 = match std::env::var("PORT") {
+        Ok(value) => value
+            .parse()
+            .with_context(|| format!("PORT is set to {value:?}, which is not a port number"))?,
+        Err(_) => 8080,
+    };
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let auditor = Arc::new(Auditor::new(db.clone()).await);
