@@ -68,4 +68,10 @@ Be honest with yourself here so nothing surprises you on stage.
   the gateway only accepts `Authorization: Bearer` (TASKS.md `web-gateway-auth`). Demo
   the gateway with `curl` and a seeded key until that lands.
 - `pii.contextual` ships disabled (no Presidio sidecar yet).
+- `just verify-audit` on the shared Supabase reports one break, at event 31 (2026-10-03).
+  Before migration `20261003201902`, every flagged detection failed its `attack_history`
+  insert, the audit transaction silently rolled back, and the chain skipped the lost
+  event. Fixed (column now `control_action`; a failed statement rolls back without
+  advancing the chain), but the log is append-only, so that one gap stays. Either
+  present it — "the verifier caught a real gap" — or demo on a fresh database.
 - The Vertex judge bills ~$25/day while deployed; tear it down after the demo.
