@@ -43,9 +43,19 @@ fn the_prompt_frames_the_input_as_data() {
 
 #[tokio::test]
 async fn an_unconfigured_detector_is_an_error_not_a_pass() {
-    let registry = Registry::empty();
-    let outcome = registry
-        .score("presidio", "text", "pii", Duration::from_millis(50))
-        .await;
+    let policy = crate::policy::Policy::from_str(
+        r#"
+schema_version = 1
+[[controls.semantic]]
+id = "pii"
+hooks = ["prompt_in"]
+severity = "high"
+detector = "presidio"
+threshold = 0.5
+"#,
+        "test",
+    )
+    .unwrap();
+    let outcome = Registry::empty().score(&policy.semantic[0], "text").await;
     assert!(matches!(outcome, Err(DetectorError::Unknown(_))));
 }

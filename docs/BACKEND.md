@@ -15,12 +15,17 @@ Security gateway (overall) specification:
 - It must be integrable by developers with minimal effort for agent-to-agent, app-to-agent, agent-to-MCP and agent-to-model traffic (§3.1) — e.g. an OpenAI-compatible HTTP endpoint and an MCP-proxy endpoint, so existing clients only change a base URL.
 - Implements a hybrid defense: fast deterministic (non-AI, full-text search instead) controls on the synchronous path, and AI-based semantic controls where they add value (§2, §4.2) — asynchronous by default, synchronous only when a deterministic control escalates the request.
 - Everything must run locally (`dev`) or on Google Cloud platform (`prod`) - depending on the `ENVIRONMENT` config variable (`dev`, `prod`).
-- `ENVIRONMENT` sets defaults and strictness, not features: `dev` starts without a database (enforcement runs, nothing is persisted) and logs human-readable text; `prod` refuses to start without `DATABASE_URL`, refuses to start when an enabled semantic control has no reachable detector configured, and logs JSON. `just deploy` targets Google Cloud Run in `prod`.
+- `ENVIRONMENT` sets defaults and strictness, never which controls are enforced:
+  - `dev` may start without a database (enforcement runs, nothing is persisted), logs human-readable text, allows any browser origin unless `CORS_ORIGINS` says otherwise, and by default uses mocks instead of models: a mock chat upstream (`UPSTREAM_URL=mock`) and a deterministic mock semantic judge (`OLLAMA_URL=mock`), so no Ollama is needed.
+  - `prod` refuses to start without `DATABASE_URL` (a production control layer must audit) and refuses to start with a mock upstream or mock judge (a fabricated verdict has no place in a production control). It logs JSON and allows only the browser origins listed in `CORS_ORIGINS`. Models — the chat upstream and the semantic judge — come from Ollama running as a separate Cloud Run GPU service. `just deploy` targets Google Cloud Run.
+  - Detector availability is not checked at startup in either environment; an unavailable detector is resolved at request time by the control's `fail_mode`.
 - Stack is decided - look for project context to discover the stack.
 - Coverage should be reviewed against OWASP Top 10 for LLM Applications and OWASP agentic AI threats (§1 note): prompt injection, sensitive information disclosure, supply chain, data/model poisoning, improper output handling, excessive agency, system prompt leakage, vector/embedding weaknesses, misinformation, unbounded consumption.
 
 Centralized policy engine and configuration file specification:
-- A single configuration file is the only source of truth for all controls (§4.1); the gateway loads it and distributes the effective policy to the security proxy.
+- A single TOML configuration file is the only source of truth for all controls (§4.1); the gateway parses it and distributes the effective policy to the security proxy.
+- The active file is the newest of two: the file on disk (edited in place, hot-reloaded) or a file uploaded by the security team through the authenticated gateway admin API. An upload is validated exactly like a reload, and its full text is stored in the database (`policy_versions`), so every gateway instance and every restart serves the same policy without touching the disk.
+- The admin dashboard may also hold runtime settings that are never written to the file. None are defined yet: controls, thresholds, actions, budgets, model lists and MCP servers live only in the file. When a setting is added it overlays the active file, and each decision records both the file version and the settings revision.
 - The configuration file is in the TOML format.
 - The file defines: list of controls with `enabled` flag, action per control, failure mode per control (`closed` or `open`, falling back to a file-wide default), sensitivity thresholds (e.g. adherence % or classifier score cutoffs), allowed LLM models (a global allow/deny list, narrowed per identity/role), a per-model pricing table, and per identity/role: resource and financial budgets, data access rules (MCP servers, tools, resources); plus the attack-signature feed source.
 - Actions: `allow` (record only), `flag` (record and mark the request suspicious, which escalates it to the semantic tier), `redact` (replace the match and continue), `block` (stop the request).
@@ -28,7 +33,7 @@ Centralized policy engine and configuration file specification:
 - Unknown keys are a validation error, so a typo such as `enabeld = false` is rejected instead of silently leaving the control on.
 - Supports named strictness profiles (e.g. `permissive`, `balanced`, `strict`) that set defaults for all controls; individual controls can override the profile (§3.2).
 - Hot reload: file changes apply at runtime without a restart, because judges will edit the file during evaluation and observe the effect (§6).
-- Every reload is validated against a schema; an invalid file is rejected, the last valid policy stays active and the error is reported in the audit log and admin dashboard.
+- Every reload and upload is validated against a schema; an invalid file is rejected, the last valid policy stays active and the error is reported in the audit log and admin dashboard (and returned to the uploader).
 - Every accepted reload produces a policy version id and a human-readable diff, recorded in the audit log and visible in the admin dashboard.
 - Each decision in the audit log references the policy version and control id that produced it.
 - Ship a documented sample configuration demonstrating different strictness levels and budget rules (§3.2).
@@ -54,7 +59,8 @@ Deterministic guardrails (security proxy) specification:
 
 Semantic guardrails (async semantic analysis) specification:
 - AI-based controls that detect what patterns miss: prompt injection and jailbreak intent, indirect injection inside retrieved documents or MCP tool results, toxic or off-policy content, data exfiltration intent, multi-turn escalation (§4.2.2).
-- Runs on local models only (§7) — default candidates from `docs/prior-art.md`: Llama Prompt Guard 2 (22M/86M) for injection, Presidio for semantic PII, a small Ollama model for intent classification. Do not use the archived LLM Guard.
+- Runs on self-hosted models only (§7) — default candidates from `docs/prior-art.md`: Llama Prompt Guard 2 (22M/86M) for injection, Presidio for semantic PII, a small Ollama model for intent classification. Do not use the archived LLM Guard. In `prod` the models run on Ollama as a Cloud Run GPU service.
+- In `dev` the `mock` judge stands in for the model: it scores a control 1.0 when the text contains one of the control's `mock_keywords` and 0.0 otherwise, so demos and tests behave the same on every machine. `prod` refuses to start with it.
 - Async by default, so it does not add latency to the request path; its verdicts update the history and risk score and can block subsequent requests in the same session or for the same identity.
 - Escalation rule: each semantic control declares `escalate_when` — `always` (runs synchronously on every request at its hooks), `suspicious` (runs synchronously only when a deterministic control flagged, redacted or blocked something in the same request; the default) or `never` (disabled without deleting the config). Escalation trades latency for strictness only on traffic that already looks wrong, so clean requests pay nothing.
 - A synchronously escalated control whose score reaches its threshold applies its action (`block`, `redact`, `flag`) to the current request.
@@ -115,7 +121,7 @@ Monitoring, security reporting and auditing specification:
 
 Admin dashboard backend API specification:
 - The admin dashboard (security team) reads persisted data — audit log, detections, policy versions, usage, signature feed mirror — directly through the Supabase Data API, authenticated as the security team; RLS grants it read-only access, so the dashboard can never rewrite the audit log it displays.
-- The gateway writes through its privileged connection only and exposes HTTP endpoints only for live state the database does not hold (e.g. the active policy and its reload status, telemetry).
+- The gateway writes through its privileged connection only. It exposes HTTP endpoints for live state the database does not hold (e.g. the active policy and its reload status, telemetry) and an authenticated admin API for the dashboard's writes (policy upload, and runtime settings once any exist). The dashboard never writes through the Data API.
 - Together these provide: active controls and their state, current policy version and reload diff history, live and historical metrics, blocked threats with details, budget usage, audit log search and export, signature feed status (§3.3).
 - Data API and gateway endpoints are restricted to the security team role, and every admin action that changes state is audited.
 
@@ -129,7 +135,7 @@ Self-testing suite specification:
 - Every implemented control has at least one positive (allowed) and one negative (blocked or redacted) test case.
 - Covers: PII/secret redaction, prompt injection and jailbreak blocking, data access denial, budget limits (tokens, cost, rate, loop limits), historical exploit signatures (unsafe deserialization, malicious code, supply-chain, MCP tool poisoning), output filtering, prompt helper behavior.
 - Includes policy tests: hot reload applies changes, disabling a control stops it from triggering, threshold changes alter outcomes, invalid config is rejected with the last valid policy kept.
-- Deterministic tests run without any model; semantic tests use local models only and are clearly marked so they can be run separately when no model is available.
+- Deterministic tests run without any model; semantic tests run against the mock judge by default, and tests against a real local model are clearly marked so they can be run separately when no model is available.
 - Includes one end-to-end smoke test of the demo happy path (per `CLAUDE.md` testing policy).
 - Interactions recorded in the attack history can be exported as regression test cases.
 - Test output reports results per control so coverage is visible at a glance.

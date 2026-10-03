@@ -73,17 +73,18 @@ and that failure looks like a code problem when it is not.
 
 ```bash
 gcloud run services update backend --region="$REGION" \
-  --set-env-vars=ENVIRONMENT=prod,CORS_ORIGINS='*'
+  --set-env-vars=ENVIRONMENT=prod,CORS_ORIGINS=https://<dashboard-origin>,UPSTREAM_URL=<ollama-service-url>,OLLAMA_URL=<ollama-service-url>
 ```
 
 | variable | effect |
 |---|---|
-| `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, and stops allowing every origin |
-| `CORS_ORIGINS` | comma-separated origins, or `*` for any. **Unset in prod means no browser may call the API.** CORS restricts browsers only; with no authentication on the gateway, a wildcard exposes nothing curl could not already reach |
+| `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, stops allowing every origin, and refuses to start without `DATABASE_URL` or with a `mock` upstream/judge |
+| `CORS_ORIGINS` | comma-separated origins, or `*` for any. **Unset in prod means no browser may call the API.** Set it to the dashboard's origin, not `*` |
 | `PORT` | injected by Cloud Run. A malformed value aborts startup rather than binding something else |
 | `POLICY_PATH` | defaults to `policy/control-catalog.toml`, shipped inside the image |
-| `UPSTREAM_URL` | where model traffic goes. Defaults to `localhost:11434`, which is nothing on Cloud Run |
-| `DATABASE_URL` | from Secret Manager. Absent, the gateway still enforces but persists nothing |
+| `UPSTREAM_URL` | where model traffic goes: the Ollama GPU service. Defaults to `mock`, which prod refuses |
+| `OLLAMA_URL` | the semantic judge: the same Ollama GPU service. Defaults to `mock`, which prod refuses |
+| `DATABASE_URL` | from Secret Manager. Required in prod; the gateway refuses to start without it |
 
 ## Troubleshooting
 
@@ -98,9 +99,11 @@ gcloud run services logs read backend --region="$REGION" --limit=50
 
 **Builds time out** — raise `timeout` in `cloudbuild.yaml`.
 
-**Chat requests return 502** — `UPSTREAM_URL` points at nothing. There is no
-Ollama on Cloud Run; either point it at a reachable model host or demo the MCP
-path, which does not need one.
+**Chat requests return 502** — `UPSTREAM_URL` points at nothing. Models run on
+a separate Ollama Cloud Run GPU service (not provisioned by this repo yet, see
+TASKS.md `ollama-gpu`); point `UPSTREAM_URL` and `OLLAMA_URL` at it. The MCP
+path needs an upstream MCP server too: the catalog's `docs` server is the local
+`mcp-demo`, which is not deployed.
 
 ## What is deliberately not deployed
 

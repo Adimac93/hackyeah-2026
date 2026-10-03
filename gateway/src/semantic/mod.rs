@@ -17,6 +17,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::mock;
+use crate::policy::SemanticControl;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DetectorError {
     #[error("no detector named {0} is configured")]
@@ -35,6 +38,9 @@ pub enum Detector {
     /// A local model asked to classify the text. Works against any
     /// OpenAI-compatible or Ollama endpoint.
     LlmJudge(LlmJudge),
+    /// `dev` only: scores from the control's `mock_keywords`. `prod` refuses to
+    /// start with it.
+    Mock,
     /// Always returns the same score. Test-only on purpose: a detector that
     /// fabricates verdicts has no business in a security control.
     #[cfg(test)]
@@ -44,9 +50,10 @@ pub enum Detector {
 impl Detector {
     /// A score in 0.0..=1.0, where 1.0 is "certainly the thing we are looking
     /// for". The control's `threshold` decides what counts.
-    pub async fn score(&self, text: &str, looking_for: &str) -> Result<f32, DetectorError> {
+    pub async fn score(&self, control: &SemanticControl, text: &str) -> Result<f32, DetectorError> {
         match self {
-            Self::LlmJudge(judge) => judge.score(text, looking_for).await,
+            Self::LlmJudge(judge) => judge.score(text, &control.describes).await,
+            Self::Mock => Ok(mock::score(&control.mock_keywords, text)),
             #[cfg(test)]
             Self::Fixed(score) => Ok(*score),
         }
@@ -65,7 +72,12 @@ impl Registry {
     pub fn from_env(http: reqwest::Client) -> Self {
         let mut detectors = HashMap::new();
 
-        let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+        let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| mock::MOCK.into());
+        if url == mock::MOCK {
+            tracing::warn!("semantic tier: mock judge — dev only");
+            detectors.insert("llm_judge".to_owned(), Detector::Mock);
+            return Self { detectors };
+        }
         let model = std::env::var("SEMANTIC_MODEL").unwrap_or_else(|_| "llama3.1:8b".into());
         tracing::info!(%url, %model, "semantic tier: llm_judge");
         detectors.insert(
@@ -85,6 +97,13 @@ impl Registry {
     }
 
     #[cfg(test)]
+    pub fn mock() -> Self {
+        let mut detectors = HashMap::new();
+        detectors.insert("llm_judge".to_owned(), Detector::Mock);
+        Self { detectors }
+    }
+
+    #[cfg(test)]
     pub fn fixed(name: &str, score: f32) -> Self {
         let mut detectors = HashMap::new();
         detectors.insert(name.to_owned(), Detector::Fixed(score));
@@ -95,21 +114,21 @@ impl Registry {
         self.detectors.get(name)
     }
 
-    pub async fn score(
-        &self,
-        name: &str,
-        text: &str,
-        looking_for: &str,
-        timeout: Duration,
-    ) -> Result<f32, DetectorError> {
+    /// Whether any detector is a mock, which `prod` refuses.
+    pub fn mocked(&self) -> bool {
+        self.detectors.values().any(|d| matches!(d, Detector::Mock))
+    }
+
+    pub async fn score(&self, control: &SemanticControl, text: &str) -> Result<f32, DetectorError> {
+        let name = &control.detector;
         let detector = self
             .detectors
             .get(name)
-            .ok_or_else(|| DetectorError::Unknown(name.to_owned()))?;
+            .ok_or_else(|| DetectorError::Unknown(name.clone()))?;
 
-        tokio::time::timeout(timeout, detector.score(text, looking_for))
+        tokio::time::timeout(control.timeout, detector.score(control, text))
             .await
-            .map_err(|_| DetectorError::Timeout(name.to_owned(), timeout))?
+            .map_err(|_| DetectorError::Timeout(name.clone(), control.timeout))?
     }
 }
 

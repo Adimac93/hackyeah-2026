@@ -1,8 +1,7 @@
 //! AI Control Layer — gateway.
 //!
-//! Scaffold only: process bootstrap, health endpoint, optional database pool.
-//! The enforcement hooks (prompt_in, response_out, tool_call, tool_result) and
-//! the policy engine land on top of this.
+//! Process bootstrap: environment, logging, database, policy and its watcher,
+//! then the routes. Enforcement lives in the library crate.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,7 +27,7 @@ use gateway::semantic::Registry;
 
 const DEFAULT_POLICY_PATH: &str = "policy/control-catalog.toml";
 
-const DEFAULT_UPSTREAM: &str = "http://localhost:11434";
+const DEFAULT_UPSTREAM: &str = gateway::mock::MOCK;
 
 #[derive(Clone)]
 struct AppState {
@@ -43,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     // docs/BACKEND.md: the service runs locally (dev) or on Google Cloud (prod)
-    // depending on ENVIRONMENT. It changes how we log and who may call us, never
-    // what we enforce — the controls are identical in both.
+    // depending on ENVIRONMENT. It changes how strict startup is, how we log and
+    // who may call us, never what we enforce — the controls are identical.
     let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "dev".to_owned());
     let production = environment == "prod";
 
@@ -72,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("database connected");
             Some(pool)
         }
+        // A production control layer that cannot audit is not one.
+        Err(_) if production => anyhow::bail!("DATABASE_URL is required when ENVIRONMENT=prod"),
         Err(_) => {
             tracing::warn!("DATABASE_URL unset — starting without persistence");
             None
@@ -130,6 +131,11 @@ async fn main() -> anyhow::Result<()> {
 
     let http = reqwest::Client::new();
     let detectors = Arc::new(Registry::from_env(http.clone()));
+
+    // A mock fabricates answers and verdicts; fine for a laptop, never for prod.
+    if production && (upstream == gateway::mock::MOCK || detectors.mocked()) {
+        anyhow::bail!("ENVIRONMENT=prod refuses a mock: set UPSTREAM_URL and OLLAMA_URL");
+    }
 
     let proxy_state = ProxyState {
         policy: policy.clone(),
