@@ -12,16 +12,21 @@ use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use gateway::policy::{self, Policy, PolicyHandle};
+
+const DEFAULT_POLICY_PATH: &str = "policy/control-catalog.toml";
+
 #[derive(Clone)]
 struct AppState {
     /// Absent when `DATABASE_URL` is unset, so the process still starts for
     /// local work before anyone has filled in `.env`.
     db: Option<sqlx::PgPool>,
+    policy: PolicyHandle,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = dotenvy::dotenv();
+    dotenvy::dotenv().ok();
 
     fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -43,6 +48,21 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let policy_path =
+        std::env::var("POLICY_PATH").unwrap_or_else(|_| DEFAULT_POLICY_PATH.to_owned());
+    let loaded =
+        Policy::load(&policy_path).with_context(|| format!("loading policy from {policy_path}"))?;
+    tracing::info!(
+        version = %loaded.sha256[..12].to_owned(),
+        deterministic = loaded.deterministic.len(),
+        semantic = loaded.semantic.len(),
+        "policy loaded",
+    );
+    let policy = PolicyHandle::new(loaded, &policy_path);
+
+    // Held for the lifetime of the process: dropping the watcher stops the watch.
+    let _watcher = policy::spawn_watcher(policy.clone()).context("watching the policy file")?;
+
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -51,7 +71,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health))
-        .with_state(AppState { db });
+        .route("/policy", get(active_policy))
+        .with_state(AppState { db, policy });
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -79,6 +100,25 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     };
 
     Json(json!({ "status": "ok", "database": database }))
+}
+
+/// What the gateway is currently enforcing. The dashboard polls this to show
+/// which catalog version produced a given decision, and it is the fastest way
+/// to see a hot-reload land.
+async fn active_policy(State(state): State<AppState>) -> Json<Value> {
+    let policy = state.policy.load();
+    Json(json!({
+        "version": policy.sha256,
+        "source": policy.source,
+        "fail_mode": policy.fail_mode,
+        "on_detect": policy.on_detect,
+        "controls": {
+            "deterministic": policy.deterministic.len(),
+            "semantic": policy.semantic.len(),
+        },
+        "models": policy.models,
+        "signatures": policy.signatures,
+    }))
 }
 
 async fn shutdown() {

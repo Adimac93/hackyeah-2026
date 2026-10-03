@@ -1,0 +1,152 @@
+# AI Control Layer — control catalog.
+#
+# This file is the single configuration source (task.md §4.1). The gateway
+# watches it and hot-reloads on save: no restart, and in-flight requests finish
+# under the policy they started with. If an edit is invalid, the gateway keeps
+# serving the last good version and surfaces the error — a config typo must
+# never take the control layer offline.
+#
+# Patterns use TOML literal strings ('...'), so regex backslashes need no
+# escaping. Write the regex exactly as you would test it.
+
+schema_version = 1
+
+[defaults]
+# Applied when a control does not set its own. allow | redact | block
+on_detect = "block"
+# What to do when a control itself errors or times out. closed = deny.
+fail_mode = "closed"
+
+[models]
+# Deny wins over allow. Empty allowed list means "any model not denied".
+allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b"]
+denied = []
+
+# ---------------------------------------------------------------- budgets
+# §4.3. Hard budgets reject the call; soft budgets record and warn.
+
+[budgets.global]
+window_secs = 86_400
+limit_usd = 25.0
+limit_tokens = 2_000_000
+hard = true
+
+[budgets.principal.demo-agent]
+window_secs = 3_600
+limit_tokens = 50_000
+hard = true
+
+[budgets.principal.red-team]
+window_secs = 3_600
+limit_tokens = 10_000
+hard = false
+
+# ---------------------------------------------------------------- tier 1
+# Deterministic controls. Microseconds, no model, no network. Every request
+# pays this cost, so keep the patterns cheap.
+
+[[controls.deterministic]]
+id = "secret.aws-access-key"
+hooks = ["prompt_in", "response_out", "tool_result"]
+severity = "critical"
+action = "block"
+pattern = '\bAKIA[0-9A-Z]{16}\b'
+
+[[controls.deterministic]]
+id = "secret.private-key"
+hooks = ["prompt_in", "response_out", "tool_result"]
+severity = "critical"
+action = "block"
+pattern = '-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'
+
+[[controls.deterministic]]
+id = "secret.bearer-token"
+hooks = ["prompt_in", "response_out"]
+severity = "high"
+action = "redact"
+pattern = '(?i)\b(bearer|api[_-]?key|authorization)\s*[:=]\s*[A-Za-z0-9._\-]{20,}'
+
+[[controls.deterministic]]
+id = "pii.email"
+hooks = ["prompt_in", "response_out"]
+severity = "medium"
+action = "redact"
+pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
+
+[[controls.deterministic]]
+id = "pii.pesel"
+# Polish national identification number — 11 digits.
+hooks = ["prompt_in", "response_out"]
+severity = "high"
+action = "redact"
+pattern = '\b[0-9]{11}\b'
+
+[[controls.deterministic]]
+id = "exploit.code-execution"
+# §4.4: the shapes behind real historical exploits on AI infrastructure.
+hooks = ["tool_result", "response_out"]
+severity = "critical"
+action = "block"
+pattern = '(?i)\b(os\.system|subprocess\.(run|call|Popen)|eval\(|exec\(|__import__)\b'
+
+[[controls.deterministic]]
+id = "exploit.unsafe-deserialization"
+hooks = ["tool_result"]
+severity = "critical"
+action = "block"
+pattern = '(?i)\b(pickle\.loads?|torch\.load|yaml\.load\s*\(|marshal\.loads)\b'
+
+[[controls.deterministic]]
+id = "injection.instruction-override"
+# Cheap first pass. The semantic tier below catches what this misses.
+hooks = ["prompt_in", "tool_result"]
+severity = "medium"
+action = "flag"
+pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
+
+# ---------------------------------------------------------------- tier 2
+# Semantic controls. Model-backed, tens of milliseconds. `escalate_when`
+# decides who pays that cost:
+#   always     — every request through this hook
+#   suspicious — only when tier 1 flagged something (default; keeps p50 low)
+#   never      — disabled without deleting the config
+
+[[controls.semantic]]
+id = "injection.prompt-guard"
+hooks = ["prompt_in", "tool_result"]
+severity = "high"
+action = "block"
+detector = "prompt_guard_2"
+# Strictness knob. Lower catches more and blocks more legitimate traffic.
+threshold = 0.80
+escalate_when = "suspicious"
+
+[[controls.semantic]]
+id = "pii.contextual"
+# Catches identifiers that no regex describes: names, addresses, free-text
+# health details.
+hooks = ["prompt_in", "response_out"]
+severity = "medium"
+action = "redact"
+detector = "presidio"
+threshold = 0.65
+escalate_when = "always"
+
+[[controls.semantic]]
+id = "exfiltration.intent"
+hooks = ["tool_call"]
+severity = "high"
+action = "block"
+detector = "llm_judge"
+threshold = 0.75
+escalate_when = "suspicious"
+
+# ---------------------------------------------------------------- feed
+# §4.4. Signatures of known historical attacks, managed outside this file so a
+# feed update does not require a policy change.
+
+[signatures]
+source = "file"
+path = "policy/signatures.toml"
+refresh_secs = 300
+enabled = true
