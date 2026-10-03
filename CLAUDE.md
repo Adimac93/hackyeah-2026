@@ -58,7 +58,7 @@ we lose an hour to merge conflicts at 3am.
 | `gateway/` — Rust proxy, deterministic tier, policy engine, audit writer | |
 | `sentinel/` — semantic tier (pending the stack decision above) | |
 | `dashboard/` — admin UI, reads the Data API | |
-| `policy/` — YAML control catalog, thresholds, budgets | |
+| `policy/` — TOML control catalog, thresholds, budgets | |
 | `tests/` — scenario cases, positive and negative | |
 | `supabase/migrations/` — schema | |
 
