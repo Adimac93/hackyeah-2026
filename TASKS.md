@@ -11,8 +11,7 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Next
 
-- [ ] web-gateway-auth — web chat still sends `x-principal`, which the gateway no longer trusts, so "Gateway (protected)" chat gets 401; send `Authorization: Bearer $GATEWAY_API_KEY` from the server (@)
-- [ ] web-policy-upload — console policy page: upload catalog TOML (+ optional signatures) to `POST /admin/policy` with the user's Supabase access token, show the returned diff and `/admin/policy/versions` (@)
+- [ ] migrate-end-users — `just migrate` for 20261004090000_end_users_activity_status, `just seed` (adds `console-chat`), then `supabase db advisors` (@)
 - [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)
 - [ ] web-helper — show `error.helper` (violated policy + suggestion) on a blocked chat prompt, resubmit only on click (@)
 - [ ] web-results — fetch `GET /v1/results/{id}` for `resources__query` acknowledgements and render the rows (@)
@@ -26,6 +25,7 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Done
 
+- [x] console-specs — per-user budgets/risk/activity (X-On-Behalf-Of), deterministic refusal notice, live activity with status filter, user risk tab, merged Controls & policies with TOML editor, incidents and company-policy pages dropped
 - [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API
 - [x] principal-models — enforce per-identity/role model allow list on top of the global one
 - [x] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count

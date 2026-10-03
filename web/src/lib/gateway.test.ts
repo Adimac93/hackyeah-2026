@@ -5,7 +5,7 @@ import {
   MAX_POLICY_BYTES,
   budgetSpend,
   checkPolicyUpload,
-  describePolicyUpload,
+  describePolicySave,
   fmtMicros,
   fmtWindow,
   gatewayStats,
@@ -58,10 +58,6 @@ void test("gatewayStats on no events is all zeros", () => {
 });
 
 const NOW = Date.parse("2026-10-03T12:00:00Z");
-const principals = [
-  { id: "p1", slug: "demo-agent" },
-  { id: "p2", slug: "red-team" },
-];
 function budget(over: Partial<Budget>): Budget {
   return {
     id: 1,
@@ -70,6 +66,8 @@ function budget(over: Partial<Budget>): Budget {
     window_secs: 3600,
     limit_usd: null,
     limit_tokens: 1000,
+    limit_requests: null,
+    limit_concurrency: null,
     hard: true,
     enabled: true,
     created_at: "2026-10-01T00:00:00Z",
@@ -80,6 +78,7 @@ function usage(over: Partial<UsageRow>): UsageRow {
   return {
     ts: "2026-10-03T11:30:00Z",
     principal_id: "p1",
+    end_user: "anna@example.com",
     model: "llama3.1:8b",
     prompt_tokens: 100,
     completion_tokens: 50,
@@ -92,44 +91,37 @@ void test("budgetSpend only counts usage inside the window", () => {
   const spend = budgetSpend(
     budget({}),
     [usage({}), usage({ ts: "2026-10-03T10:59:00Z" })],
-    principals,
     NOW,
   );
   assert.equal(spend.tokens, 150);
   assert.equal(spend.used, 0.15);
 });
 
-void test("budgetSpend scopes to a principal by slug and to a model", () => {
+void test("budgetSpend scopes to a user and to a model", () => {
   const rows = [
     usage({}),
-    usage({ principal_id: "p2", model: "qwen2.5:7b", prompt_tokens: 400 }),
+    usage({
+      end_user: "jan@example.com",
+      model: "qwen2.5:7b",
+      prompt_tokens: 400,
+    }),
   ];
   assert.equal(
     budgetSpend(
-      budget({ scope: "principal", scope_id: "red-team" }),
+      budget({ scope: "user", scope_id: "jan@example.com" }),
       rows,
-      principals,
       NOW,
     ).tokens,
     450,
   );
   assert.equal(
-    budgetSpend(
-      budget({ scope: "model", scope_id: "llama3.1:8b" }),
-      rows,
-      principals,
-      NOW,
-    ).tokens,
+    budgetSpend(budget({ scope: "model", scope_id: "llama3.1:8b" }), rows, NOW)
+      .tokens,
     150,
   );
-  // unknown principal slug matches nothing rather than everything
+  // an unknown user matches nothing rather than everything
   assert.equal(
-    budgetSpend(
-      budget({ scope: "principal", scope_id: "ghost" }),
-      rows,
-      principals,
-      NOW,
-    ).tokens,
+    budgetSpend(budget({ scope: "user", scope_id: "ghost" }), rows, NOW).tokens,
     0,
   );
 });
@@ -138,14 +130,10 @@ void test("budgetSpend reports the tighter of token and USD limits", () => {
   const spend = budgetSpend(
     budget({ limit_tokens: 1000, limit_usd: 0.02 }),
     [usage({})],
-    principals,
     NOW,
   );
   assert.equal(spend.used, 0.5);
-  assert.equal(
-    budgetSpend(budget({ limit_tokens: null }), [], principals, NOW).used,
-    null,
-  );
+  assert.equal(budgetSpend(budget({ limit_tokens: null }), [], NOW).used, null);
 });
 
 void test("formatters", () => {
@@ -172,29 +160,17 @@ void test("checkPolicyUpload wants a complete, text, size-limited catalog", () =
   assert.ok(checkPolicyUpload("# catalog\n  schema_version = 1\n").ok);
 });
 
-void test("describePolicyUpload maps gateway answers", () => {
-  const accepted = describePolicyUpload(200, {
+void test("describePolicySave summarises the diff", () => {
+  const result = {
     accepted: true,
     changed: true,
-    diff: "policy a -> b",
-  });
-  assert.ok(accepted.ok);
-  assert.match(accepted.message, /policy a -> b/);
-
-  const same = describePolicyUpload(200, { accepted: true, changed: false });
-  assert.ok(same.ok);
-  assert.match(same.message, /nothing changed/);
-
-  const invalid = describePolicyUpload(422, {
-    error: "invalid_policy",
-    message: "unknown field `on_detct`",
-  });
-  assert.equal(invalid.ok, false);
-  assert.match(invalid.error, /on_detct/);
-
-  const forbidden = describePolicyUpload(403, {});
-  assert.equal(forbidden.ok, false);
-  assert.match(forbidden.error, /session or role/);
-
-  assert.equal(describePolicyUpload(500, null).ok, false);
+    version: "abc",
+    version_id: 7,
+    diff: ["- pii.email", "~ secret.jwt: action redact -> block"],
+  };
+  assert.match(describePolicySave(result), /#7\. - pii\.email; ~ secret\.jwt/);
+  assert.match(
+    describePolicySave({ ...result, changed: false, diff: [] }),
+    /nothing changed/,
+  );
 });

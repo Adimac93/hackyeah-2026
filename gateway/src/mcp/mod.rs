@@ -209,7 +209,7 @@ async fn tools_call(
         gate(&mut outbound, "mcp.runaway", reason);
     }
     let _inflight = state.budgets.check(principal, None, &mut outbound).await;
-    risk::apply(state.db(), &policy.risk, principal.id, &mut outbound).await;
+    risk::apply(state.db(), &policy.risk, &principal.user, &mut outbound).await;
     if outbound.verdict != Verdict::Block {
         engine::escalate(policy, Hook::ToolCall, &mut outbound, &state.detectors).await;
     }
@@ -219,7 +219,7 @@ async fn tools_call(
         Hook::ToolCall,
         &outbound,
         None,
-        Some(principal.id),
+        principal,
         policy.version_id,
         &rendered,
     );
@@ -297,7 +297,7 @@ async fn tools_call(
         Hook::ToolResult,
         &inbound,
         None,
-        Some(principal.id),
+        principal,
         policy.version_id,
         &text,
     );
@@ -356,7 +356,7 @@ fn job(
         channel: "mcp",
         text: text.to_owned(),
         trace_id,
-        principal_id: principal.id,
+        principal: principal.clone(),
         model: None,
         tool: Some(tool.to_owned()),
     }
@@ -398,7 +398,7 @@ async fn resource_call(
         Hook::ResponseOut,
         &delivered,
         None,
-        Some(principal.id),
+        principal,
         policy.version_id,
         &Value::Array(result.rows.clone()).to_string(),
     );

@@ -1,23 +1,32 @@
 import Link from "next/link";
 
+import { LiveRefresh } from "@/components/live-refresh";
 import {
   ControlSeverityBadge,
   EmptyRow,
   PageHeader,
-  VerdictBadge,
+  SecurityStatusBadge,
   tableClass,
   tdClass,
   thClass,
 } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
-import { CHANNELS, VERDICTS, fmtMicros, overheadUs } from "@/lib/gateway";
+import {
+  CHANNELS,
+  SECURITY_STATUSES,
+  VERDICTS,
+  fmtMicros,
+  overheadUs,
+} from "@/lib/gateway";
 import type {
   ControlSeverity,
   Detection,
   GatewayEvent,
   Principal,
+  SecurityStatus,
 } from "@/lib/gateway";
+import { supabaseEnv } from "@/lib/supabase/env";
 
 const FILTER_CLASS =
   "rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 focus:border-emerald-500 focus:outline-none";
@@ -31,6 +40,7 @@ const SEVERITY_RANK: Record<ControlSeverity, number> = {
 };
 
 type EventRow = GatewayEvent & {
+  status: SecurityStatus;
   principals: Pick<Principal, "slug" | "display_name"> | null;
   detections: Pick<Detection, "id" | "severity" | "control_id">[];
 };
@@ -43,9 +53,10 @@ export default async function ActivityPage({
   const verdict = typeof sp.verdict === "string" ? sp.verdict : "";
   const channel = typeof sp.channel === "string" ? sp.channel : "";
   const principal = typeof sp.principal === "string" ? sp.principal : "";
+  const status = typeof sp.status === "string" ? sp.status : "";
 
   let query = supabase
-    .from("events")
+    .from("activity")
     .select(
       "*, principals(slug, display_name), detections(id, severity, control_id)",
     )
@@ -60,12 +71,17 @@ export default async function ActivityPage({
   if (principal) {
     query = query.eq("principal_id", principal);
   }
+  if ((SECURITY_STATUSES as readonly string[]).includes(status)) {
+    query = query.eq("status", status);
+  }
 
   const [{ data }, { data: principalRows }] = await Promise.all([
     query,
     supabase.from("principals").select("id, slug, display_name").order("slug"),
   ]);
   const events = (data ?? []) as EventRow[];
+  const { url, key } = supabaseEnv();
+  const liveEnv = { url, anonKey: key };
   const principals = (principalRows ?? []) as Pick<
     Principal,
     "id" | "slug" | "display_name"
@@ -75,10 +91,19 @@ export default async function ActivityPage({
     <>
       <PageHeader
         title="Activity"
-        subtitle="Every request the AI gateway intercepted, newest first. Append-only and hash-chained."
+        subtitle="Every request the AI gateway intercepted, newest first and live. Append-only and hash-chained."
       />
 
+      <LiveRefresh {...liveEnv} />
       <form className="mb-4 flex flex-wrap items-center gap-2">
+        <select name="status" defaultValue={status} className={FILTER_CLASS}>
+          <option value="">Any security status</option>
+          {SECURITY_STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
         <select name="verdict" defaultValue={verdict} className={FILTER_CLASS}>
           <option value="">All verdicts</option>
           {VERDICTS.map((v) => (
@@ -110,7 +135,7 @@ export default async function ActivityPage({
         <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
           Filter
         </button>
-        {verdict || channel || principal ? (
+        {verdict || channel || principal || status ? (
           <Link
             href="/activity"
             className="text-sm text-zinc-500 hover:text-zinc-300"
@@ -124,9 +149,9 @@ export default async function ActivityPage({
         <table className={tableClass}>
           <thead className="border-b border-zinc-800">
             <tr>
-              <th className={thClass}>Verdict</th>
+              <th className={thClass}>Status</th>
               <th className={thClass}>Request</th>
-              <th className={`${thClass} hidden md:table-cell`}>Principal</th>
+              <th className={`${thClass} hidden md:table-cell`}>User</th>
               <th className={thClass}>Detections</th>
               <th className={`${thClass} hidden text-right sm:table-cell`}>
                 Overhead
@@ -152,7 +177,7 @@ export default async function ActivityPage({
               return (
                 <tr key={event.id} className="hover:bg-zinc-800/40">
                   <td className={tdClass}>
-                    <VerdictBadge verdict={event.verdict} />
+                    <SecurityStatusBadge status={event.status} />
                   </td>
                   <td className={tdClass}>
                     <Link
@@ -169,9 +194,12 @@ export default async function ActivityPage({
                   <td
                     className={`${tdClass} hidden text-zinc-400 md:table-cell`}
                   >
-                    {event.principals?.display_name ?? (
+                    {event.end_user ?? (
                       <span className="text-zinc-600">Unknown</span>
                     )}
+                    <p className="text-xs text-zinc-600">
+                      via {event.principals?.display_name ?? "unregistered"}
+                    </p>
                   </td>
                   <td className={tdClass}>
                     {worst === null ? (

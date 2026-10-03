@@ -159,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/admin/budgets/{id}", delete(admin::budgets::delete))
         .route("/admin/audit/export", get(admin::export::export))
+        .route("/admin/risk", get(admin::risk::list))
         .route("/admin/approvals/stream", get(approvals::http::stream))
         .route("/admin/approvals/{id}", post(approvals::http::decide))
         .with_state(state)
@@ -219,6 +220,7 @@ fn index_json(state: &AppState) -> Value {
             "GET  /v1/results/{id}": "rows of a resources__query, for the identity that ran it",
             "GET  /policy": "admin: the catalog currently being enforced",
             "POST /admin/policy": "admin: upload and activate a catalog",
+            "GET  /admin/risk": "admin: per-user risk scores, searchable with ?q=",
             "GET  /admin/approvals/stream": "SSE of pending access requests (security_admin)",
             "POST /admin/approvals/{id}": "approve or deny an access request (security_admin)",
         },

@@ -186,10 +186,9 @@ pub async fn collect(pool: &PgPool, window_hours: i32) -> sqlx::Result<Report> {
         "select b.scope::text, b.scope_id, b.limit_tokens, b.hard,
                 (select sum(u.prompt_tokens + u.completion_tokens)::bigint
                  from usage u
-                 left join principals p on p.id = u.principal_id
                  where u.ts > now() - make_interval(secs => b.window_secs)
                    and (b.scope = 'global'
-                        or (b.scope = 'principal' and p.slug = b.scope_id)
+                        or (b.scope = 'user' and u.end_user = b.scope_id)
                         or (b.scope = 'model' and u.model = b.scope_id)))
          from budgets b where b.enabled order by b.scope, b.scope_id",
     )

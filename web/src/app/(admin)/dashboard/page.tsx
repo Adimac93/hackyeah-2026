@@ -1,23 +1,12 @@
 import Link from "next/link";
 
-import {
-  Card,
-  PageHeader,
-  SeverityBadge,
-  StatusBadge,
-  VerdictBadge,
-} from "@/components/ui";
+import { Card, PageHeader, VerdictBadge } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
-import {
-  SEVERITIES,
-  incidentStats,
-  isReviewOverdue,
-  triageSort,
-} from "@/lib/domain";
-import type { Incident, Policy } from "@/lib/domain";
-import { fmtDate, timeAgo } from "@/lib/format";
-import { fmtMicros, gatewayStats } from "@/lib/gateway";
-import type { GatewayEvent, Principal } from "@/lib/gateway";
+import { timeAgo } from "@/lib/format";
+import { SECURITY_STATUSES, fmtMicros, gatewayStats } from "@/lib/gateway";
+import type { GatewayEvent, Principal, SecurityStatus } from "@/lib/gateway";
+import type { RiskReport } from "@/lib/gateway-live";
+import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
 const DAY_MS = 86_400_000;
 
@@ -26,30 +15,22 @@ type InterventionRow = Pick<
   "id" | "ts" | "hook" | "channel" | "tool" | "model" | "verdict"
 > & { principals: Pick<Principal, "display_name"> | null };
 
-const BAR_COLOR = {
-  critical: "bg-red-500",
-  high: "bg-orange-500",
-  medium: "bg-yellow-400",
-  low: "bg-sky-400",
+const STATUS_TONE: Record<SecurityStatus, string> = {
+  secure: "text-emerald-400",
+  flagged: "text-amber-300",
+  redacted: "text-violet-300",
+  blocked: "text-red-400",
 };
 
 export default async function DashboardPage() {
   const { supabase } = await requireMember();
   const since = new Date(Date.now() - DAY_MS).toISOString();
   const [
-    { data: incidentRows },
-    { data: policyRows },
     { data: eventRows },
     { data: interventionRows },
+    { data: statusRows },
+    risk,
   ] = await Promise.all([
-    supabase
-      .from("incidents")
-      .select("id, title, severity, status, category, detected_at, resolved_at")
-      .order("detected_at", { ascending: false })
-      .limit(500),
-    supabase
-      .from("policies")
-      .select("id, title, status, review_due, category, version"),
     supabase
       .from("events")
       .select("verdict, latency")
@@ -64,49 +45,25 @@ export default async function DashboardPage() {
       .order("ts", { ascending: false })
       .limit(5)
       .overrideTypes<InterventionRow[], { merge: false }>(),
+    supabase
+      .from("activity")
+      .select("status")
+      .gte("ts", since)
+      .limit(10_000)
+      .overrideTypes<{ status: SecurityStatus }[], { merge: false }>(),
+    gatewayFetch<RiskReport>("/admin/risk?limit=5"),
   ]);
-  const incidents = (incidentRows ?? []) as Incident[];
-  const policies = (policyRows ?? []) as Policy[];
   const gateway = gatewayStats(
     (eventRows ?? []) as Pick<GatewayEvent, "verdict" | "latency">[],
   );
   const interventions = interventionRows ?? [];
-
-  const stats = incidentStats(incidents);
-  const urgent = stats.bySeverity.critical + stats.bySeverity.high;
-  const activePolicies = policies.filter((p) => p.status === "active");
-  const overdue = activePolicies.filter((p) => isReviewOverdue(p));
-  const queue = triageSort(
-    incidents.filter((index) => index.status !== "resolved"),
-  ).slice(0, 6);
-  const maxBar = Math.max(1, ...SEVERITIES.map((s) => stats.bySeverity[s]));
-
-  const tiles = [
-    {
-      label: "Open incidents",
-      value: stats.open,
-      tone: stats.open ? "text-zinc-50" : "text-emerald-400",
-    },
-    {
-      label: "Critical + high",
-      value: urgent,
-      tone: urgent ? "text-red-400" : "text-emerald-400",
-    },
-    {
-      label: "Mean time to resolve",
-      value: stats.mttrHours === null ? "—" : `${String(stats.mttrHours)}h`,
-      tone: "text-zinc-50",
-    },
-    {
-      label: "Active policies",
-      value: activePolicies.length,
-      tone: "text-zinc-50",
-      sub:
-        overdue.length > 0
-          ? `${String(overdue.length)} overdue for review`
-          : "all reviews current",
-    },
-  ];
+  const byStatus = Object.fromEntries(
+    SECURITY_STATUSES.map((status) => [
+      status,
+      (statusRows ?? []).filter((row) => row.status === status).length,
+    ]),
+  ) as Record<SecurityStatus, number>;
+  const riskyUsers = risk.ok ? risk.data.users.filter((u) => u.score > 0) : [];
 
   const gatewayTiles = [
     { label: "Requests", value: gateway.total, tone: "text-zinc-50" },
@@ -133,7 +90,7 @@ export default async function DashboardPage() {
     <>
       <PageHeader
         title="Security overview"
-        subtitle="Live posture across the AI gateway, incidents and company policy"
+        subtitle="Live posture across the AI gateway, its users and their requests"
       />
 
       <div className="mb-3 flex items-baseline justify-between">
@@ -200,137 +157,69 @@ export default async function DashboardPage() {
         )}
       </Card>
 
-      <h2 className="mb-3 text-sm font-semibold text-zinc-300">
-        Incidents & policy
-      </h2>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card title="Security status · last 24h">
+          <ul className="space-y-2.5">
+            {SECURITY_STATUSES.map((status) => (
+              <li key={status}>
+                <Link
+                  href={`/activity?status=${status}`}
+                  className="flex items-center justify-between text-sm hover:opacity-80"
+                >
+                  <span className="text-zinc-400 capitalize">{status}</span>
+                  <span
+                    className={`font-semibold tabular-nums ${STATUS_TONE[status]}`}
+                  >
+                    {byStatus[status]}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {tiles.map((t) => (
-          <div
-            key={t.label}
-            className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
-          >
-            <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
-              {t.label}
-            </p>
-            <p className={`mt-2 text-3xl font-semibold tabular-nums ${t.tone}`}>
-              {t.value}
-            </p>
-            {t.sub === undefined ? null : (
-              <p
-                className={`mt-1 text-xs ${overdue.length > 0 ? "text-amber-400" : "text-zinc-500"}`}
-              >
-                {t.sub}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card
           className="lg:col-span-2"
-          title="Triage queue"
+          title="Highest-risk users"
           actions={
             <Link
-              href="/incidents"
+              href="/risk"
               className="text-xs text-emerald-400 hover:underline"
             >
-              All incidents →
+              All users →
             </Link>
           }
         >
-          {queue.length === 0 ? (
-            <p className="py-6 text-center text-sm text-zinc-500">
-              No open incidents. 🎉
+          {risk.ok && riskyUsers.length === 0 ? (
+            <p className="text-sm text-zinc-500">
+              No user has recent violations. 🎉
             </p>
-          ) : (
+          ) : risk.ok ? (
             <ul className="-my-2 divide-y divide-zinc-800">
-              {queue.map((index) => (
-                <li key={index.id}>
+              {riskyUsers.map((u) => (
+                <li
+                  key={u.user}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                >
                   <Link
-                    href={`/incidents/${index.id}`}
-                    className="flex items-center gap-3 py-3 hover:opacity-80"
+                    href={`/risk?q=${encodeURIComponent(u.user)}`}
+                    className="min-w-0 truncate text-sm text-zinc-100 hover:underline"
                   >
-                    <SeverityBadge severity={index.severity} />
-                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-100">
-                      {index.title}
-                    </span>
-                    <StatusBadge status={index.status} />
-                    <span className="hidden w-16 text-right text-xs text-zinc-500 sm:block">
-                      {timeAgo(index.detected_at)}
-                    </span>
+                    {u.user}
                   </Link>
+                  <span className="shrink-0 text-xs text-zinc-400 tabular-nums">
+                    {u.score.toFixed(2)} · {u.status}
+                  </span>
                 </li>
               ))}
             </ul>
+          ) : (
+            <p className="text-sm text-zinc-500">
+              Risk scores unavailable: {risk.error}
+            </p>
           )}
         </Card>
-
-        <Card title="Open by severity">
-          <ul className="space-y-3">
-            {SEVERITIES.toReversed().map((s) => (
-              <li key={s} className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-zinc-400 capitalize">{s}</span>
-                  <span className="text-zinc-300 tabular-nums">
-                    {stats.bySeverity[s]}
-                  </span>
-                </div>
-                <div className="h-2 rounded-full bg-zinc-800">
-                  <div
-                    className={`h-2 rounded-full ${BAR_COLOR[s]}`}
-                    style={{
-                      width: `${String((stats.bySeverity[s] / maxBar) * 100)}%`,
-                    }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-5 text-xs text-zinc-500">
-            {stats.resolvedLast30d} resolved in the last 30 days
-          </p>
-        </Card>
       </div>
-
-      <Card
-        className="mt-6"
-        title="Policies due for review"
-        actions={
-          <Link
-            href="/policies"
-            className="text-xs text-emerald-400 hover:underline"
-          >
-            All policies →
-          </Link>
-        }
-      >
-        {overdue.length === 0 ? (
-          <p className="text-sm text-zinc-500">
-            Every active policy is within its review window.
-          </p>
-        ) : (
-          <ul className="divide-y divide-zinc-800">
-            {overdue.map((p) => (
-              <li
-                key={p.id}
-                className="flex items-center justify-between gap-4 py-2.5"
-              >
-                <Link
-                  href={`/policies/${p.id}`}
-                  className="text-sm text-zinc-100 hover:underline"
-                >
-                  {p.title} <span className="text-zinc-500">v{p.version}</span>
-                </Link>
-                <span className="text-xs text-amber-400">
-                  due {fmtDate(p.review_due)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
     </>
   );
 }

@@ -7,7 +7,11 @@ import type {
   Severity,
   TeamRole,
 } from "@/lib/domain";
-import type { ControlAction, ControlSeverity } from "@/lib/gateway";
+import type {
+  ControlAction,
+  ControlSeverity,
+  SecurityStatus,
+} from "@/lib/gateway";
 
 const SEVERITY_STYLE: Record<Severity, string> = {
   critical: "bg-red-500/15 text-red-300 ring-red-500/40",
@@ -74,6 +78,18 @@ const VERDICT_STYLE: Record<ControlAction, string> = {
 /** Gateway event verdict or a single control's action. */
 export function VerdictBadge({ verdict }: { verdict: ControlAction }) {
   return <Pill className={VERDICT_STYLE[verdict]}>{verdict}</Pill>;
+}
+
+const STATUS_ACTION: Record<SecurityStatus, ControlAction> = {
+  secure: "allow",
+  flagged: "flag",
+  redacted: "redact",
+  blocked: "block",
+};
+
+/** An event's security status, in the palette of the action that produced it. */
+export function SecurityStatusBadge({ status }: { status: SecurityStatus }) {
+  return <Pill className={VERDICT_STYLE[STATUS_ACTION[status]]}>{status}</Pill>;
 }
 
 export function StatusBadge({

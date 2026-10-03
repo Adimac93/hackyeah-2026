@@ -127,7 +127,8 @@ async function callGateway(
         "content-type": "application/json",
         // the gateway resolves the calling principal from this key; no key, no call
         authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
-        ...(principal === undefined ? {} : { "x-principal": principal }),
+        // the console-chat principal delegates: budgets, risk and activity are per user
+        ...(principal === undefined ? {} : { "x-on-behalf-of": principal }),
       },
       body: JSON.stringify({
         model,
