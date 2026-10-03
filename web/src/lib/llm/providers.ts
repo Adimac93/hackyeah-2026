@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
 
+import { interpretGatewayResponse } from "./gateway";
 import { describeProviderError, normalizeHistory } from "./models";
 import type { ModelOption } from "./models";
 
@@ -70,6 +71,46 @@ async function callOpenAICompatible(
   return completion.choices[0]?.message.content?.trim() ?? "";
 }
 
+/** Through the AI Control Layer gateway. Plain fetch: we need its refusal bodies and `x_control_layer`. */
+async function callGateway(
+  model: string,
+  system: string,
+  messages: ChatTurn[],
+  principal: string | undefined,
+): Promise<string> {
+  const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
+  let response: Response;
+  try {
+    response = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(principal === undefined ? {} : { "x-principal": principal }),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: system }, ...messages],
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (error) {
+    console.error(
+      "[assistant] gateway unreachable",
+      error instanceof Error ? error.name : "unknown",
+    );
+    throw new ProviderError(
+      "The AI Control Layer gateway is unreachable. Is it running?",
+    );
+  }
+  const body: unknown = await response.json().catch(() => null);
+  const outcome = interpretGatewayResponse(response.status, body);
+  if (!outcome.ok) {
+    console.error("[assistant] gateway failed", response.status);
+    throw new ProviderError(outcome.error);
+  }
+  return outcome.reply;
+}
+
 function openAIClient(option: ModelOption): OpenAI {
   return option.provider === "openai"
     ? new OpenAI({
@@ -100,19 +141,23 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     return mockProvider;
   }
 
-  return async ({ history, policies }) => {
+  return async ({ history, policies, principal }) => {
     const system = buildSystemPrompt(policies);
     const messages = normalizeHistory(history);
     try {
-      const reply =
-        option.provider === "anthropic"
-          ? await callAnthropic(option.model, system, messages)
-          : await callOpenAICompatible(
-              openAIClient(option),
-              option.model,
-              system,
-              messages,
-            );
+      let reply: string;
+      if (option.provider === "gateway") {
+        reply = await callGateway(option.model, system, messages, principal);
+      } else if (option.provider === "anthropic") {
+        reply = await callAnthropic(option.model, system, messages);
+      } else {
+        reply = await callOpenAICompatible(
+          openAIClient(option),
+          option.model,
+          system,
+          messages,
+        );
+      }
       if (reply === "") {
         throw new ProviderError(`${option.label} returned an empty reply.`);
       }

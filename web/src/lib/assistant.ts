@@ -32,6 +32,8 @@ export type ChatMessage = ChatTurn & {
 export type AssistantProvider = (input: {
   history: ChatTurn[];
   policies: PolicySnippet[];
+  /** who is asking; the gateway attributes audit events and budgets to it */
+  principal?: string;
 }) => Promise<string>;
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };

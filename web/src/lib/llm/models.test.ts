@@ -49,6 +49,27 @@ void test("blank keys don't count, compatible needs a base url and models", () =
   assert.equal(compat[0].label, "Groq llama-3.3-70b");
 });
 
+void test("the gateway, when configured, is the default ahead of direct providers", () => {
+  const ids = availableModels({
+    GATEWAY_URL: "http://localhost:8080",
+    ANTHROPIC_API_KEY: "k",
+  }).map((m) => m.id);
+  assert.equal(ids[0], "gateway:llama3.1:8b");
+  assert.equal(
+    availableModels({ GATEWAY_URL: " ", GATEWAY_MODELS: "x" }).length,
+    1,
+  );
+  assert.deepEqual(
+    availableModels({
+      GATEWAY_URL: "http://gw",
+      GATEWAY_MODELS: "qwen2.5:7b,mistral:7b",
+    })
+      .filter((m) => m.provider === "gateway")
+      .map((m) => m.model),
+    ["qwen2.5:7b", "mistral:7b"],
+  );
+});
+
 void test("parseModelList falls back when empty", () => {
   assert.deepEqual(parseModelList(undefined, ["a"]), ["a"]);
   assert.deepEqual(parseModelList(" , ", ["a"]), ["a"]);
