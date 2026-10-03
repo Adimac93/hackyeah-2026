@@ -103,6 +103,7 @@ const SCHEMA_VERSION: u32 = 1;
 // ------------------------------------------------------------------ raw TOML
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawCatalog {
     schema_version: u32,
     #[serde(default)]
@@ -119,6 +120,7 @@ struct RawCatalog {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawDefaults {
     on_detect: Action,
     fail_mode: FailMode,
@@ -134,6 +136,7 @@ impl Default for RawDefaults {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawControls {
     #[serde(default)]
     deterministic: Vec<RawDeterministic>,
@@ -142,8 +145,11 @@ struct RawControls {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawDeterministic {
     id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
     hooks: Vec<Hook>,
     severity: Severity,
     action: Option<Action>,
@@ -151,8 +157,11 @@ struct RawDeterministic {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawSemantic {
     id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
     hooks: Vec<Hook>,
     severity: Severity,
     action: Option<Action>,
@@ -201,6 +210,7 @@ pub struct SemanticControl {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Models {
     #[serde(default)]
     pub allowed: Vec<String>,
@@ -209,6 +219,7 @@ pub struct Models {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Budget {
     #[serde(default = "default_window")]
     pub window_secs: i32,
@@ -227,6 +238,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Budgets {
     pub global: Option<Budget>,
     #[serde(default)]
@@ -246,6 +258,7 @@ pub enum UnknownPrincipal {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServer {
     pub name: String,
     pub url: String,
@@ -254,6 +267,7 @@ pub struct McpServer {
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpSettings {
     #[serde(default)]
     pub unknown_principal: UnknownPrincipal,
@@ -272,6 +286,7 @@ impl McpSettings {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignatureFeed {
     pub source: String,
     pub path: Option<String>,
@@ -371,6 +386,9 @@ impl Policy {
                 id: control.id.clone(),
                 source,
             })?;
+            if !control.enabled {
+                continue;
+            }
             deterministic.push(DeterministicControl {
                 id: control.id,
                 hooks: control.hooks.into_iter().collect(),
@@ -391,6 +409,9 @@ impl Policy {
                     id: control.id,
                     threshold: control.threshold,
                 });
+            }
+            if !control.enabled {
+                continue;
             }
             semantic.push(SemanticControl {
                 describes: control.describes.unwrap_or_else(|| control.id.clone()),

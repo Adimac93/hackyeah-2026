@@ -157,3 +157,17 @@ fn the_version_tracks_the_content() {
     assert_eq!(a.sha256, b.sha256);
     assert_ne!(a.sha256, c.sha256);
 }
+
+#[test]
+fn a_disabled_control_is_not_compiled() {
+    let src = MINIMAL.replace(r#"id = "a""#, "id = \"a\"\nenabled = false");
+    assert!(parse(&src).unwrap().deterministic.is_empty());
+}
+
+/// A judge who types `enabeld = false` must see an error, not a control that
+/// quietly keeps firing.
+#[test]
+fn rejects_an_unknown_key() {
+    let src = MINIMAL.replace(r#"id = "a""#, "id = \"a\"\nenabeld = false");
+    assert!(matches!(parse(&src), Err(PolicyError::Parse { .. })));
+}

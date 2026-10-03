@@ -8,6 +8,10 @@
 #
 # Patterns use TOML literal strings ('...'), so regex backslashes need no
 # escaping. Write the regex exactly as you would test it.
+#
+# Every control takes `enabled = false` to switch it off without deleting it.
+# Unknown keys are rejected, so a misspelled setting fails the reload loudly
+# instead of being ignored.
 
 schema_version = 1
 
