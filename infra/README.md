@@ -20,7 +20,7 @@ Tear it down when you're not demoing:
 
     gcloud storage buckets create gs://project-3b1f59f2-cb77-4d59-bae-tfstate --location=europe-west1 --uniform-bucket-level-access
     just setup     # terraform init
-    just deploy    # terraform apply; review the plan before saying yes
+    just infra     # terraform apply; review the plan before saying yes
 
 Then capture the endpoint's self-signed certificate. It only exists after deploy and is only
 reachable inside the VPC, so a job running in the VPC fetches it into Secret Manager:
@@ -31,9 +31,11 @@ Re-run it whenever the deployment is recreated.
 
 ## Wiring the backend
 
-Terraform does not own the `backend` Cloud Run service. Add this to its deploy command:
+Terraform does not own the `backend` Cloud Run service (`just deploy` does). After it
+exists, apply the judge wiring once:
 
-    terraform -chdir=infra output -raw backend_deploy_flags
+    gcloud run services update backend --region=europe-west1 \
+      $(terraform -chdir=infra output -raw backend_deploy_flags)
 
 That gives it Direct VPC egress (private ranges only: Supabase and other public traffic
 still go out directly), the judge URL and IP, and the CA as `VERTEX_JUDGE_CA`.
