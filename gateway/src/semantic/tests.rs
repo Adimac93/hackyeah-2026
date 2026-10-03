@@ -59,3 +59,13 @@ threshold = 0.5
     let outcome = Registry::empty().score(&policy.semantic[0], "text").await;
     assert!(matches!(outcome, Err(DetectorError::Unknown(_))));
 }
+
+#[test]
+fn a_token_is_refreshed_before_it_expires_not_after() {
+    let now = Instant::now();
+    assert!(token_is_fresh(now + Duration::from_secs(3600), now));
+    // Inside the refresh margin: still technically valid, but it could lapse
+    // between here and Vertex, so it counts as stale.
+    assert!(!token_is_fresh(now + Duration::from_secs(30), now));
+    assert!(!token_is_fresh(now, now));
+}
