@@ -211,15 +211,22 @@ async fn active_policy(State(state): State<AppState>) -> Json<Value> {
 }
 
 /// The dashboard is served from a different origin, so the browser will not
-/// read a response without these. In production the allowed origins must be
-/// listed explicitly: this API serves blocked-secret evidence, and a wildcard
-/// would let any page on the internet read a security team's audit trail.
+/// read a response without these.
+///
+/// `CORS_ORIGINS=*` opts into any origin. Note what that does and does not
+/// cost: CORS constrains browsers only, and this gateway has no authentication,
+/// so anything a wildcard would expose is already reachable with curl. The
+/// control that actually matters here is authenticating callers, not this.
 fn cors(environment: &str) -> CorsLayer {
     let layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any);
 
     match std::env::var("CORS_ORIGINS") {
+        Ok(list) if list.trim() == "*" => {
+            tracing::warn!("CORS_ORIGINS=* — any origin may call this gateway");
+            layer.allow_origin(Any)
+        }
         Ok(list) => {
             let origins: Vec<HeaderValue> = list
                 .split(',')

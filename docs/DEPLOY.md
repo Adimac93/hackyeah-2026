@@ -73,13 +73,13 @@ and that failure looks like a code problem when it is not.
 
 ```bash
 gcloud run services update backend --region="$REGION" \
-  --set-env-vars=ENVIRONMENT=prod,CORS_ORIGINS=https://<your-dashboard-host>
+  --set-env-vars=ENVIRONMENT=prod,CORS_ORIGINS='*'
 ```
 
 | variable | effect |
 |---|---|
 | `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, and stops allowing every origin |
-| `CORS_ORIGINS` | comma-separated. **Unset in prod means no browser may call the API** — deliberate: this service returns blocked-secret evidence |
+| `CORS_ORIGINS` | comma-separated origins, or `*` for any. **Unset in prod means no browser may call the API.** CORS restricts browsers only; with no authentication on the gateway, a wildcard exposes nothing curl could not already reach |
 | `PORT` | injected by Cloud Run. A malformed value aborts startup rather than binding something else |
 | `POLICY_PATH` | defaults to `policy/control-catalog.toml`, shipped inside the image |
 | `UPSTREAM_URL` | where model traffic goes. Defaults to `localhost:11434`, which is nothing on Cloud Run |
