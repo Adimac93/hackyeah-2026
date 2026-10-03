@@ -38,7 +38,7 @@ steps:
 
 substitutions:
   _SERVICE: backend
-  _REGION: europe-central2
+  _REGION: europe-west1
   _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/gateway/backend:${SHORT_SHA}
 
 options:

@@ -64,7 +64,7 @@ demo:
     ./target/debug/gateway
 
 # ship the gateway to Cloud Run. See docs/DEPLOY.md for first-time setup.
-deploy region="europe-central2" service="backend":
+deploy region="europe-west1" service="backend":
     gcloud builds submit \
       --config cloudbuild.yaml \
       --substitutions=_REGION={{region}},_SERVICE={{service}}

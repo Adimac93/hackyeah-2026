@@ -10,7 +10,7 @@ in this repo should sit next to production workloads.
 
 ```bash
 export PROJECT=<your-project>
-export REGION=europe-central2
+export REGION=europe-west1
 
 gcloud config set project "$PROJECT"
 gcloud services enable \
@@ -61,7 +61,7 @@ gcloud secrets add-iam-policy-binding gateway-database-url \
 ## 5. Deploy
 
 ```bash
-just deploy                      # defaults: europe-central2, service "backend"
+just deploy                      # defaults: europe-west1, service "backend"
 just deploy us-central1 gateway  # or pick your own
 ```
 
