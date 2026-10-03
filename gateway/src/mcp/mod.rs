@@ -45,7 +45,6 @@ pub struct McpState {
     pub policy: PolicyHandle,
     pub auditor: Arc<Auditor>,
     pub http: reqwest::Client,
-    pub policy_version_id: Option<i64>,
     pub detectors: Arc<Registry>,
 }
 
@@ -174,6 +173,10 @@ async fn tools_call(
 ) -> Response {
     let trace_id = Uuid::new_v4();
     let principal_id = principal.map(|p| p.id);
+    let policy_version_id = state
+        .auditor
+        .policy_version_id(&policy.sha256, &policy.source)
+        .await;
 
     let Some(qualified) = params.get("name").and_then(Value::as_str) else {
         return error(id, POLICY_DENIED, "tools/call requires a tool name");
@@ -214,16 +217,18 @@ async fn tools_call(
     let mut outbound = engine::evaluate(policy, Hook::ToolCall, &rendered);
     engine::escalate(policy, Hook::ToolCall, &mut outbound, &state.detectors).await;
 
-    record(
-        state,
+    let mut outbound_record = audit::record_for(
         trace_id,
         Hook::ToolCall,
         &outbound,
-        qualified,
+        None,
         principal_id,
+        policy_version_id,
         &rendered,
-    )
-    .await;
+    );
+    outbound_record.channel = "mcp";
+    outbound_record.tool = Some(qualified);
+    state.auditor.record(outbound_record).await;
 
     if outbound.verdict == Verdict::Block {
         let control = outbound
@@ -286,7 +291,7 @@ async fn tools_call(
         &inbound,
         None,
         principal_id,
-        state.policy_version_id,
+        policy_version_id,
         &text,
     );
     inbound_record.channel = "mcp";
@@ -326,29 +331,6 @@ async fn tools_call(
     });
 
     result(id, payload)
-}
-
-async fn record(
-    state: &McpState,
-    trace_id: Uuid,
-    hook: Hook,
-    evaluation: &engine::Evaluation,
-    tool: &str,
-    principal_id: Option<Uuid>,
-    payload: &str,
-) {
-    let mut entry = audit::record_for(
-        trace_id,
-        hook,
-        evaluation,
-        None,
-        principal_id,
-        state.policy_version_id,
-        payload,
-    );
-    entry.channel = "mcp";
-    entry.tool = Some(tool);
-    state.auditor.record(entry).await;
 }
 
 fn summarise(evaluation: &engine::Evaluation) -> Value {

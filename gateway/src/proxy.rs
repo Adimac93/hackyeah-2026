@@ -25,7 +25,6 @@ pub struct ProxyState {
     pub auditor: std::sync::Arc<Auditor>,
     pub http: reqwest::Client,
     pub upstream: String,
-    pub policy_version_id: Option<i64>,
     pub detectors: std::sync::Arc<Registry>,
 }
 
@@ -36,6 +35,10 @@ pub async fn chat_completions(
 ) -> Response {
     let trace_id = Uuid::new_v4();
     let policy = state.policy.load();
+    let policy_version_id = state
+        .auditor
+        .policy_version_id(&policy.sha256, &policy.source)
+        .await;
 
     let slug = headers
         .get("x-principal")
@@ -83,7 +86,7 @@ pub async fn chat_completions(
             &inbound,
             Some(&model),
             principal_id,
-            state.policy_version_id,
+            policy_version_id,
             &prompt,
         ))
         .await;
@@ -154,7 +157,7 @@ pub async fn chat_completions(
         &outbound,
         Some(&model),
         principal_id,
-        state.policy_version_id,
+        policy_version_id,
         &answer,
     );
     outbound_record.latency = json!({

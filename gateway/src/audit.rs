@@ -9,6 +9,7 @@
 //! hackathon traffic that costs nothing; a production version would shard the
 //! chain per principal.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use sha2::{Digest as _, Sha256};
@@ -24,6 +25,9 @@ pub struct Auditor {
     /// cannot persist. Enforcement must not depend on the logger being up.
     db: Option<PgPool>,
     chain: Mutex<Vec<u8>>,
+    /// sha256 -> `policy_versions.id`, so a decision costs no extra round trip
+    /// once its version is known.
+    versions: std::sync::Mutex<HashMap<String, i64>>,
 }
 
 /// A registered caller: an agent, an application or a person.
@@ -73,6 +77,7 @@ impl Auditor {
         Self {
             db,
             chain: Mutex::new(tail),
+            versions: std::sync::Mutex::default(),
         }
     }
 
@@ -80,9 +85,20 @@ impl Auditor {
         self.db.is_some()
     }
 
-    /// Record the policy the gateway is running under, returning its row id so
-    /// each decision can point at the exact catalog text that produced it.
-    pub async fn register_policy(&self, sha256: &str, source: &str) -> Option<i64> {
+    /// The row id of the policy version a decision ran under, registering the
+    /// version on first sight. Resolved per request rather than once at
+    /// startup: a hot reload changes the version, and every decision must point
+    /// at the exact catalog text that produced it.
+    pub async fn policy_version_id(&self, sha256: &str, source: &str) -> Option<i64> {
+        if let Some(id) = self.versions.lock().ok()?.get(sha256) {
+            return Some(*id);
+        }
+        let id = self.register_policy(sha256, source).await?;
+        self.versions.lock().ok()?.insert(sha256.to_owned(), id);
+        Some(id)
+    }
+
+    async fn register_policy(&self, sha256: &str, source: &str) -> Option<i64> {
         let pool = self.db.as_ref()?;
         let result = sqlx::query_scalar::<_, i64>(
             "insert into policy_versions (sha256, source) values ($1, $2)

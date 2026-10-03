@@ -81,12 +81,12 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let auditor = Arc::new(Auditor::new(db.clone()).await);
-    let policy_version_id = {
+    {
         let active = policy.load();
         auditor
-            .register_policy(&active.sha256, &active.source)
-            .await
-    };
+            .policy_version_id(&active.sha256, &active.source)
+            .await;
+    }
     if !auditor.enabled() {
         tracing::warn!("audit log disabled — enforcement still runs, nothing is persisted");
     }
@@ -102,7 +102,6 @@ async fn main() -> anyhow::Result<()> {
         auditor: Arc::clone(&auditor),
         http: http.clone(),
         upstream,
-        policy_version_id,
         detectors: Arc::clone(&detectors),
     };
 
@@ -110,7 +109,6 @@ async fn main() -> anyhow::Result<()> {
         policy: policy.clone(),
         auditor,
         http,
-        policy_version_id,
         detectors,
     };
 
