@@ -31,10 +31,12 @@ steps:
       - --region=$_REGION
       - --platform=managed
       - --port=8080
-      - --set-env-vars=ENVIRONMENT=prod
+      # --update-*, not --set-*: --set replaces every variable on the service and
+      # would wipe UPSTREAM_URL/OLLAMA_URL/CORS_ORIGINS, so prod refuses to start.
+      - --update-env-vars=ENVIRONMENT=prod
       # DATABASE_URL holds a password, so it comes from Secret Manager rather
       # than from this file or a --set-env-vars flag that lands in build logs.
-      - --set-secrets=DATABASE_URL=gateway-database-url:latest
+      - --update-secrets=DATABASE_URL=gateway-database-url:latest
 
 substitutions:
   _SERVICE: backend
