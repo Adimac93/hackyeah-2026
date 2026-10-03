@@ -5,16 +5,25 @@
 //! the policy engine land on top of this.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context as _;
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use gateway::audit::Auditor;
 use gateway::policy::{self, Policy, PolicyHandle};
+use gateway::proxy::{self, ProxyState};
 
 const DEFAULT_POLICY_PATH: &str = "policy/control-catalog.toml";
+
+const DEFAULT_UPSTREAM: &str = "http://localhost:11434";
 
 #[derive(Clone)]
 struct AppState {
@@ -69,10 +78,37 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(8080);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
+    let auditor = Arc::new(Auditor::new(db.clone()).await);
+    let policy_version_id = {
+        let active = policy.load();
+        auditor
+            .register_policy(&active.sha256, &active.source)
+            .await
+    };
+    if !auditor.enabled() {
+        tracing::warn!("audit log disabled — enforcement still runs, nothing is persisted");
+    }
+
+    let upstream = std::env::var("UPSTREAM_URL").unwrap_or_else(|_| DEFAULT_UPSTREAM.to_owned());
+    tracing::info!(%upstream, "forwarding model traffic upstream");
+
+    let proxy_state = ProxyState {
+        policy: policy.clone(),
+        auditor,
+        http: reqwest::Client::new(),
+        upstream,
+        policy_version_id,
+    };
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/policy", get(active_policy))
-        .with_state(AppState { db, policy });
+        .with_state(AppState { db, policy })
+        .merge(
+            Router::new()
+                .route("/v1/chat/completions", post(proxy::chat_completions))
+                .with_state(proxy_state),
+        );
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
