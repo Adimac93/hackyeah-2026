@@ -8,8 +8,25 @@ rather than invent.
 
 ## Stack
 
-**UNDECIDED.** Do not pick one unilaterally. When the team decides, record it here,
-wire the tools into the `justfile`, and add the language setup step to CI.
+- **Gateway** — Rust workspace: `axum`, `tokio`, `sqlx`, `dotenvy`. Deployed from a
+  `cargo-chef` based Dockerfile. See `docs/backend-scaffold.md`.
+- **Storage** — Supabase Postgres, project ref `wkxhfzjknxdyfwhnwogn`. Schema lives in
+  `supabase/migrations/`; the gateway reaches it through `sqlx` with `DATABASE_URL`, the
+  dashboard through the Data API.
+- **Semantic tier** — still open. Candidates in `docs/prior-art.md`; it needs a Python
+  process (Presidio, Prompt Guard 2) or an Ollama call. Decide before building §4.2.
+
+### Database rules
+
+- **Change the schema with a migration, never in the Supabase console.** `supabase
+  migration new <name>`, edit the file, apply, commit. A console edit is invisible to
+  everyone else's checkout.
+- **RLS is on for every table and must stay on.** Public-schema tables are reachable
+  through the Data API. Only the gateway's privileged connection writes; the dashboard
+  reads. There is no authenticated write path — the audit log must not be rewritable by
+  the thing that displays it.
+- **Run the advisors after any schema change** (`supabase db advisors`, or the MCP
+  `get_advisors`). It was clean when the schema landed; keep it that way.
 
 ## Commands
 
@@ -35,7 +52,12 @@ we lose an hour to merge conflicts at 3am.
 
 | path | owner |
 |---|---|
-| _(fill in as the tree appears)_ | |
+| `gateway/` — Rust proxy, deterministic tier, policy engine, audit writer | |
+| `sentinel/` — semantic tier (pending the stack decision above) | |
+| `dashboard/` — admin UI, reads the Data API | |
+| `policy/` — YAML control catalog, thresholds, budgets | |
+| `tests/` — scenario cases, positive and negative | |
+| `supabase/migrations/` — schema | |
 
 ## Hard rules
 
