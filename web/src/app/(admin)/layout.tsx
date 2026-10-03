@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { ShieldIcon } from "@/components/icons";
 import { Nav } from "@/components/nav";
 import { StatusBadge } from "@/components/ui";
@@ -35,11 +37,19 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
               <StatusBadge status={member.role} />
             </div>
           </div>
-          <form action={signOut}>
-            <button className="text-sm text-zinc-400 hover:text-zinc-100">
-              Sign out
-            </button>
-          </form>
+          <div className="flex items-center gap-3 md:justify-between">
+            <Link
+              href="/set-password"
+              className="text-sm text-zinc-400 hover:text-zinc-100"
+            >
+              Change password
+            </Link>
+            <form action={signOut}>
+              <button className="text-sm text-zinc-400 hover:text-zinc-100">
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-8 md:px-10">{children}</main>

@@ -63,3 +63,33 @@ export async function signOut() {
   await supabase.auth.signOut();
   redirect("/login");
 }
+
+/** Email a password reset link. Always answers the same way, so it can't probe for accounts. */
+export async function requestPasswordReset(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const email = formString(formData, "email").trim();
+  if (!email.includes("@")) {
+    return { error: "Enter a valid email." };
+  }
+
+  const supabase = await createClient();
+  const requestHeaders = await headers();
+  const origin = requestHeaders.get("origin") ?? "";
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=/set-password`,
+  });
+  // rate limiting is about the project, not the account, so it's safe to surface
+  if (error?.code === "over_email_send_rate_limit") {
+    return {
+      error: "Too many emails were sent recently. Try again in a little while.",
+    };
+  }
+  if (error !== null) {
+    console.error("[auth] password reset failed", error.status, error.code);
+  }
+  return {
+    ok: "If an account exists for that email, a reset link is on its way. Open it in this browser.",
+  };
+}

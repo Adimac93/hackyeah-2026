@@ -128,3 +128,37 @@ export async function cancelInvite(email: string): Promise<void> {
   await session.supabase.from("team_invites").delete().eq("email", email);
   revalidatePath("/team");
 }
+
+/** Admin-triggered reset: emails the user a link that signs them in and asks for a new password. */
+export async function sendPasswordReset(
+  email: string,
+  _previous: FormState,
+  _formData: FormData,
+): Promise<FormState> {
+  const session = await requireAdmin();
+  if (session.error) {
+    return { error: session.error };
+  }
+  // the service client has no browser session, so the link carries its own tokens
+  // (lands on /auth/accept) and works in whichever browser the user opens it
+  const admin = createAdminClient();
+  if (admin === null) {
+    return {
+      error: "Password reset emails need SUPABASE_SECRET_KEY on the server.",
+    };
+  }
+  const requestHeaders = await headers();
+  const origin = requestHeaders.get("origin") ?? "";
+  const { error } = await admin.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/accept`,
+  });
+  if (error !== null) {
+    return {
+      error:
+        error.code === "over_email_send_rate_limit"
+          ? "Email rate limit reached. Configure custom SMTP in Supabase or try later."
+          : `Couldn't send the reset email (${error.message}).`,
+    };
+  }
+  return { ok: `Reset link sent to ${email}.` };
+}

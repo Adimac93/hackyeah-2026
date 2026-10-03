@@ -21,7 +21,9 @@ import {
   changeRole,
   inviteMember,
   removeMember,
+  sendPasswordReset,
 } from "./actions";
+import { ResetPasswordButton } from "./reset-password-button";
 
 const ROLE_HELP: Record<string, string> = {
   admin: "Everything, including team management",
@@ -148,13 +150,18 @@ export default async function TeamPage() {
                     </td>
                     {isAdmin ? (
                       <td className={`${tdClass} text-right`}>
-                        {!self && u.role !== null && (
-                          <form action={removeMember.bind(null, u.user_id)}>
-                            <button className="text-xs text-red-400 hover:text-red-300">
-                              Revoke
-                            </button>
-                          </form>
-                        )}
+                        <div className="flex flex-col items-end gap-1.5">
+                          <ResetPasswordButton
+                            action={sendPasswordReset.bind(null, u.email)}
+                          />
+                          {!self && u.role !== null && (
+                            <form action={removeMember.bind(null, u.user_id)}>
+                              <button className="text-xs text-red-400 hover:text-red-300">
+                                Revoke
+                              </button>
+                            </form>
+                          )}
+                        </div>
                       </td>
                     ) : null}
                   </tr>

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { inputClass } from "@/components/ui";
@@ -37,6 +38,14 @@ export function LoginForm({ next }: { next?: string }) {
           className={inputClass}
         />
       </label>
+      <p className="-mt-2 text-right">
+        <Link
+          href="/login/forgot"
+          className="text-xs text-zinc-500 hover:text-emerald-400"
+        >
+          Forgot password?
+        </Link>
+      </p>
 
       {state.error === undefined ? null : (
         <p

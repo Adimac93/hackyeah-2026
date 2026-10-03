@@ -24,7 +24,8 @@ export default async function SetPasswordPage() {
             Set your password
           </h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Signed in as {user.email}. Choose a password for future sign-ins.
+            Signed in as {user.email}. Choose a new password for future
+            sign-ins.
           </p>
         </div>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-6">

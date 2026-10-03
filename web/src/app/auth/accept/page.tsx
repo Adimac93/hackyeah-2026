@@ -7,8 +7,9 @@ import { useEffect, useState } from "react";
 import { supabaseEnv } from "@/lib/supabase/env";
 
 /**
- * Landing page for invite emails. Admin-sent invites put the session in the URL fragment
- * (`#access_token=…`), which never reaches the server, so it's picked up here; PKCE-style
+ * Landing page for invite and admin-sent reset emails. Links from the service client put the
+ * session in the URL fragment (`#access_token=…`), which never reaches the server, so it's
+ * picked up here; PKCE-style
  * links (`?code=` / `?token_hash=`) are forwarded to the server callback.
  */
 export default function AcceptInvitePage() {
@@ -29,7 +30,7 @@ export default function AcceptInvitePage() {
     if (accessToken === null || refreshToken === null) {
       setError(
         fragment.get("error_description") ??
-          "This invite link is invalid or has expired.",
+          "This link is invalid or has expired.",
       );
       return;
     }
@@ -46,7 +47,7 @@ export default function AcceptInvitePage() {
           window.history.replaceState(null, "", "/auth/accept");
           router.replace("/set-password");
         } else {
-          setError("This invite link is invalid or has expired.");
+          setError("This link is invalid or has expired.");
         }
       });
   }, [router]);
@@ -55,7 +56,7 @@ export default function AcceptInvitePage() {
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
       <div className="max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
         {error === null ? (
-          <p className="text-sm text-zinc-400">Accepting your invitation…</p>
+          <p className="text-sm text-zinc-400">Signing you in…</p>
         ) : (
           <>
             <p className="text-sm text-red-300">{error}</p>
