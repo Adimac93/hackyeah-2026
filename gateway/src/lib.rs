@@ -7,6 +7,7 @@
 pub mod audit;
 pub mod engine;
 pub mod mcp;
+pub mod metrics;
 pub mod policy;
 pub mod proxy;
 pub mod semantic;

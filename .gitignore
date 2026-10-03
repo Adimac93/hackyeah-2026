@@ -8,6 +8,11 @@
 .delta/
 .DS_Store
 
+# generated reports — the template and the generator are the artefacts, the
+# rendered output is not
+report/data.json
+report/*.pdf
+
 # build output + deps (pre-emptive; stack not chosen yet)
 node_modules/
 dist/

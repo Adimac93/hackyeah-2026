@@ -392,3 +392,59 @@ pub fn record_for<'a>(
         detections: &evaluation.detections,
     }
 }
+
+/// Walk the chain and report which events, if any, no longer reproduce their
+/// stored hash. Shared by the verifier and the report so the two can never
+/// disagree about whether the log is intact.
+pub async fn verify_chain(pool: &PgPool) -> sqlx::Result<(i64, Vec<i64>)> {
+    let events = sqlx::query_as::<
+        _,
+        (
+            i64,
+            Uuid,
+            String,
+            String,
+            Option<String>,
+            Option<Vec<u8>>,
+            Vec<u8>,
+        ),
+    >(
+        "select id, trace_id, hook::text, verdict::text, payload_sha256, prev_hash, hash
+         from events order by id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut previous: Vec<u8> = Vec::new();
+    let mut broken = Vec::new();
+
+    for (id, trace_id, hook, verdict, payload, prev_hash, stored) in &events {
+        let detections = sqlx::query_as::<_, (String, String)>(
+            "select control_id, action::text from detections where event_id = $1 order by id",
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
+
+        let borrowed: Vec<(&str, &str)> = detections
+            .iter()
+            .map(|(c, a)| (c.as_str(), a.as_str()))
+            .collect();
+
+        let recomputed = chain_hash(
+            &previous,
+            *trace_id,
+            hook,
+            verdict,
+            payload.as_deref().unwrap_or_default(),
+            &borrowed,
+        );
+
+        if &recomputed != stored || prev_hash.clone().unwrap_or_default() != previous {
+            broken.push(*id);
+        }
+        previous.clone_from(stored);
+    }
+
+    Ok((i64::try_from(events.len()).unwrap_or(i64::MAX), broken))
+}

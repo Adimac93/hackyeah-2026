@@ -37,6 +37,10 @@ dev:
 fmt:
     cargo fmt
 
+# PDF security report for management, including a chain attestation
+report:
+    cargo run --quiet -p gateway --bin report
+
 # prove the audit log has not been edited (exit 1 if it has)
 verify-audit:
     cargo run --quiet -p gateway --bin verify-audit
