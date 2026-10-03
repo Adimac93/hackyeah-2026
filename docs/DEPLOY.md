@@ -79,7 +79,7 @@ gcloud run services update backend --region="$REGION" \
 `cloudbuild.yaml` already sets `ENVIRONMENT=prod` and the `DATABASE_URL` secret on
 every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
 
-### Judge and upstream on a Cloud Run Ollama (instead of Vertex)
+### Judge and upstream on the Cloud Run Ollama
 
 The `ollama` Cloud Run service (GPU, `sentinel/ollama` image) serves both the
 judge (`/api/generate`) and an OpenAI-compatible chat upstream (`/v1`). Its
