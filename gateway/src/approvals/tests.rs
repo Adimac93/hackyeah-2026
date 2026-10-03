@@ -9,6 +9,8 @@ fn principal(allowed_tools: &[&str]) -> Principal {
         role: "member".to_owned(),
         allowed_models: Vec::new(),
         allowed_tools: allowed_tools.iter().map(|t| (*t).to_owned()).collect(),
+        delegates_users: false,
+        user: "red-team".to_owned(),
     }
 }
 

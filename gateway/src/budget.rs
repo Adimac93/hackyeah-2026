@@ -1,9 +1,10 @@
 //! Budget and resource governance (task.md §4.3).
 //!
 //! Budgets are rows in `budgets`, edited only through the admin API. Each row
-//! scopes a trailing window to everyone (`global`), one identity
-//! (`principal`) or one model (`model`), and may limit tokens, USD, request
-//! count and in-flight concurrency. A hard budget blocks; a soft one is
+//! scopes a trailing window to everyone (`global`), one user (`user`: the
+//! delegated end user, or a principal acting for no one under its slug) or one
+//! model (`model`), and may limit tokens, USD, request count and in-flight
+//! concurrency. A hard budget blocks; a soft one is
 //! recorded and lets the request through.
 
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ use crate::audit::Principal;
 use crate::engine::Evaluation;
 use crate::policy::{Action, Severity};
 
-/// Budget detections are `budget.global`, `budget.principal.<slug>` and
+/// Budget detections are `budget.global`, `budget.user.<user>` and
 /// `budget.model.<name>`, mirroring the row's scope.
 pub const BUDGET_PREFIX: &str = "budget.";
 
@@ -49,7 +50,7 @@ impl BudgetRow {
     fn applies(&self, principal: &Principal, model: Option<&str>) -> bool {
         match self.scope.as_str() {
             "global" => true,
-            "principal" => self.scope_id.as_deref() == Some(principal.slug.as_str()),
+            "user" => self.scope_id.as_deref() == Some(principal.user.as_str()),
             "model" => model.is_some() && self.scope_id.as_deref() == model,
             _ => false,
         }
@@ -204,7 +205,7 @@ impl Budgets {
 
         let mut spent = Vec::with_capacity(applicable.len());
         for row in &applicable {
-            let owner = (row.scope == "principal").then_some(principal.id);
+            let owner = (row.scope == "user").then_some(principal.user.as_str());
             let model = (row.scope == "model").then_some(model).flatten();
             spent.push(self.used(row, owner, model).await);
         }
@@ -241,19 +242,19 @@ impl Budgets {
         Inflight { budgets: self, keys }
     }
 
-    /// The budgets that bind this identity whatever the model, with what has
+    /// The budgets that bind this user whatever the model, with what has
     /// been spent against each: what an agent is told about its own limits.
     pub async fn standing(&self, principal: &Principal) -> Vec<(BudgetRow, Used)> {
         let rows = self.rows().await;
         let mut standing = Vec::new();
         for row in rows.iter().filter(|row| row.applies(principal, None)) {
-            let owner = (row.scope == "principal").then_some(principal.id);
+            let owner = (row.scope == "user").then_some(principal.user.as_str());
             standing.push((row.clone(), self.used(row, owner, None).await));
         }
         standing
     }
 
-    async fn used(&self, row: &BudgetRow, owner: Option<uuid::Uuid>, model: Option<&str>) -> Used {
+    async fn used(&self, row: &BudgetRow, owner: Option<&str>, model: Option<&str>) -> Used {
         let mut used = Used::default();
         if row.limit_tokens.is_some() || row.limit_usd.is_some() {
             let spent = sqlx::query_as::<_, (i64, f64)>(
@@ -261,7 +262,7 @@ impl Budgets {
                         coalesce(sum(cost_usd), 0)::float8
                  from usage
                  where ts > now() - make_interval(secs => $1::int)
-                   and ($2::uuid is null or principal_id = $2::uuid)
+                   and ($2::text is null or end_user = $2::text)
                    and ($3::text is null or model = $3::text)",
             )
             .bind(row.window_secs)
@@ -279,7 +280,7 @@ impl Budgets {
                 "select count(*) from events
                  where ts > now() - make_interval(secs => $1::int)
                    and hook in ('prompt_in', 'tool_call')
-                   and ($2::uuid is null or principal_id = $2::uuid)
+                   and ($2::text is null or end_user = $2::text)
                    and ($3::text is null or model = $3::text)",
             )
             .bind(row.window_secs)
@@ -376,11 +377,11 @@ impl BudgetInput {
                 return Err("a global budget takes no scope_id".into());
             }
             "global" => {}
-            "principal" | "model" if self.scope_id.as_deref().is_none_or(str::is_empty) => {
+            "user" | "model" if self.scope_id.as_deref().is_none_or(str::is_empty) => {
                 return Err(format!("a {} budget needs a scope_id", self.scope));
             }
-            "principal" | "model" => {}
-            other => return Err(format!("unknown scope {other:?}: global | principal | model")),
+            "user" | "model" => {}
+            other => return Err(format!("unknown scope {other:?}: global | user | model")),
         }
         if self.window_secs <= 0 {
             return Err("window_secs must be positive".into());

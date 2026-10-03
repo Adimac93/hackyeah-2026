@@ -9,14 +9,14 @@
 
 -- ========================= gateway: identities and limits ====================
 
-insert into principals (slug, display_name, kind, allowed_models, allowed_tools, api_key_hash, role)
+insert into principals (slug, display_name, kind, allowed_models, allowed_tools, api_key_hash, role, delegates_users)
 values
   -- A well-behaved agent with a narrow tool grant. It may read documents and
   -- query customer data, but not enumerate documents.
   ('demo-agent', 'Demo agent', 'agent',
    array['llama3.1:8b', 'qwen2.5:7b'],
    array['docs__read', 'docs__search', 'resources__describe', 'resources__query'],
-   '191b558a694b9c5081fc238f779c811e6de37e92b1ca8471cb29ea96d4393a45', 'member'),
+   '191b558a694b9c5081fc238f779c811e6de37e92b1ca8471cb29ea96d4393a45', 'member', false),
 
   -- Broad model grant, one tool: used to show the tool grant doing the work
   -- rather than the controls. Grants are deny-by-default, so every model is
@@ -24,26 +24,36 @@ values
   ('red-team', 'Red team harness', 'agent',
    array['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'],
    array['docs__search'],
-   'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member'),
+   'febe127f44614453cda622de2c687f8e64435dace54cc0085deeb22cf9efa0cf', 'member', false),
+
+  -- The console chat (GATEWAY_API_KEY): one key for every signed-in person,
+  -- each named in `X-On-Behalf-Of`, so budgets, risk and activity are per
+  -- user. Chat only, no tools.
+  ('console-chat', 'SecOps console chat', 'app',
+   array['llama3.1:8b', 'qwen2.5:7b'], array[]::text[],
+   'a9f5584b7e7fb03131d7d2887d521492591b1ad4fd9c88db49ae00686d4ba164', 'member', true),
 
   -- The SecOps console's server-side identity (GATEWAY_ADMIN_KEY): streams and
   -- decides access requests. No models, no tools — it administers, never acts.
   ('secops-console', 'SecOps console', 'app', array[]::text[], array[]::text[],
-   '943d28b8ad70296dff2b65fb4a17aaca0dffe92482b233100e4698390c1d89a0', 'security_admin')
+   '943d28b8ad70296dff2b65fb4a17aaca0dffe92482b233100e4698390c1d89a0', 'security_admin', false)
 on conflict (slug) do update
-  set allowed_models = excluded.allowed_models,
-      allowed_tools  = excluded.allowed_tools,
-      api_key_hash   = excluded.api_key_hash,
-      role           = excluded.role;
+  set allowed_models  = excluded.allowed_models,
+      allowed_tools   = excluded.allowed_tools,
+      api_key_hash    = excluded.api_key_hash,
+      role            = excluded.role,
+      delegates_users = excluded.delegates_users;
 
--- Hard budgets refuse the call; soft ones record and warn. A row may combine
--- token, USD, request-count and concurrency limits; the first one reached
--- applies. Edited at runtime through the gateway's PUT /admin/budgets.
+-- Budgets are per user: a delegated end user, or an agent that acts for no
+-- one under its own slug. Hard budgets refuse the call; soft ones record and
+-- warn. A row may combine token, USD, request-count and concurrency limits;
+-- the first one reached applies. Edited at runtime through the gateway's
+-- PUT /admin/budgets.
 insert into budgets (scope, scope_id, window_secs, limit_tokens, limit_usd, limit_requests, limit_concurrency, hard)
 values
   ('global',    null,          86400, 2000000, 25.0, null, null, true),
-  ('principal', 'demo-agent',   3600,   50000, null, null,    4, true),
-  ('principal', 'red-team',     3600,   10000, null,  120, null, false)
+  ('user',      'demo-agent',   3600,   50000, null, null,    4, true),
+  ('user',      'red-team',     3600,   10000, null,  120, null, false)
 on conflict (scope, coalesce(scope_id, '')) do update
   set window_secs       = excluded.window_secs,
       limit_tokens      = excluded.limit_tokens,

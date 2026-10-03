@@ -55,11 +55,12 @@ pub fn document() -> Value {
             "/v1/chat/completions": {"post": {
                 "tags": ["integration"], "summary": "OpenAI-compatible chat completion, policed at prompt_in and response_out",
                 "security": key,
+                "parameters": [{"name": "X-On-Behalf-Of", "in": "header", "description": "End user the request is attributed to (budgets, risk, activity). Only principals with delegates_users may send it; otherwise the principal is its own user.", "schema": {"type": "string", "maxLength": 254}}],
                 "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatRequest"}}}},
                 "responses": {
                     "200": ok("The upstream completion, redacted where policy requires, plus x_control_layer", json!({"$ref": "#/components/schemas/ChatResponse"})),
                     "401": refusal("authentication_required"),
-                    "403": refusal("model_not_allowed | blocked_by_control (with error.helper) | risk_blocked"),
+                    "403": refusal("model_not_allowed | blocked_by_control (with error.stage, error.hook and, on prompt_in, error.helper) | risk_blocked | delegation_refused"),
                     "429": refusal("budget_exceeded"),
                     "502": refusal("upstream_unavailable | upstream_unreadable")
                 }}},
@@ -119,6 +120,7 @@ pub fn document() -> Value {
                     {"name": "from", "in": "query", "description": "RFC 3339, inclusive", "schema": {"type": "string", "format": "date-time"}},
                     {"name": "to", "in": "query", "description": "RFC 3339, exclusive", "schema": {"type": "string", "format": "date-time"}},
                     {"name": "principal", "in": "query", "description": "Principal slug", "schema": {"type": "string"}},
+                    {"name": "user", "in": "query", "description": "End user the event is attributed to", "schema": {"type": "string"}},
                     {"name": "control", "in": "query", "description": "Control id that fired", "schema": {"type": "string"}},
                     {"name": "action", "in": "query", "schema": {"type": "string", "enum": ["allow", "flag", "redact", "block"]}},
                     {"name": "limit", "in": "query", "schema": {"type": "integer", "maximum": 10000}}
@@ -127,6 +129,15 @@ pub fn document() -> Value {
                     "application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/AuditRow"}}},
                     "text/csv": {"schema": {"type": "string"}}}},
                     "400": refusal("invalid_format | invalid_filter")}), admin_errors())}},
+            "/admin/risk": {"get": {
+                "tags": ["admin"], "summary": "Per-user risk scores under the active policy's [risk] thresholds",
+                "description": "Every user seen in the audit log, highest score first. The score is what the next request from that user is gated on.",
+                "security": admin,
+                "parameters": [
+                    {"name": "q", "in": "query", "description": "Case-insensitive substring of the user", "schema": {"type": "string"}},
+                    {"name": "limit", "in": "query", "schema": {"type": "integer", "maximum": 500, "default": 500}}
+                ],
+                "responses": with(json!({"200": ok("Thresholds and users", json!({"$ref": "#/components/schemas/RiskReport"}))}), admin_errors())}},
             "/admin/approvals/stream": {"get": {
                 "tags": ["admin"], "summary": "Stream access requests awaiting a human decision",
                 "description": "Server-sent events. Pending requests are replayed on connect, then `request`, `decided` and `expired` events follow; each event's data is JSON with a `type` field. Takes a security_admin principal's API key.",
@@ -170,6 +181,8 @@ pub fn document() -> Value {
                 "Error": {"type": "object", "properties": {
                     "error": {"type": "object", "properties": {
                         "type": {"type": "string"}, "message": {"type": "string"},
+                        "stage": {"type": "string", "enum": ["deterministic", "semantic", "access"], "description": "Which check refused: a pattern control, a semantic control, or who is asking (model grant, budget, risk)"},
+                        "hook": {"type": "string", "enum": ["prompt_in", "response_out"]},
                         "helper": {"$ref": "#/components/schemas/Helper"}}},
                     "trace_id": {"type": "string", "format": "uuid"}}},
                 "Helper": {"type": "object", "description": "Prompt helper: the violated policy and a compliant rewrite to resubmit explicitly. Never sent to the model automatically.",
@@ -200,6 +213,7 @@ pub fn document() -> Value {
                     "profile": {"type": ["string", "null"]}, "on_detect": {"type": "string"}, "fail_mode": {"type": "string"},
                     "models": {"type": "object"}, "signature_feed": {"type": ["object", "null"]},
                     "risk": {"type": "object"}, "runaway": {"type": "object"}, "mcp_servers": {"type": "array", "items": {"type": "object"}},
+                    "resources": {"type": "object", "description": "grants (identity slug -> tables), max_rows, statement_timeout_ms"},
                     "controls": {"type": "array", "items": {"type": "object"}}}},
                 "PolicyUpload": {"type": "object", "additionalProperties": false, "required": ["catalog_toml"], "properties": {
                     "catalog_toml": {"type": "string", "description": "Complete TOML control catalog"},
@@ -219,12 +233,20 @@ pub fn document() -> Value {
                     "limit_usd": {"type": ["number", "null"]}, "limit_requests": {"type": ["integer", "null"]},
                     "limit_concurrency": {"type": ["integer", "null"]}, "hard": {"type": "boolean"}}},
                 "BudgetInput": {"type": "object", "additionalProperties": false, "required": ["scope"], "properties": {
-                    "scope": {"type": "string", "enum": ["global", "principal", "model"]},
-                    "scope_id": {"type": "string", "description": "Principal slug or model name; absent for global"},
+                    "scope": {"type": "string", "enum": ["global", "user", "model"]},
+                    "scope_id": {"type": "string", "description": "User (delegated end user, or the slug of a principal acting for no one) or model name; absent for global"},
                     "window_secs": {"type": "integer", "default": 86400},
                     "limit_tokens": {"type": "integer"}, "limit_usd": {"type": "number"},
                     "limit_requests": {"type": "integer"}, "limit_concurrency": {"type": "integer"},
                     "hard": {"type": "boolean", "default": true}, "enabled": {"type": "boolean", "default": true}}},
+                "RiskReport": {"type": "object", "properties": {
+                    "window_secs": {"type": "integer"}, "escalate_at": {"type": ["number", "null"]}, "block_at": {"type": ["number", "null"]},
+                    "users": {"type": "array", "items": {"type": "object", "properties": {
+                        "user": {"type": "string"}, "score": {"type": "number"},
+                        "status": {"type": "string", "enum": ["normal", "escalate", "block"]},
+                        "violations": {"type": "integer"}, "last_violation": {"type": ["string", "null"], "format": "date-time"},
+                        "last_seen": {"type": "string", "format": "date-time"},
+                        "principals": {"type": "array", "items": {"type": "string"}}}}}}},
                 "Decision": {"type": "object", "additionalProperties": false, "required": ["decision", "decided_by"], "properties": {
                     "decision": {"type": "string", "enum": ["approve", "deny"]},
                     "ttl_minutes": {"type": "integer", "minimum": 1, "maximum": 60},
@@ -233,7 +255,7 @@ pub fn document() -> Value {
                 "AuditRow": {"type": "object", "properties": {
                     "id": {"type": "integer"}, "ts": {"type": "string"}, "trace_id": {"type": "string"},
                     "hook": {"type": "string"}, "channel": {"type": "string"}, "principal": {"type": ["string", "null"]},
-                    "model": {"type": ["string", "null"]}, "tool": {"type": ["string", "null"]}, "verdict": {"type": "string"},
+                    "user": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}, "tool": {"type": ["string", "null"]}, "verdict": {"type": "string"},
                     "policy_version": {"type": ["string", "null"]}, "controls": {"type": "string", "description": "control_id:action, space separated"},
                     "tokens": {"type": "integer"}, "cost_usd": {"type": "number"}, "latency": {"type": "string"}}}
             }
@@ -263,6 +285,7 @@ mod tests {
         }
         assert!(paths.contains_key("/v1/chat/completions"));
         assert!(paths.contains_key("/admin/audit/export"));
+        assert!(paths.contains_key("/admin/risk"));
         assert!(paths.contains_key("/admin/approvals/{id}"));
     }
 

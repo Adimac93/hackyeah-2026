@@ -195,7 +195,7 @@ async fn request_access(
         Hook::ToolCall,
         &evaluation,
         None,
-        Some(principal.id),
+        principal,
         policy_version_id,
         reason,
     );
@@ -226,6 +226,7 @@ async fn request_access(
             hook: Hook::ToolCall,
             channel: "mcp",
             principal_id: Some(principal.id),
+            end_user: Some(&principal.user),
             model: None,
             tool: Some(REQUEST_ACCESS),
             verdict: if matches!(outcome, Outcome::Granted { .. }) {

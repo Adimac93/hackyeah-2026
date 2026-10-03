@@ -18,7 +18,7 @@ use crate::admin::auth::bearer;
 use crate::audit::{self, Auditor, Principal};
 use crate::background::{self, Job};
 use crate::budget::BUDGET_PREFIX;
-use crate::engine::{self, Evaluation, Verdict};
+use crate::engine::{self, ControlKind, Detection, Evaluation, Verdict};
 use crate::helper::{self, Help};
 use crate::policy::{Action, Hook, Policy, Severity};
 use crate::risk::{self, RISK_CONTROL};
@@ -28,9 +28,13 @@ use crate::{mock, telemetry::Telemetry};
 /// Detection id for a model outside the allow lists.
 pub const MODEL_NOT_ALLOWED: &str = "model.not-allowed";
 
-/// Authenticate the gateway's integration endpoints. There is no
-/// `X-Principal` escape hatch: identity arrives only from a per-principal
-/// Bearer key, and the database maps its hash to the principal.
+/// Header a delegating principal names its end user in.
+pub const ON_BEHALF_OF: &str = "x-on-behalf-of";
+
+/// Authenticate the gateway's integration endpoints. Identity arrives only
+/// from a per-principal Bearer key, and the database maps its hash to the
+/// principal. A principal allowed to delegate may name the end user it acts
+/// for; that name is trusted because the key is, never on its own.
 pub async fn bearer_principal(
     auditor: &Auditor,
     headers: &HeaderMap,
@@ -40,10 +44,38 @@ pub async fn bearer_principal(
             "missing or malformed Bearer API key",
         ));
     };
-    auditor
+    let mut principal = auditor
         .principal_for_api_key(key)
         .await
-        .ok_or_else(|| authentication_refusal("invalid or disabled API key"))
+        .ok_or_else(|| authentication_refusal("invalid or disabled API key"))?;
+    // A header that is not visible ASCII reads as empty, which is refused.
+    let asserted = headers
+        .get(ON_BEHALF_OF)
+        .map(|value| value.to_str().unwrap_or_default());
+    principal.user = delegated_user(&principal, asserted).map_err(|message| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": { "type": "delegation_refused", "message": message } })),
+        )
+            .into_response()
+    })?;
+    Ok(principal)
+}
+
+/// The user a request is attributed to: the named end user when the principal
+/// may delegate, otherwise the principal itself.
+pub fn delegated_user(principal: &Principal, asserted: Option<&str>) -> Result<String, &'static str> {
+    let Some(asserted) = asserted else {
+        return Ok(principal.slug.clone());
+    };
+    if !principal.delegates_users {
+        return Err("this identity may not act on behalf of users");
+    }
+    let user = asserted.trim();
+    if user.is_empty() || user.len() > 254 || user.chars().any(char::is_control) {
+        return Err("X-On-Behalf-Of must be a printable user id of at most 254 bytes");
+    }
+    Ok(user.to_owned())
 }
 
 fn authentication_refusal(message: &str) -> Response {
@@ -98,7 +130,7 @@ pub async fn chat_completions(
         .budgets
         .check(&principal, Some(&model), &mut inbound)
         .await;
-    risk::apply(state.db(), &policy.risk, principal.id, &mut inbound).await;
+    risk::apply(state.db(), &policy.risk, &principal.user, &mut inbound).await;
 
     // A request already refused should not also pay for the semantic tier.
     if inbound.verdict != Verdict::Block {
@@ -132,7 +164,7 @@ pub async fn chat_completions(
             Hook::PromptIn,
             &inbound,
             Some(&model),
-            Some(principal.id),
+            &principal,
             policy.version_id,
             &prompt,
         ))
@@ -140,7 +172,7 @@ pub async fn chat_completions(
     state.telemetry.verdict("prompt_in", verdict_name(inbound.verdict));
 
     if let Some(blocker) = inbound.blocked_by() {
-        return refusal_for(trace_id, &blocker.control_id, &blocker.evidence.excerpt, help);
+        return refusal_for(trace_id, Hook::PromptIn, blocker, help);
     }
     background::analyse(
         &state,
@@ -151,7 +183,7 @@ pub async fn chat_completions(
             channel: "llm",
             text: prompt.clone(),
             trace_id,
-            principal_id: principal.id,
+            principal: principal.clone(),
             model: Some(model.clone()),
             tool: None,
         },
@@ -194,7 +226,7 @@ pub async fn chat_completions(
         Hook::ResponseOut,
         &outbound,
         Some(&model),
-        Some(principal.id),
+        &principal,
         policy.version_id,
         &answer,
     );
@@ -212,7 +244,7 @@ pub async fn chat_completions(
         .auditor
         .record_usage(
             outbound_event.or(event_id),
-            Some(principal.id),
+            &principal,
             &model,
             prompt_tokens,
             completion_tokens,
@@ -223,17 +255,8 @@ pub async fn chat_completions(
         .telemetry
         .observe("total", micros(started).saturating_sub(upstream_us));
 
-    if outbound.verdict == Verdict::Block {
-        let control = outbound
-            .blocked_by()
-            .map_or("policy", |d| d.control_id.as_str());
-        return refusal(
-            trace_id,
-            StatusCode::FORBIDDEN,
-            "blocked_by_control",
-            &format!("response blocked by {control}"),
-            None,
-        );
+    if let Some(blocker) = outbound.blocked_by() {
+        return refusal_for(trace_id, Hook::ResponseOut, blocker, None);
     }
     background::analyse(
         &state,
@@ -244,7 +267,7 @@ pub async fn chat_completions(
             channel: "llm",
             text: answer,
             trace_id,
-            principal_id: principal.id,
+            principal: principal.clone(),
             model: Some(model),
             tool: None,
         },
@@ -274,28 +297,44 @@ fn is_content_control(control_id: &str) -> bool {
         && !control_id.starts_with(BUDGET_PREFIX)
 }
 
-fn refusal_for(trace_id: Uuid, control: &str, reason: &str, help: Option<Help>) -> Response {
-    if control == MODEL_NOT_ALLOWED {
-        refusal(trace_id, StatusCode::FORBIDDEN, "model_not_allowed", reason, None)
+/// Which check refused: `deterministic` or `semantic` for a content control,
+/// `access` for who is asking (model grant, budget, history). Lets a client
+/// tell "this prompt breaks a pattern rule" from everything else.
+pub const fn stage_of(blocker: &Detection) -> &'static str {
+    match blocker.kind {
+        ControlKind::Semantic => "semantic",
+        ControlKind::Deterministic => "deterministic",
+    }
+}
+
+fn refusal_for(trace_id: Uuid, hook: Hook, blocker: &Detection, help: Option<Help>) -> Response {
+    let control = blocker.control_id.as_str();
+    let reason = &blocker.evidence.excerpt;
+    let (status, code, message, stage) = if control == MODEL_NOT_ALLOWED {
+        (StatusCode::FORBIDDEN, "model_not_allowed", reason.clone(), "access")
     } else if control.starts_with(BUDGET_PREFIX) {
-        refusal(trace_id, StatusCode::TOO_MANY_REQUESTS, "budget_exceeded", reason, None)
+        (StatusCode::TOO_MANY_REQUESTS, "budget_exceeded", reason.clone(), "access")
     } else if control == RISK_CONTROL {
-        refusal(
-            trace_id,
+        (
             StatusCode::FORBIDDEN,
             "risk_blocked",
-            "too many recent policy violations; try again later",
-            None,
+            "too many recent policy violations; try again later".to_owned(),
+            "access",
         )
     } else {
-        refusal(
-            trace_id,
+        let subject = if hook == Hook::PromptIn { "request" } else { "response" };
+        (
             StatusCode::FORBIDDEN,
             "blocked_by_control",
-            &format!("request blocked by {control}"),
-            help,
+            format!("{subject} blocked by {control}"),
+            stage_of(blocker),
         )
+    };
+    let mut error = json!({ "type": code, "message": message, "stage": stage, "hook": hook });
+    if let Some(help) = help {
+        error["helper"] = json!(help);
     }
+    refusal(trace_id, status, error)
 }
 
 fn observe_semantic(telemetry: &Telemetry, evaluation: &Evaluation) {
@@ -332,9 +371,7 @@ async fn forward(
             refusal(
                 trace_id,
                 StatusCode::BAD_GATEWAY,
-                "upstream_unavailable",
-                "the upstream model is unreachable",
-                None,
+                json!({ "type": "upstream_unavailable", "message": "the upstream model is unreachable" }),
             )
         })?;
 
@@ -343,9 +380,7 @@ async fn forward(
         refusal(
             trace_id,
             StatusCode::BAD_GATEWAY,
-            "upstream_unreadable",
-            "the upstream response was not JSON",
-            None,
+            json!({ "type": "upstream_unreadable", "message": "the upstream response was not JSON" }),
         )
     })?;
     Ok((status, completion))
@@ -360,18 +395,8 @@ pub fn summarise(evaluation: &Evaluation) -> Value {
     })
 }
 
-fn refusal(
-    trace_id: Uuid,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    help: Option<Help>,
-) -> Response {
-    tracing::info!(%trace_id, code, message, "refused");
-    let mut error = json!({ "type": code, "message": message });
-    if let Some(help) = help {
-        error["helper"] = json!(help);
-    }
+fn refusal(trace_id: Uuid, status: StatusCode, error: Value) -> Response {
+    tracing::info!(%trace_id, code = %error["type"], message = %error["message"], "refused");
     (status, Json(json!({ "error": error, "trace_id": trace_id }))).into_response()
 }
 
