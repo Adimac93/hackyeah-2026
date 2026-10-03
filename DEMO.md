@@ -52,4 +52,11 @@ Be honest with yourself here so nothing surprises you on stage.
   the gateway only accepts `Authorization: Bearer` (TASKS.md `web-gateway-auth`). Demo
   the gateway with `curl` and a seeded key until that lands.
 - `pii.contextual` ships disabled (no Presidio sidecar yet).
+- The gateway needs `DATABASE_URL` in every environment now, and the
+  `20261003210000_gateway_db_policy` migration applied.
+- Concurrency budgets count per gateway instance, not across the fleet.
+- The `balanced` and `strict` profiles currently set the same defaults.
+- The resource tools need `RESOURCES_DATABASE_URL` pointing at a role with
+  `SELECT` on schema `resources` only; the gateway's own checks (single SELECT,
+  read-only transaction, planner-verified table grants) are a second line.
 - The Vertex judge bills ~$25/day while deployed; tear it down after the demo.

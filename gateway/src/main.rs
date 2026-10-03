@@ -100,10 +100,9 @@ async fn main() -> anyhow::Result<()> {
     if production && (upstream == gateway::mock::MOCK || detectors.mocked()) {
         anyhow::bail!("ENVIRONMENT=prod refuses a mock: set UPSTREAM_URL and OLLAMA_URL");
     }
+    // Enforcement does not depend on the admin API, so its absence is not a
+    // reason to stop serving: every admin route then refuses (503).
     if !admins.configured() {
-        if production {
-            anyhow::bail!("ENVIRONMENT=prod requires SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY for admin authentication");
-        }
         tracing::warn!("admin API disabled — set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY");
     }
 

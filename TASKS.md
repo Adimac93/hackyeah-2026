@@ -7,21 +7,17 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Now
 
-- [ ] backend-spec-fixes — policy only in the DB (upload is the only change path, built-in sample seeded on first start), Supabase-JWT admin auth, deny-by-default grants in `principals`, budgets from the `budgets` table via admin API; covers the lines below (@HK)
-- [ ] principal-models — enforce per-identity/role model allow list on top of the global one (@HK)
-- [ ] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count (@HK)
-- [ ] signature-mirror — upsert loaded feed into `attack_signatures` on every load (@HK)
-- [ ] policy-reload-audit — record rejected reloads and a diff for file reloads; uploads already store `diff_summary` (@HK)
-- [ ] prompt-helper — local-model helper: violated policy + compliant rewrite, never auto-resubmitted (@HK)
-- [ ] risk-history — `attack_history` is written; make the risk score feed the "is secure" decision, async semantic verdicts update it (@HK)
-- [ ] budgets-extended — team/org scopes, compute time, request count, concurrency, runaway-loop limits (@HK)
-- [ ] mcp-tool-pinning — pin approved tool descriptions, block rug-pull changes; MCP server allowlist with hashes (@HK)
-- [ ] audit-export — JSON/CSV export with time/identity/control/action filters (@HK)
-- [ ] metrics-prometheus — `/metrics` serves JSON with percentiles; add Prometheus format and semantic queue depth (@HK)
+- [ ] _(nothing claimed yet)_
 
 ## Next
 
-- [ ] web-gateway-auth — web chat still sends `x-principal`, which the gateway no longer trusts, so "Gateway (protected)" chat gets 401; send a per-user Bearer key instead (@)
+- [ ] web-gateway-auth — web chat still sends `x-principal`, which the gateway no longer trusts, so "Gateway (protected)" chat gets 401; send `Authorization: Bearer $GATEWAY_API_KEY` from the server (@)
+- [ ] web-policy-upload — console policy page: upload catalog TOML (+ optional signatures) to `POST /admin/policy` with the user's Supabase access token, show the returned diff and `/admin/policy/versions` (@)
+- [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)
+- [ ] web-helper — show `error.helper` (violated policy + suggestion) on a blocked chat prompt, resubmit only on click (@)
+- [ ] web-results — fetch `GET /v1/results/{id}` for `resources__query` acknowledgements and render the rows (@)
+- [ ] budgets-scopes — team/org budget scopes and compute-time accounting (@)
+- [ ] apply-migration — `just migrate` for 20261003210000_gateway_db_policy, then `just seed` and `supabase db advisors` (@)
 - [ ] write the demo script in DEMO.md and put the deployed URL there (@)
 - [ ] fill in the ownership table in CLAUDE.md (@)
 - [ ] chat-upstream-prod — a real `UPSTREAM_URL` for prod chat (the Vertex judge serves only the semantic tier); wire it into cloudbuild.yaml (@)
@@ -30,6 +26,17 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Done
 
+- [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API
+- [x] principal-models — enforce per-identity/role model allow list on top of the global one
+- [x] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count
+- [x] signature-mirror — upsert loaded feed into `attack_signatures` on every load
+- [x] policy-reload-audit — record rejected reloads and a diff for file reloads; uploads already store `diff_summary`
+- [x] prompt-helper — local-model helper: violated policy + compliant rewrite, never auto-resubmitted
+- [x] risk-history — `attack_history` is written; make the risk score feed the "is secure" decision, async semantic verdicts update it
+- [x] budgets-extended — request count, per-instance concurrency and runaway limits (tool calls, identical calls, depth); team/org scopes and compute time still open
+- [x] mcp-tool-pinning — pin approved tool descriptions, block rug-pull changes; MCP server allowlist with hashes
+- [x] audit-export — JSON/CSV export with time/identity/control/action filters
+- [x] metrics-prometheus — `/metrics` serves JSON with percentiles; add Prometheus format and semantic queue depth
 - [x] lock the project idea → "What we're building" in CLAUDE.md
 - [x] pick the stack → Rust gateway + Next.js web, wired into `just` and CI
 - [x] deploy pipeline → `just deploy` (Cloud Run, docs/DEPLOY.md)

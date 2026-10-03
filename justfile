@@ -52,7 +52,7 @@ dev:
     trap 'kill $api_pid 2>/dev/null || true' EXIT
     cd web && pnpm dev
 
-# just the gateway; set UPSTREAM_URL/POLICY_PATH in .env to override defaults
+# just the gateway; needs DATABASE_URL, set UPSTREAM_URL/OLLAMA_URL in .env to override the mocks
 dev-api:
     cargo run -p gateway --bin gateway
 

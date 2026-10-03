@@ -85,23 +85,25 @@ every deploy. `--update-env-vars` keeps both; `--set-env-vars` would wipe them.
 
 | variable | effect |
 |---|---|
-| `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, stops allowing every origin, and refuses to start without `DATABASE_URL` or with a `mock` upstream/judge |
+| `ENVIRONMENT` | `prod` switches logs to JSON so Cloud Logging reads severity, stops allowing every origin, and refuses to start with a `mock` upstream/judge |
 | `CORS_ORIGINS` | comma-separated origins, or `*` for any. **Unset in prod means no browser may call the API.** Set it to the dashboard's origin, not `*` |
 | `PORT` | injected by Cloud Run. A malformed value aborts startup rather than binding something else |
-| `POLICY_PATH` | defaults to `policy/control-catalog.toml`, shipped inside the image |
+| `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | how the admin API verifies console users' access tokens. Unset, every admin route answers 503; enforcement is unaffected |
+| `METRICS_TOKEN` | Bearer token for `GET /metrics/prometheus`. Unset disables it. Put it in Secret Manager |
+| `RESOURCES_DATABASE_URL` | read-only connection for the `resources__query` MCP tool (a role with `SELECT` on schema `resources` only). Unset disables the resource tools |
 | `UPSTREAM_URL` | where chat traffic goes: any OpenAI-compatible server (e.g. Ollama's `/v1`). Defaults to `mock`, which prod refuses |
 | `SEMANTIC_BACKEND` | `vertex` sends the judge to the VPC-internal Vertex endpoint; set by `backend_deploy_flags` |
 | `VERTEX_JUDGE_URL` / `VERTEX_JUDGE_IP` / `VERTEX_JUDGE_CA` | the judge's address and self-signed CA; set by `backend_deploy_flags` (CA from Secret Manager) |
 | `OLLAMA_URL` | the judge when `SEMANTIC_BACKEND` is not `vertex`. Defaults to `mock`, which prod refuses |
 | `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |
-| `DATABASE_URL` | from Secret Manager. Required in prod; the gateway refuses to start without it |
+| `DATABASE_URL` | from Secret Manager. Required in every environment: the policy, identities, grants and budgets live there. An empty database is seeded with the built-in sample policy on first start |
 
 ## Troubleshooting
 
 **"container failed to start and listen on PORT"** — the gateway loads its
-policy before binding and refuses to start without one. Check `policy/` is in
-the image, and that `DATABASE_URL` (if set) is reachable; an unreachable
-database aborts startup with the same symptom.
+policy from the database before binding. Check that `DATABASE_URL` is set and
+reachable, and that the migrations are applied (`just migrate`); a missing
+column aborts startup with the same symptom.
 
 ```bash
 gcloud run services logs read backend --region="$REGION" --limit=50
