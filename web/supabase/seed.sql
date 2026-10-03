@@ -1,0 +1,59 @@
+-- Deterministic demo data. Safe to re-run: wipes policies/incidents first.
+-- Team members come from real sign-ups (first sign-up = admin), so the seed doesn't create users.
+
+delete from public.incident_events;
+delete from public.incidents;
+delete from public.policies;
+
+insert into public.policies (id, title, category, summary, body, status, version, review_due) values
+  ('00000000-0000-4000-a000-000000000001', 'Password & MFA Policy', 'Access control',
+   'All employees must use MFA and passwords of at least 14 characters.',
+   E'1. MFA is mandatory for every company account.\n2. Minimum password length: 14 characters.\n3. Password reuse across services is prohibited.\n4. Use the company password manager.',
+   'active', 3, current_date + 60),
+  ('00000000-0000-4000-a000-000000000002', 'Acceptable Use of IT Assets', 'Acceptable use',
+   'Rules for using company laptops, phones and network.',
+   E'Company devices are for business use. No unapproved software. Report lost devices within 1 hour.',
+   'active', 2, current_date + 120),
+  ('00000000-0000-4000-a000-000000000003', 'Data Classification & Handling', 'Data protection',
+   'Public / Internal / Confidential / Restricted classes and how to handle each.',
+   E'Restricted data must never leave approved systems. Confidential data must be encrypted at rest and in transit.',
+   'active', 1, current_date - 5),
+  ('00000000-0000-4000-a000-000000000004', 'Incident Response Plan', 'Incident response',
+   'Who does what when a security incident is detected.',
+   E'Detect → Triage (15 min) → Contain → Eradicate → Recover → Post-mortem within 5 business days.',
+   'active', 4, current_date + 200),
+  ('00000000-0000-4000-a000-000000000005', 'Generative AI Usage', 'Acceptable use',
+   'Which AI tools may be used and what data may be shared with them.',
+   E'Only approved AI tools. Never paste Confidential or Restricted data into external AI services.',
+   'draft', 1, null),
+  ('00000000-0000-4000-a000-000000000006', 'Legacy VPN Access', 'Access control',
+   'Superseded by Zero Trust Network Access policy.',
+   E'Archived.', 'archived', 5, null);
+
+insert into public.incidents (id, title, description, severity, status, category, source, policy_id, detected_at) values
+  ('00000000-0000-4000-b000-000000000001', 'Phishing campaign targeting finance team',
+   '14 employees received spoofed invoice emails; 2 clicked the link.', 'high', 'investigating',
+   'Phishing', 'Email gateway', '00000000-0000-4000-a000-000000000001', now() - interval '3 hours'),
+  ('00000000-0000-4000-b000-000000000002', 'Ransomware detected on build server',
+   'EDR quarantined encryptor binary on build-03. Host isolated from network.', 'critical', 'contained',
+   'Malware', 'EDR', '00000000-0000-4000-a000-000000000004', now() - interval '1 day'),
+  ('00000000-0000-4000-b000-000000000003', 'Customer DB export shared via personal Drive',
+   'DLP flagged a CSV with customer PII uploaded to a personal Google Drive.', 'high', 'open',
+   'Data leak', 'DLP', '00000000-0000-4000-a000-000000000003', now() - interval '40 minutes'),
+  ('00000000-0000-4000-b000-000000000004', 'Brute-force attempts on SSO',
+   '3,200 failed logins from 12 IPs within 10 minutes. IPs blocked.', 'medium', 'resolved',
+   'Account compromise', 'SIEM', '00000000-0000-4000-a000-000000000001', now() - interval '4 days'),
+  ('00000000-0000-4000-b000-000000000005', 'Unapproved AI tool used with source code',
+   'Proxy logs show uploads of repository archives to an unapproved AI service.', 'medium', 'open',
+   'Policy violation', 'Web proxy', '00000000-0000-4000-a000-000000000005', now() - interval '6 hours'),
+  ('00000000-0000-4000-b000-000000000006', 'Lost company laptop',
+   'Employee reported laptop stolen from car. Disk encrypted; remote wipe issued.', 'low', 'resolved',
+   'Lost device', 'Employee report', '00000000-0000-4000-a000-000000000002', now() - interval '9 days');
+
+update public.incidents set resolved_at = detected_at + interval '5 hours' where status = 'resolved';
+
+insert into public.incident_events (incident_id, kind, message, created_at) values
+  ('00000000-0000-4000-b000-000000000001', 'note', 'Malicious sender domain blocked at gateway.', now() - interval '2 hours'),
+  ('00000000-0000-4000-b000-000000000001', 'status', 'Status changed: open → investigating', now() - interval '2 hours'),
+  ('00000000-0000-4000-b000-000000000002', 'note', 'build-03 isolated; snapshot taken for forensics.', now() - interval '23 hours'),
+  ('00000000-0000-4000-b000-000000000002', 'status', 'Status changed: investigating → contained', now() - interval '20 hours');

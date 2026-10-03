@@ -41,6 +41,7 @@ the contract, so the stack can change without retraining anyone.
 | `just setup` | install dependencies |
 | `just check` | typecheck + lint + test — **the definition of done** |
 | `just dev` | run locally |
+| `just migrate` | apply new Supabase migrations (`--dry-run` to preview) |
 | `just seed` | load demo data |
 | `just deploy` | ship to the demo URL |
 | `just wt <name>` | new isolated worktree + branch + its own PORT |

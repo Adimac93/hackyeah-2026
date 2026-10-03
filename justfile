@@ -2,10 +2,13 @@
 #
 # RULE: agents and teammates call `just <recipe>`. Never the underlying tool.
 # When you add a toolchain, wire it into the matching recipe below instead of
-# teaching the team a new command. The stack plugs in here and nowhere else.
+# teaching the team a new command.
+#
+# Two apps live here: the Rust gateway at the root and the Next.js web app in
+# web/. The core recipes cover both, because "done" has to mean both are green.
 
 set shell := ["bash", "-uc"]
-# Load `.env` for local-only values such as DATABASE_URL. `.env` itself is gitignored.
+# Load `.env` for local-only values such as DATABASE_URL. `.env` is gitignored.
 set dotenv-load := true
 
 repo := justfile_directory()
@@ -13,9 +16,10 @@ repo := justfile_directory()
 default:
     @just --list --unsorted
 
-# install Rust dependencies into the local Cargo cache
+# install dependencies for both apps
 setup:
     cargo fetch --locked
+    cd web && pnpm install --frozen-lockfile
 
 # the one gate: `just check` green == done. Nothing else counts.
 check: typecheck lint test
@@ -23,21 +27,41 @@ check: typecheck lint test
 
 typecheck:
     cargo check --workspace --all-targets
+    cd web && pnpm typecheck
 
+# clippy + rustfmt for the gateway; eslint + prettier (@solvro/config) for web.
+# `just fmt` fixes what is fixable.
 lint:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
+    cd web && pnpm lint && pnpm format:check
 
 test:
     cargo test --workspace --all-targets
+    cd web && pnpm test
 
-# run the gateway locally; set UPSTREAM_URL/POLICY_PATH in .env to override defaults
+# gateway and web app together — what you want for the demo
 dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p gateway --bin gateway
+    ./target/debug/gateway &
+    api_pid=$!
+    trap 'kill $api_pid 2>/dev/null || true' EXIT
+    cd web && pnpm dev
+
+# just the gateway; set UPSTREAM_URL/POLICY_PATH in .env to override defaults
+dev-api:
     cargo run -p gateway --bin gateway
 
-# apply Rust formatting
+# just the web app
+dev-web:
+    cd web && pnpm dev
+
+# apply formatting to both
 fmt:
     cargo fmt
+    cd web && pnpm format
 
 # render the management/security report; requires DATABASE_URL and typst
 report:
@@ -51,9 +75,24 @@ verify-audit:
 db-new NAME:
     supabase migration new {{NAME}}
 
-# load deterministic demo data into the Supabase project
+# apply new web/supabase/migrations to the database: just migrate (preview: just migrate --dry-run)
+migrate *FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd web
+    # the URL may live in web/.env.local next to the other Supabase settings
+    if [ -z "${SUPABASE_DB_URL:-}" ] && [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
+    pnpm dlx supabase@2.119.0 db push --db-url "${SUPABASE_DB_URL:?set SUPABASE_DB_URL in .env or web/.env.local (Supabase → Connect → connection string)}" {{FLAGS}}
+
+# load demo data for both apps: gateway principals and budgets, then web fixtures
 seed:
-    psql "${DATABASE_URL:?set DATABASE_URL in .env}" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+    #!/usr/bin/env bash
+    set -euo pipefail
+    gateway_url="${DATABASE_URL:-${SUPABASE_DB_URL:-}}"
+    web_url="${SUPABASE_DB_URL:-${DATABASE_URL:-}}"
+    : "${gateway_url:?set DATABASE_URL (or SUPABASE_DB_URL) in .env}"
+    psql "$gateway_url" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+    psql "$web_url" -v ON_ERROR_STOP=1 -f web/supabase/seed.sql
 
 # run the gateway and the deliberately vulnerable demo MCP server together
 demo:

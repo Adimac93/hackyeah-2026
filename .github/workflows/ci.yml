@@ -23,8 +23,16 @@ jobs:
       # `just` from the Ubuntu archive — no third-party action in the supply chain
       - run: sudo apt-get update && sudo apt-get install -y just
 
+      # `just check` now covers both the Rust workspace and the web app, so the
+      # runner needs both toolchains.
+
       # Rust ships preinstalled on the runner; only the components need adding
       - run: rustup component add clippy rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
 
       - uses: actions/cache@v4
         with:
