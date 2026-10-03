@@ -31,10 +31,15 @@ steps:
       - --region=$_REGION
       - --platform=managed
       - --port=8080
-      - --set-env-vars=ENVIRONMENT=prod
+      # Pending access approvals live in process memory: the agent's blocked
+      # tools/call and the console's decision must reach the same instance.
+      - --max-instances=1
+      # --update-*, not --set-*: --set replaces every variable on the service and
+      # would wipe UPSTREAM_URL/OLLAMA_URL/CORS_ORIGINS, so prod refuses to start.
+      - --update-env-vars=ENVIRONMENT=prod
       # DATABASE_URL holds a password, so it comes from Secret Manager rather
       # than from this file or a --set-env-vars flag that lands in build logs.
-      - --set-secrets=DATABASE_URL=gateway-database-url:latest
+      - --update-secrets=DATABASE_URL=gateway-database-url:latest
 
 substitutions:
   _SERVICE: backend

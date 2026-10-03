@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>AI Control Layer | Architecture explorer</title>
+<style>
+:root{--paper:#f5f4ef;--ink:#232c2a;--muted:#737b76;--line:#d9ddd5;--accent:#c05725;--green:#336b55;--blue:#4d7089;--mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;--sans:"Avenir Next",Avenir,"Segoe UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px}button,input,select{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:4px}button{color:inherit}button:disabled{cursor:default;opacity:.38}button,a,input,select{-webkit-tap-highlight-color:transparent}button{border:0;background:none}a{color:var(--green)}.app{height:100dvh;min-height:520px;display:flex;flex-direction:column;overflow:hidden}.top{height:78px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 30px;border-bottom:1px solid var(--line);gap:18px;background:#fafaf6}.brand{display:flex;align-items:center;gap:13px}.mark{width:34px;height:38px;background:var(--ink);clip-path:polygon(50% 0,94% 15%,94% 64%,50% 100%,6% 64%,6% 15%);display:grid;place-items:center;color:var(--paper);font-size:17px}.brand strong{display:block;font-size:16px;letter-spacing:-.4px}.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:1.7px;text-transform:uppercase;color:var(--muted)}.brand .eyebrow{margin-top:4px}.header-right{display:flex;gap:20px;align-items:center}.snapshot{font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.8}.outline{border:1px solid var(--line);border-radius:5px;padding:9px 13px;background:#fff;font-size:12px}.outline:hover{border-color:var(--ink)}.intro{display:flex;align-items:end;justify-content:space-between;padding:24px 30px 18px;gap:20px}.intro h1{font-size:32px;font-weight:500;letter-spacing:-1.4px;margin:4px 0 6px}.intro p{color:var(--muted);margin:0;font-size:13px}.counts{display:flex;align-items:center;gap:20px;padding-bottom:4px;font-size:11px;white-space:nowrap}.workspace{flex:1;min-height:0;margin:0 20px 16px;border:1px solid var(--line);border-radius:9px;position:relative;overflow:hidden;background:#fafaf7;display:flex}.map-area{position:relative;flex:1;min-width:0;overflow:hidden}.toolbar{position:absolute;z-index:3;left:18px;top:16px;right:18px;display:flex;justify-content:space-between;gap:12px;align-items:start;pointer-events:none}.toolbar>*{pointer-events:auto}.searchbox{position:relative;width:230px}.searchbox input{border:1px solid var(--line);background:#fff;width:100%;padding:11px 34px 11px 32px;border-radius:5px;font-size:12px;box-shadow:0 2px 5px #27312a04}.search-icon{position:absolute;top:10px;left:12px;color:var(--muted)}.key{position:absolute;top:10px;right:10px;font:11px var(--mono);border:1px solid var(--line);border-radius:3px;padding:1px 4px;color:var(--muted)}.search-results{position:absolute;top:44px;left:0;right:0;max-height:350px;overflow:auto;background:white;border:1px solid var(--line);border-radius:5px;box-shadow:0 8px 28px #22332915}.search-results[hidden]{display:none}.search-results button{display:block;text-align:left;padding:11px 13px;width:100%;border-bottom:1px solid #eee;font-size:12px}.search-results button:hover{background:#f4f4eb}.search-results small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.search-results p{padding:10px;font-size:12px}.view-note{font:10px var(--mono);padding:12px 0;color:var(--muted);letter-spacing:.3px}.viewport{position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(#d9ded4 1px,transparent 1px);background-size:20px 20px}.viewport.dragging{cursor:grabbing}.world{position:absolute;width:1520px;height:960px;transform-origin:0 0;will-change:transform;transition:transform .65s cubic-bezier(.22,.8,.2,1)}.dragging .world,.world.instant{transition:none}.connections{position:absolute;inset:0;width:1520px;height:960px;overflow:visible;pointer-events:none}.edge{fill:none;stroke:#a1aaa0;stroke-width:1.5;marker-end:url(#arrow);transition:opacity .3s,stroke .3s}.edge.return{stroke:#719181}.edge.active{stroke:var(--accent);stroke-width:2.5;marker-end:url(#arrow-active);stroke-dasharray:8 4;animation:flow 1.4s linear infinite}.world.has-selection .edge:not(.active){opacity:.35}.edge-label{font:11px var(--mono);fill:#747f75;paint-order:stroke;stroke:#fafaf7;stroke-width:7px;stroke-linejoin:round}.zone{position:absolute;border:1px solid #cbd4c8;border-radius:15px;background:#eef1e990;pointer-events:none}.zone.resources{background:#f0f0e880;border-style:dashed}.zone-caption{position:absolute;font:10px var(--mono);text-transform:uppercase;letter-spacing:1.5px;color:#8a9687;pointer-events:none}.node{position:absolute;background:#fffefb;border:1px solid #bfc9bd;border-radius:8px;text-align:left;padding:16px 18px;box-shadow:0 3px 0 #dce1d450;transition:box-shadow .2s,border-color .2s,opacity .3s,background .2s;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:6px}.node:hover{border-color:var(--accent);box-shadow:0 6px 20px #28362b13;background:#fff}.node .node-top{display:flex;align-items:center;justify-content:space-between;gap:6px;font:9px var(--mono);letter-spacing:1.3px;text-transform:uppercase;color:var(--muted)}.node strong{font-size:17px;font-weight:600;letter-spacing:-.5px;line-height:1.25}.node .sub{font-size:11px;color:var(--muted);line-height:1.4}.node .open-arrow{position:absolute;right:12px;bottom:10px;font-size:15px;color:#92a08f;opacity:0}.node:hover .open-arrow,.node.selected .open-arrow{opacity:1}.node.selected{border:2px solid var(--accent);box-shadow:0 0 0 5px #c0572510,0 8px 25px #23302b10;background:#fffaf2;z-index:2}.node.dimmed{opacity:.35}.node.guard{background:#fff4e9;border-color:#d4a586}.node.guard .node-top{color:#ad5b30}.node.gateway{background:var(--ink);border-color:var(--ink);color:#fff;box-shadow:none}.node.gateway .node-top,.node.gateway .sub{color:#bbc8ba}.node.gateway.selected{border-color:var(--accent)}.node.module{padding:13px 14px;gap:5px}.node.module strong{font-size:14px}.node.module .sub{font-size:10px}.node.decision{border-radius:28px;background:#f0f4ec;text-align:center}.node.decision .node-top{justify-content:center}.node.decision strong{font-size:17px}.node.user{text-align:center;align-items:center}.node.user .node-top{display:none}.node.user strong{font-size:16px}.node.config{border-color:#d4a586;background:#fff4e9}.node.config strong{font-size:15px}.map-bottom{position:absolute;z-index:3;left:18px;right:18px;bottom:16px;display:flex;align-items:end;justify-content:space-between;gap:12px;pointer-events:none}.map-bottom>*{pointer-events:auto}.map-caption{max-width:350px;color:var(--muted);font-size:10px;line-height:1.7;background:#fafaf7e8;padding:8px 10px;border-radius:5px}.map-caption b{font-weight:500;color:var(--ink)}.zoom-tools{display:flex;background:white;border:1px solid var(--line);border-radius:5px;box-shadow:0 3px 10px #23302b06}.zoom-tools button{padding:10px 12px;font-size:15px;border-right:1px solid #e8ebe3}.zoom-tools button:last-child{border:0;font-size:11px}.zoom-tools output{font:10px var(--mono);align-self:center;min-width:43px;text-align:center}.zoom-tools button:hover{background:#f0f2ec}.sidebar{width:398px;flex-shrink:0;border-left:1px solid var(--line);background:#fffefb;display:flex;flex-direction:column;position:relative;z-index:4}.sidebar[hidden]{display:none}.panel-head{padding:21px 25px 0}.panel-top{display:flex;justify-content:space-between;align-items:center;gap:10px}.back{color:var(--muted);padding:5px 0;font-size:11px}.back:hover{color:var(--accent)}.close{font-size:23px;color:var(--muted);width:30px;height:30px}.panel-scroll{flex:1;overflow:auto;padding:18px 25px 22px;overscroll-behavior:contain}.badge{font:9px var(--mono);text-transform:uppercase;letter-spacing:1px;display:inline-flex;align-items:center;gap:6px;background:#edf3eb;color:var(--green);padding:5px 7px;border-radius:3px}.panel-scroll h2{font-size:29px;line-height:1.15;letter-spacing:-1px;font-weight:500;margin:13px 0}.lead{font-size:13px;line-height:1.8;color:#667266;margin:0 0 20px}.detail-section{border-top:1px solid #e7e9e0;padding-top:18px;margin-top:20px}.detail-section h3{font:10px var(--mono);letter-spacing:1px;text-transform:uppercase;margin:0 0 12px;color:#8b9588}.detail-section p,.detail-section li{font-size:12px;line-height:1.8}.detail-section p{margin:0 0 10px}.detail-section ul{padding-left:16px;margin:0}.detail-section li{padding-left:3px;margin-bottom:8px}.detail-section code,.lead code{font:11px var(--mono);background:#eff1ea;border-radius:3px;padding:1px 3px;overflow-wrap:anywhere}.codeblock{font:10px/1.8 var(--mono);background:#26332d;color:#d5e3d1;padding:16px;border-radius:5px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0 0}.gap-note{border-left:2px solid #c88c59;background:#fbf4e9;padding:12px 14px;margin-top:19px}.gap-note strong{font:9px var(--mono);text-transform:uppercase;letter-spacing:.7px;color:#a66437}.gap-note p{font-size:11px;line-height:1.8;margin:5px 0 0;color:#75624b}.source{padding:9px 0;border-bottom:1px solid #eceee6}.source summary{font:10px/1.6 var(--mono);color:#59765d;cursor:pointer;overflow-wrap:anywhere}.source pre{font:10px/1.7 var(--mono);background:#eff2e9;padding:10px;white-space:pre-wrap;max-height:280px;overflow:auto}.source small{display:block;font-size:10px;color:var(--muted);margin-top:5px}.related{display:flex;gap:6px;flex-wrap:wrap}.related button{font-size:10px;border:1px solid var(--line);border-radius:4px;padding:7px 9px}.related button:hover{border-color:var(--accent);color:var(--accent)}.panel-footer{border-top:1px solid var(--line);padding:12px 25px;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#fafaf6;font:10px var(--mono);color:var(--muted)}.panel-footer button{font-size:13px;padding:3px 8px}.tour{border-top:1px solid var(--line);padding:15px 25px;background:#f5f5ee}.tour[hidden]{display:none}.tour .tour-meta{font:9px var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--accent)}.tour p{font-size:12px;line-height:1.7;margin:8px 0 10px}.tour-actions{display:flex;justify-content:space-between;gap:8px}.tour-actions button{font-size:11px;padding:8px 13px;border:1px solid var(--line);border-radius:4px;background:white}.tour-actions .next{background:var(--ink);color:white;border-color:var(--ink)}.welcome-list{display:grid;gap:9px}.walk{display:block;text-align:left;border:1px solid var(--line);border-radius:5px;padding:14px 14px;width:100%}.walk:hover{border-color:var(--accent);background:#fcf8ef}.walk strong{font-size:12px;font-weight:500;display:block}.walk span{font-size:10px;color:var(--muted);display:block;margin-top:5px}.welcome-graphic{height:70px;margin:15px 0 22px;display:flex;align-items:center;justify-content:space-between;color:var(--muted)}.welcome-graphic span{border:1px solid var(--line);background:#f6f7f0;border-radius:5px;padding:13px 8px;font:9px var(--mono)}.welcome-graphic span:nth-of-type(2){border-color:#c99a77;color:var(--accent);background:#fff3e7}.hint{font:10px var(--mono);color:var(--muted);line-height:2}.footer{padding:0 27px 13px;display:flex;justify-content:space-between;gap:16px;font:9px var(--mono);letter-spacing:.2px;color:#85907e}.footer strong{font-weight:400;color:#4d624d}.menu-toggle{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@keyframes flow{to{stroke-dashoffset:-24}}
+@media(min-width:1700px){.sidebar{width:440px}.intro{padding-top:30px;padding-bottom:24px}.intro h1{font-size:38px}}
+@media(max-width:1100px){.sidebar{width:350px}.top{padding:0 20px}.intro{padding:19px 22px}.counts{gap:10px;font-size:10px}.view-note{display:none}.panel-scroll{padding:16px 20px}.panel-head{padding:16px 20px 0}.intro h1{font-size:27px}.snapshot{display:none}.map-caption{max-width:215px}}
+@media(max-width:760px){.top{height:64px;padding:0 15px}.brand strong{font-size:14px}.brand .eyebrow{font-size:8px}.header-right{gap:5px}.outline{padding:8px;font-size:10px}.intro{padding:17px 16px;display:block}.intro h1{font-size:25px;margin:0 0 6px}.intro p{font-size:11px}.counts{margin-top:12px;gap:15px}.workspace{margin:0 9px 10px}.toolbar{top:12px;left:12px;right:12px}.searchbox{width:200px}.sidebar{position:absolute;right:0;top:0;bottom:0;width:min(360px,92%);box-shadow:-15px 0 50px #29352b18}.map-caption{display:none}.map-bottom{left:12px;right:12px;bottom:12px;justify-content:flex-end}.footer{padding:0 14px 10px;font-size:8px}.footer span:last-child{display:none}.panel-scroll h2{font-size:26px}.menu-toggle{display:block}.intro .eyebrow{display:none}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<main class="app">
+ <header class="top"><div class="brand"><div class="mark" aria-hidden="true">⌁</div><div><strong>AI Control Layer</strong><div class="eyebrow">Architecture field guide</div></div></div><div class="header-right"><div class="snapshot">SYSTEM ARCHITECTURE<br>AI CONTROL LAYER / HACKYEAH</div><button class="outline" id="guide">Explore a request ↗</button><button class="outline" id="overview">↖ Overview</button></div></header>
+ <section class="intro"><div><div class="eyebrow">System atlas / 01</div><h1>Follow the request. Inspect the controls.</h1><p>Explore how users, models, controls and protected resources work together.</p></div></section>
+ <section class="workspace" aria-label="Interactive architecture">
+  <div class="map-area">
+   <div class="toolbar"><div class="searchbox"><span class="search-icon" aria-hidden="true">⌕</span><label class="sr-only" for="search">Find a component</label><input id="search" placeholder="Find a component..." autocomplete="off" aria-controls="results" aria-expanded="false"><span class="key" aria-hidden="true">/</span><div id="results" class="search-results" hidden></div></div><div class="view-note">CLICK A BLOCK TO GO DEEPER ↘</div></div>
+   <div id="viewport" class="viewport" aria-label="Architecture map. Drag the background to pan; use the zoom controls or mouse wheel to zoom."><div id="world" class="world"><svg id="connections" class="connections" aria-hidden="true" viewBox="0 0 1520 960"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="#95a38f" stroke-width="1.7"/></marker><marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="#c05725" stroke-width="1.7"/></marker></defs></svg><div class="zone" style="left:815px;top:420px;width:430px;height:377px"></div><div class="zone resources" style="left:1290px;top:465px;width:196px;height:277px"></div><div class="zone-caption" style="left:1310px;top:483px">Resources</div><div class="zone-caption" style="left:302px;top:148px">01 / Interaction</div><div class="zone-caption" style="left:302px;top:296px">02 / Enforcement</div><div class="zone-caption" style="left:302px;top:783px">03 / Model + tools</div><div id="nodes"></div></div></div>
+   <div class="map-bottom"><div class="map-caption"><b>Same architecture. Two levels of detail.</b><br>Follow the connections from request to protected resource.<br>Drag to pan · Scroll to zoom · Esc to return</div><div class="zoom-tools"><button id="out" aria-label="Zoom out">−</button><output id="zoom" aria-label="Zoom level">100%</output><button id="in" aria-label="Zoom in">+</button><button id="fit" aria-label="Fit entire diagram">Fit map</button></div></div>
+  </div>
+  <aside id="sidebar" class="sidebar" aria-label="Component details"><div class="panel-head"><div class="panel-top"><button class="back" id="back">← System overview</button><button class="close" id="close" aria-label="Close details">×</button></div></div><div class="panel-scroll" id="details"></div><div id="tour" class="tour" hidden></div><div class="panel-footer"><span id="position">ARCHITECTURE / 23 BLOCKS</span><div><button id="previous" aria-label="Previous component">←</button><button id="next" aria-label="Next component">→</button></div></div></aside>
+ </section>
+ <footer class="footer"><span><strong>RUST</strong> / AXUM + TOKIO &nbsp; · &nbsp; <strong>NEXT.JS</strong> / REACT &nbsp; · &nbsp; <strong>SUPABASE</strong> / POSTGRES</span><span>INTERACTIVE SYSTEM ARCHITECTURE · WORKS OFFLINE</span></footer>
+</main>
+<div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+<script>
+'use strict';
+// Component responsibilities and flows describe the complete system architecture.
+const nodes = [
+  {
+    "id": "user",
+    "title": "User / agent",
+    "short": "User / agent",
+    "kicker": "Entry point",
+    "cls": "user",
+    "x": 305,
+    "y": 42,
+    "w": 200,
+    "h": 72,
+    "sub": "An attributed interaction",
+    "intro": "Every interaction starts with an authenticated user or agent. Identity, role and delegated scope accompany the request through enforcement, resource access and audit.",
+    "steps": [
+      "People sign in through the user interface. Agents authenticate to the gateway with an individual API key; only the key hash is stored.",
+      "The gateway resolves a trusted principal and applies the permissions defined for that identity and role.",
+      "Delegated agents operate within a narrower scope than the user they represent. Anonymous and unknown callers are rejected."
+    ],
+    "code": "Session / Bearer API key\n  → authenticated principal\n  → role + delegated scope\n  → attributed decision + audit",
+    "related": [
+      "interface",
+      "access",
+      "history"
+    ]
+  },
+  {
+    "id": "interface",
+    "title": "Provisioned interface",
+    "short": "User interface",
+    "kicker": "Next.js / React",
+    "x": 280,
+    "y": 179,
+    "w": 250,
+    "h": 92,
+    "sub": "Chat, model selection, feedback",
+    "intro": "The provisioned interface brings conversations, model selection, security feedback and protected resource results into one user workspace.",
+    "steps": [
+      "The Next.js interface authenticates the user, validates the prompt and attaches the conversation context to the request.",
+      "Model traffic passes through the security proxy. The interface displays the accepted response, redactions or an explanation of a policy refusal.",
+      "The resource processing engine delivers filtered query results and file extracts to the session owner through a separate data channel.",
+      "Users review suggested prompt rewrites and explicitly resubmit them through the complete guardrail pipeline."
+    ],
+    "code": "Prompt → security proxy → model\nReply  ← output guardrails\nData   ← resource processing engine\nRetry  → full policy evaluation",
+    "related": [
+      "user",
+      "guard",
+      "helper",
+      "processor"
+    ]
+  },
+  {
+    "id": "guard",
+    "title": "Deterministic guardrails",
+    "short": "Security proxy",
+    "kicker": "Tier 01 / deterministic",
+    "cls": "guard",
+    "x": 280,
+    "y": 332,
+    "w": 250,
+    "h": 112,
+    "sub": "Inspect · redact · flag · block",
+    "intro": "The security proxy applies fast, deterministic controls at every text boundary before prompts, responses or tool payloads move to their next destination.",
+    "steps": [
+      "The policy engine compiles enabled patterns and historical attack signatures into controls for each enforcement hook.",
+      "Input controls detect PII, secrets, known injection patterns, obfuscated payloads and oversized requests. Output controls inspect sensitive data, prompt leakage and unsafe downstream content.",
+      "Each finding applies allow, flag, redact or block. Block takes precedence over redaction; flagged traffic escalates to semantic analysis.",
+      "The proxy records control IDs, masked evidence and stage timings. Redaction replaces sensitive matches with a control-specific placeholder."
+    ],
+    "code": "prompt_in    → before the model\nresponse_out → before the user\ntool_call    → before an MCP tool\ntool_result  → before model context",
+    "related": [
+      "semantic",
+      "decision",
+      "patterns",
+      "policy"
+    ]
+  },
+  {
+    "id": "semantic",
+    "title": "Semantic guardrails",
+    "short": "Semantic analysis",
+    "kicker": "Tier 02 / escalation",
+    "x": 572,
+    "y": 346,
+    "w": 209,
+    "h": 91,
+    "sub": "Background + escalated checks",
+    "intro": "Semantic guardrails use self-hosted models to recognize intent and context that deterministic patterns cannot describe.",
+    "steps": [
+      "Background analysis observes interactions without delaying the normal request path and feeds identity and session history.",
+      "When a deterministic finding escalates the request, the relevant semantic controls run synchronously before the operation is authorized.",
+      "Controls specify the detector, the property being classified, a score threshold, a timeout and an escalation rule: always, suspicious or never.",
+      "Injection, contextual PII and exfiltration checks apply their configured action when a threshold is reached. Detector errors and timeouts follow the control’s fail-open or fail-closed policy."
+    ],
+    "code": "Clean flow → background analysis\nSuspicious flow → await semantic verdict\n\nControl = detector + threshold\n        + timeout + action + fail mode",
+    "related": [
+      "guard",
+      "behavior",
+      "decision",
+      "llm"
+    ]
+  },
+  {
+    "id": "decision",
+    "title": "Is the request secure?",
+    "short": "Is secure?",
+    "kicker": "Policy decision",
+    "cls": "decision",
+    "x": 320,
+    "y": 505,
+    "w": 170,
+    "h": 93,
+    "sub": "Allow / redact / block",
+    "intro": "The decision combines deterministic findings, synchronous semantic verdicts, access rules, budgets and identity risk into one routing outcome.",
+    "steps": [
+      "The gateway evaluates the request under one consistent policy version, including model permissions, delegated scope and budget availability.",
+      "A blocking finding stops the original request before it reaches the model or resource. A redaction changes the text before forwarding.",
+      "The prompt helper explains refusals and proposes a compliant rewrite. The user chooses whether to resubmit.",
+      "Allowed requests proceed to the model. Responses and tool results pass their own output checks before delivery."
+    ],
+    "code": "Controls + permissions + budgets + risk\n  → allow  → model / tool\n  → redact → filtered request\n  → block  → prompt helper",
+    "related": [
+      "helper",
+      "llm",
+      "budget",
+      "history"
+    ]
+  },
+  {
+    "id": "helper",
+    "title": "Prompt helper",
+    "short": "Prompt helper",
+    "kicker": "Recovery path",
+    "x": 30,
+    "y": 505,
+    "w": 201,
+    "h": 93,
+    "sub": "Explain, rewrite, resubmit",
+    "intro": "The prompt helper turns a refusal into actionable feedback: it explains the violated policy and offers a compliant way to continue.",
+    "steps": [
+      "The helper receives the rejected request and the policy reasons associated with the gateway’s decision.",
+      "A local model produces a safe explanation and a suggested rewrite without exposing restricted data or useful detection internals.",
+      "The interface presents the suggestion for explicit user resubmission. Every retry passes through the full control pipeline.",
+      "Rejections and helper suggestions are recorded in the audit trail and contribute to attack history."
+    ],
+    "code": "Rejection → policy explanation\n  → compliant rewrite\n  → user approval + resubmission\n  → full enforcement",
+    "related": [
+      "decision",
+      "interface",
+      "user"
+    ]
+  },
+  {
+    "id": "llm",
+    "title": "Model upstream",
+    "short": "LLM",
+    "kicker": "Generation",
+    "x": 280,
+    "y": 681,
+    "w": 250,
+    "h": 86,
+    "sub": "Governed model execution",
+    "intro": "The model generates answers and requests tool operations through controlled interfaces. It receives only content that has passed the relevant guardrails.",
+    "steps": [
+      "Applications integrate through an OpenAI-compatible chat endpoint. Policy narrows available models by identity and role.",
+      "Accepted or redacted messages are forwarded to the selected upstream. Self-hosted Ollama supports the local-model deployment.",
+      "An agent uses MCP tools to request structure, queries or actions. Protected resource values go directly to the user; the model receives references and metadata.",
+      "Model output is inspected before delivery. Token usage, monetary cost and execution time feed budget accounting and reporting."
+    ],
+    "code": "prompt_in → model → response_out\nmodel ↔ MCP ↔ gateway\n\nModel receives: structure + result metadata\nUser receives: filtered protected values",
+    "related": [
+      "mcp",
+      "guard",
+      "budget",
+      "runtime"
+    ]
+  },
+  {
+    "id": "mcp",
+    "title": "MCP integration",
+    "short": "MCP",
+    "kicker": "Tool boundary",
+    "x": 578,
+    "y": 681,
+    "w": 177,
+    "h": 86,
+    "sub": "Federated tool access",
+    "intro": "MCP connects model-driven agents to governed tools and resource operations. The gateway is the common enforcement boundary for every tool interaction.",
+    "steps": [
+      "The gateway exposes approved tools from configured MCP servers using names such as server__tool. Discovery is filtered by the caller’s grants.",
+      "Every invocation checks identity, delegated scope, server and tool permissions, and applicable resource budgets.",
+      "tool_call guardrails inspect arguments before execution. tool_result guardrails inspect descriptions, acknowledgements and other content returning to the model.",
+      "For protected queries, the resource engine delivers filtered values to the user while MCP returns a result reference, structure and row count to the model.",
+      "Approved tool descriptions and server versions are pinned so unexpected changes can be rejected as tool poisoning."
+    ],
+    "code": "Agent → authorized tool call\n  → input checks → resource operation\n  → result checks\n     ↳ user: filtered data\n     ↳ model: reference + schema + count",
+    "related": [
+      "access",
+      "resources",
+      "processor",
+      "semantic"
+    ]
+  },
+  {
+    "id": "gateway",
+    "title": "Gateway / security backend",
+    "short": "Gateway",
+    "kicker": "Central control plane",
+    "cls": "gateway",
+    "x": 832,
+    "y": 434,
+    "w": 396,
+    "h": 77,
+    "sub": "Policy · access · budgets · evidence",
+    "intro": "The gateway is the security backend and central policy enforcement point for interactions among users, agents, models, MCP services and organizational resources.",
+    "steps": [
+      "Axum and Tokio provide the asynchronous service boundary for chat, MCP, policy administration and operational telemetry.",
+      "The service authenticates principals, takes a policy snapshot and applies access, model, budget and guardrail decisions consistently across channels.",
+      "Shared modules provide the policy engine, data access control, attack detection, usage governance, audit history and monitoring.",
+      "Protected resources are reached exclusively through authorized gateway operations. The resource engine handles filtered delivery to the session owner."
+    ],
+    "code": "Ingress: model API / MCP / admin API\nPolicy: controls + grants + budgets\nEgress: models / protected resources\nEvidence: audit + metrics + history",
+    "related": [
+      "policy",
+      "access",
+      "budget",
+      "history",
+      "monitoring",
+      "runtime"
+    ]
+  },
+  {
+    "id": "access",
+    "title": "Data access control",
+    "short": "Data access",
+    "kicker": "Identity + grants",
+    "cls": "module",
+    "x": 833,
+    "y": 531,
+    "w": 188,
+    "h": 70,
+    "sub": "Principal + tool checks",
+    "intro": "Data access control decides which resources and actions an authenticated principal can use, with deny-by-default permissions and narrowed agent delegation.",
+    "steps": [
+      "The gateway resolves the principal’s role and effective grants from the central policy, including MCP servers, tools, tables, rows and file paths.",
+      "Tool discovery and invocation enforce the same grants. A hidden tool cannot be called simply by guessing its name.",
+      "Destructive operations require an explicit allow rule and human confirmation wherever the policy requires it.",
+      "Resource boundaries reject traversal, SSRF and injection attempts, and isolate persistent agent memory by identity."
+    ],
+    "code": "Identity → role → delegated scope\n  → server / tool / resource grants\n  → operation authorization\n  → filtered result",
+    "related": [
+      "user",
+      "mcp",
+      "database",
+      "files"
+    ]
+  },
+  {
+    "id": "patterns",
+    "title": "Malicious patterns & signatures",
+    "short": "Attack patterns",
+    "kicker": "Historical mitigation",
+    "cls": "module",
+    "x": 1039,
+    "y": 531,
+    "w": 188,
+    "h": 70,
+    "sub": "Versioned signature feed",
+    "intro": "The signature layer applies knowledge of historical attacks to prompts, tool calls, model outputs and retrieved content.",
+    "steps": [
+      "A versioned feed supplies signatures for known jailbreaks, unsafe deserialization, code execution and supply-chain exploits.",
+      "Feed updates are validated and hot-reloaded into the effective policy. The signature mirror exposes the active feed to the security dashboard.",
+      "Matches carry a signature identifier and feed version into audit evidence, making each decision traceable to the rule that produced it.",
+      "Approved model sources, artifact hashes and MCP tool descriptions complement text signatures with explicit trust rules."
+    ],
+    "code": "Managed feed → validate → hot reload\n  → deterministic signature controls\n  → match + signature ID + feed version\n  → history + reporting",
+    "related": [
+      "guard",
+      "history",
+      "policy"
+    ]
+  },
+  {
+    "id": "budget",
+    "title": "Budget & resource governance",
+    "short": "Budgets",
+    "kicker": "Usage governance",
+    "cls": "module",
+    "x": 833,
+    "y": 618,
+    "w": 188,
+    "h": 70,
+    "sub": "Spend, usage and loop limits",
+    "intro": "Resource governance applies financial and operational limits to model and agent activity across identities, teams, organizations and models.",
+    "steps": [
+      "The policy defines token, monetary, compute-time, request-count and concurrency limits over configured time windows.",
+      "A pricing table accounts for model token usage; local inference is tracked through tokens and compute time.",
+      "Soft limits produce visible warnings. Hard limits refuse additional work with a clear budget-exceeded explanation.",
+      "Tool-call, loop-iteration, recursion and repeated-call limits prevent runaway agent execution. Usage and budget decisions feed monitoring in real time."
+    ],
+    "code": "Identity → team → organization\n  × model × time window\n\nSoft limit → warn + record\nHard limit → refuse + explain",
+    "related": [
+      "llm",
+      "monitoring",
+      "policy"
+    ]
+  },
+  {
+    "id": "history",
+    "title": "History & audit trail",
+    "short": "History / audit",
+    "kicker": "Decision evidence",
+    "cls": "module",
+    "x": 1039,
+    "y": 618,
+    "w": 188,
+    "h": 70,
+    "sub": "Hash-chained events",
+    "intro": "The history store connects each interaction to its identity, policy, findings and outcome, supporting investigation, risk analysis and regression testing.",
+    "steps": [
+      "Structured audit events record the trace, identity, agent, model, policy version, control IDs, verdict, risk, usage and per-stage latency.",
+      "The gateway writes evidence through its privileged database connection. Security dashboards receive read-only access to the audit tables.",
+      "A hash chain links events for tamper evidence, while stored content and detection evidence preserve redactions.",
+      "Security teams filter and export records in JSON or CSV. Repeated violations feed risk scoring, and selected interactions become regression cases."
+    ],
+    "code": "Interaction → trace + policy + verdict\n  → append-only audit history\n  → investigation / export\n  → risk analysis / regression cases",
+    "related": [
+      "monitoring",
+      "database",
+      "behavior",
+      "tests"
+    ]
+  },
+  {
+    "id": "monitoring",
+    "title": "Monitoring & reporting",
+    "short": "Monitoring",
+    "kicker": "Operational visibility",
+    "cls": "module",
+    "x": 833,
+    "y": 705,
+    "w": 188,
+    "h": 70,
+    "sub": "Latency, decisions, usage",
+    "intro": "Monitoring makes enforcement, consumption and latency visible to security teams and management, and supplies events to behavioral analysis.",
+    "steps": [
+      "Every module emits decisions, triggered controls, budget usage, policy changes, signature updates, model outages and execution timings.",
+      "Operational metrics include throughput, error rates, model availability, semantic queue depth and p50/p95/p99 latency by stage.",
+      "Management reports summarize blocked and redacted activity, top controls, consumption and costs by identity, team and model.",
+      "Security views connect individual incidents to their audit traces and policy versions. The report pipeline produces shareable security and management summaries."
+    ],
+    "code": "Module events → metrics + audit\n  → live dashboard\n  → security / management reports\n  → background semantic analysis",
+    "related": [
+      "admin",
+      "history",
+      "budget",
+      "behavior"
+    ]
+  },
+  {
+    "id": "behavior",
+    "title": "Background semantic analysis",
+    "short": "Behavior analysis",
+    "kicker": "Async semantic path",
+    "cls": "module",
+    "x": 1039,
+    "y": 705,
+    "w": 188,
+    "h": 70,
+    "sub": "Session history + risk",
+    "intro": "Background semantic analysis examines activity across a session or identity to identify repeated attempts and multi-step attacks.",
+    "steps": [
+      "A background worker consumes monitoring events and relevant interaction history without blocking routine traffic.",
+      "Semantic detectors correlate behavior across turns, tools and resources, looking for escalation, exfiltration and repeated violations.",
+      "The resulting identity or session risk score tightens checks or blocks subsequent requests according to policy.",
+      "Checks that must prevent the current operation run synchronously through escalation. Background observations affect subsequent decisions."
+    ],
+    "code": "Events + history → behavioral analysis\n  → identity / session risk\n  → stricter checks on the next request",
+    "related": [
+      "semantic",
+      "history",
+      "decision",
+      "monitoring"
+    ]
+  },
+  {
+    "id": "processor",
+    "title": "Resource processing engine",
+    "short": "Resource engine",
+    "kicker": "Result delivery",
+    "x": 838,
+    "y": 179,
+    "w": 240,
+    "h": 92,
+    "sub": "Processed data → owning user",
+    "intro": "The resource processing engine delivers protected data to the authorized user while keeping raw resource values outside the model’s context.",
+    "steps": [
+      "The model requests a query or resource operation through MCP. The gateway authorizes the principal, scope and requested action.",
+      "The resource engine processes the result into rows, file extracts or reports and applies output guardrails and required redactions.",
+      "Filtered values are pushed only to the requesting session’s owner through the provisioned interface.",
+      "The model receives an acknowledgement containing a result reference, structure and row count, so it can continue orchestration without receiving protected values."
+    ],
+    "code": "Gateway → resource operation → filtering\n  ↳ user: rows / extracts / reports\n  ↳ model: { result_ref, schema, row_count }",
+    "related": [
+      "interface",
+      "mcp",
+      "resources",
+      "access"
+    ]
+  },
+  {
+    "id": "admin",
+    "title": "Security team dashboard",
+    "short": "Admin dashboard",
+    "kicker": "Next.js / Supabase",
+    "x": 1126,
+    "y": 179,
+    "w": 240,
+    "h": 92,
+    "sub": "Incidents, policies, team",
+    "intro": "The security dashboard provides a central view of active controls, policy changes, threats, budgets and the evidence behind every enforcement decision.",
+    "steps": [
+      "Authenticated security-team members inspect the active policy, control configuration, reload history and human-readable version diffs.",
+      "Incident, audit and usage views support triage, investigation, export and management reporting.",
+      "The dashboard reads gateway evidence through Supabase’s Data API under read-only row-level policies.",
+      "Policy updates go through an authenticated gateway admin API, where validation and audit recording accompany every accepted change."
+    ],
+    "code": "Read: controls / threats / audit / usage\nChange: authenticated policy administration\nTrace: identity + policy version + decision",
+    "related": [
+      "monitoring",
+      "history",
+      "policy",
+      "database"
+    ]
+  },
+  {
+    "id": "resources",
+    "title": "Protected resources",
+    "short": "Resources",
+    "kicker": "Organizational assets",
+    "x": 1306,
+    "y": 516,
+    "w": 165,
+    "h": 54,
+    "sub": "Data behind the gateway",
+    "intro": "Organizational databases and files sit behind the gateway’s access boundary. Every resource operation is attributed, authorized, inspected and recorded.",
+    "steps": [
+      "MCP tools express the requested operation, while the gateway controls identity, scope, budgets and data-access permissions.",
+      "Resource adapters execute approved operations against the organization’s databases or file stores.",
+      "Output guardrails filter the returned data before the resource processing engine delivers it to the session owner.",
+      "Models receive structural descriptions and result metadata rather than protected resource values."
+    ],
+    "related": [
+      "database",
+      "files",
+      "processor",
+      "access"
+    ],
+    "code": "Agent → MCP → gateway → resource\nResource → filtering → authorized user"
+  },
+  {
+    "id": "database",
+    "title": "Database",
+    "short": "Database",
+    "kicker": "Storage",
+    "cls": "module",
+    "x": 1306,
+    "y": 586,
+    "w": 165,
+    "h": 60,
+    "sub": "Governed database access",
+    "intro": "Database resources expose organizational data through authorized queries. Supabase Postgres also stores the control layer’s application records and audit evidence.",
+    "steps": [
+      "The gateway applies identity- and role-based grants to the requested database operation, including table and row access.",
+      "Query results pass output filtering and are delivered by the resource engine to the session owner; the model receives schema and result metadata.",
+      "Control-layer persistence stores principals, policy versions, events, detections, signatures and usage.",
+      "Schema changes follow one migration timeline. Row-level security separates user-owned data, security-team reads and privileged gateway writes."
+    ],
+    "related": [
+      "history",
+      "admin",
+      "processor",
+      "resources"
+    ],
+    "code": "Business data: authorized query → user\nControl data: policy + identity + evidence\nAccess boundary: gateway + database RLS"
+  },
+  {
+    "id": "files",
+    "title": "Files & documents",
+    "short": "Files",
+    "kicker": "Protected content",
+    "cls": "module",
+    "x": 1306,
+    "y": 661,
+    "w": 165,
+    "h": 60,
+    "sub": "Authorized document access",
+    "intro": "The file resource layer provides controlled access to organizational documents and extracts without exposing unrestricted storage to agents.",
+    "steps": [
+      "A tool request identifies the document and operation. Policy checks the caller’s scope, approved file paths and permitted actions.",
+      "The access layer rejects traversal and unauthorized operations before reaching storage.",
+      "Retrieved document text is treated as untrusted and inspected for indirect injection, secrets and sensitive personal data.",
+      "The resource engine sends filtered extracts to the authorized user. The model receives a reference and structural metadata."
+    ],
+    "related": [
+      "mcp",
+      "resources",
+      "access",
+      "processor"
+    ],
+    "code": "File request → scope + path checks\n  → read / extract → content inspection\n  → filtered user delivery"
+  },
+  {
+    "id": "policy",
+    "title": "Centralized policy & configuration",
+    "short": "Configuration file",
+    "kicker": "TOML / hot reload",
+    "cls": "config",
+    "x": 918,
+    "y": 850,
+    "w": 242,
+    "h": 77,
+    "sub": "One effective policy snapshot",
+    "intro": "The centralized policy engine turns a single TOML configuration into consistent controls, grants, thresholds, model rules and resource budgets.",
+    "steps": [
+      "The catalog defines strictness profiles, enabled controls, actions, failure modes, semantic thresholds, pricing, budgets and resource permissions.",
+      "The newest accepted disk edit or authenticated upload becomes the active configuration. Uploaded versions persist for consistent selection across instances and restarts.",
+      "Validation rejects unknown keys and invalid controls. A valid change swaps the policy snapshot; invalid edits retain the last valid version.",
+      "In-flight requests finish under their original snapshot. Every accepted change carries a version and human-readable diff, and each decision records the policy that produced it."
+    ],
+    "code": "File edit / admin upload\n  → validate → version + diff\n  → distribute effective policy\n  → one snapshot per request",
+    "related": [
+      "gateway",
+      "guard",
+      "budget",
+      "patterns"
+    ]
+  },
+  {
+    "id": "tests",
+    "title": "Self-testing suite",
+    "short": "Self-testing suite",
+    "kicker": "Validation",
+    "cls": "module",
+    "x": 30,
+    "y": 828,
+    "w": 224,
+    "h": 82,
+    "sub": "Pure logic + protocol cases",
+    "intro": "The self-testing suite verifies policy behavior and control outcomes with allowed, blocked and redacted scenarios, including a complete demo flow.",
+    "steps": [
+      "Positive and negative cases cover deterministic and semantic controls, access denial, budget boundaries, historical exploits and output filtering.",
+      "Policy tests verify hot reload, control removal, disabled checks, threshold changes and recovery from invalid configuration.",
+      "Deterministic and mock-semantic cases run without model infrastructure. Real local-model checks are a separate validation path.",
+      "A demo smoke test exercises the complete request journey, while audit history supplies regression cases. Reports identify results by control."
+    ],
+    "code": "just check\n  → typecheck + lint + tests\n  → allowed / blocked / redacted cases\n  → policy reload + budget boundaries",
+    "related": [
+      "guard",
+      "semantic",
+      "policy",
+      "history"
+    ]
+  },
+  {
+    "id": "runtime",
+    "title": "Deployment & runtime",
+    "short": "Runtime",
+    "kicker": "Local / Cloud Run",
+    "cls": "module",
+    "x": 30,
+    "y": 717,
+    "w": 224,
+    "h": 82,
+    "sub": "Local + Cloud Run services",
+    "intro": "The system runs locally for development and on Google Cloud for production, with a Rust gateway, a Next.js interface, Supabase storage and self-hosted model services.",
+    "steps": [
+      "The gateway container uses a cargo-chef build and ships its control catalog. Cloud Build delivers the service to Cloud Run.",
+      "A separate Ollama GPU service handles generation and semantic classification. The gateway connects to Supabase Postgres using a session-mode pooler.",
+      "Development uses deterministic mocks for repeatable tests. Production requires audit persistence, real model endpoints and explicit allowed browser origins.",
+      "Secrets are supplied through environment configuration and Secret Manager. JSON logs, health checks and telemetry support service operations."
+    ],
+    "related": [
+      "gateway",
+      "llm",
+      "semantic",
+      "database"
+    ],
+    "code": "Next.js interface → Rust gateway\n  ↔ Ollama model service\n  ↔ Supabase Postgres\n  ↔ MCP / resource services"
+  }
+];
+const edges = [
+  [
+    "user",
+    "interface",
+    "M405 114V179",
+    "prompt",
+    416,
+    153
+  ],
+  [
+    "interface",
+    "guard",
+    "M405 271V332",
+    "",
+    0,
+    0
+  ],
+  [
+    "guard",
+    "decision",
+    "M405 444V505",
+    "evaluate",
+    419,
+    478
+  ],
+  [
+    "guard",
+    "semantic",
+    "M530 376H572",
+    "",
+    0,
+    0
+  ],
+  [
+    "semantic",
+    "decision",
+    "M676 437V550H490",
+    "verdict",
+    570,
+    541
+  ],
+  [
+    "decision",
+    "helper",
+    "M320 551H231",
+    "blocked",
+    247,
+    540,
+    ""
+  ],
+  [
+    "helper",
+    "user",
+    "M130 505V77H305",
+    "rewrite / retry",
+    139,
+    129,
+    ""
+  ],
+  [
+    "decision",
+    "llm",
+    "M405 598V681",
+    "allowed",
+    417,
+    644
+  ],
+  [
+    "llm",
+    "interface",
+    "M280 724H263V225H280",
+    "response_out",
+    158,
+    373,
+    "return"
+  ],
+  [
+    "llm",
+    "mcp",
+    "M530 724H578",
+    "tools",
+    539,
+    710,
+    ""
+  ],
+  [
+    "mcp",
+    "gateway",
+    "M755 724H795V473H832",
+    "/mcp",
+    752,
+    635
+  ],
+  [
+    "gateway",
+    "guard",
+    "M832 460L530 413",
+    "policy snapshot",
+    642,
+    432
+  ],
+  [
+    "gateway",
+    "resources",
+    "M1245 548H1306",
+    "",
+    0,
+    0,
+    ""
+  ],
+  [
+    "processor",
+    "interface",
+    "M838 225H530",
+    "filtered results to user",
+    599,
+    213,
+    ""
+  ],
+  [
+    "gateway",
+    "processor",
+    "M952 434V271",
+    "result data",
+    965,
+    323,
+    ""
+  ],
+  [
+    "processor",
+    "gateway",
+    "M925 271V434",
+    "",
+    0,
+    0,
+    ""
+  ],
+  [
+    "admin",
+    "gateway",
+    "M1246 271V389H1190V434",
+    "security operations",
+    1150,
+    345,
+    ""
+  ],
+  [
+    "policy",
+    "gateway",
+    "M1029 850V798",
+    "configure",
+    1040,
+    829
+  ],
+  [
+    "monitoring",
+    "behavior",
+    "M1021 740H1039",
+    "",
+    0,
+    0,
+    ""
+  ],
+  [
+    "history",
+    "behavior",
+    "M1133 688V705",
+    "",
+    0,
+    0,
+    ""
+  ]
+];
+const tours = {
+  "clean": {
+    "title": "An allowed chat request",
+    "steps": [
+      [
+        "interface",
+        "An authenticated user submits a prompt. The interface sends identity and conversation context through the security proxy."
+      ],
+      [
+        "guard",
+        "Deterministic controls inspect prompt_in. Routine traffic continues while background semantic analysis observes the interaction."
+      ],
+      [
+        "decision",
+        "Model permissions, budgets and identity risk are checked under the active policy snapshot. An allowed request proceeds."
+      ],
+      [
+        "llm",
+        "The model generates an answer. Output controls inspect it before delivery, and usage is accounted for."
+      ],
+      [
+        "history",
+        "The trace, policy version, findings, outcome and stage timings enter the audit trail."
+      ],
+      [
+        "interface",
+        "The user receives the accepted response, with redaction feedback where the policy modified content."
+      ]
+    ]
+  },
+  "suspicious": {
+    "title": "A suspicious request",
+    "steps": [
+      [
+        "guard",
+        "An instruction-override pattern flags the prompt for deeper inspection."
+      ],
+      [
+        "semantic",
+        "The relevant semantic controls run synchronously. A score at or above the configured threshold applies the policy action."
+      ],
+      [
+        "decision",
+        "The blocked request is withheld from the generation model and routed into the policy recovery path."
+      ],
+      [
+        "helper",
+        "The helper explains the violated policy and proposes a compliant rewrite. It returns the suggestion to the user."
+      ],
+      [
+        "interface",
+        "The user explicitly resubmits a revised prompt. The complete control pipeline evaluates it again."
+      ]
+    ]
+  },
+  "tool": {
+    "title": "An MCP tool result",
+    "steps": [
+      [
+        "mcp",
+        "The agent requests a resource operation through an approved MCP tool."
+      ],
+      [
+        "access",
+        "The gateway authenticates the caller and checks its delegated scope, resource permissions and applicable budgets."
+      ],
+      [
+        "guard",
+        "tool_call controls inspect the arguments before the authorized operation reaches the resource."
+      ],
+      [
+        "processor",
+        "The resource engine processes the result, applies output guardrails and delivers filtered values only to the session owner."
+      ],
+      [
+        "mcp",
+        "The model receives a result reference, schema and row count. Returned metadata is checked for indirect injection."
+      ],
+      [
+        "history",
+        "The operation, policy decision, usage and delivery outcome are recorded for investigation and behavioral analysis."
+      ]
+    ]
+  }
+};
+const $ = id => document.getElementById(id);
+const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const byId = Object.fromEntries(nodes.map(n=>[n.id,n]));
+let selected=null, scale=1, tx=0, ty=0, tourName=null, tourStep=0, dragged=false;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const nodeMarkup = n => `<button id="node-${n.id}" class="node ${n.cls||''}" data-id="${n.id}" style="left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px" aria-label="${escapeHTML(n.title)}. Explore architecture details" aria-pressed="false"><span class="node-top">${escapeHTML(n.kicker)}</span><strong>${escapeHTML(n.short)}</strong><span class="sub">${escapeHTML(n.sub)}</span><span class="open-arrow" aria-hidden="true">↗</span></button>`;
+$('nodes').innerHTML=nodes.map(nodeMarkup).join('');
+for(const [from,to,d,label,lx,ly,type=''] of edges){const ns='http://www.w3.org/2000/svg';const path=document.createElementNS(ns,'path');path.setAttribute('d',d);path.setAttribute('class',`edge ${type}`);path.dataset.from=from;path.dataset.to=to;$('connections').append(path);if(label){const t=document.createElementNS(ns,'text');t.setAttribute('x',lx);t.setAttribute('y',ly);t.setAttribute('class','edge-label');t.textContent=label;$('connections').append(t);}}
+function canvasSize(){return {w:$('viewport').clientWidth,h:$('viewport').clientHeight};}
+function transform(instant=false){$('world').classList.toggle('instant',instant);$('world').style.transform=`translate(${tx}px,${ty}px) scale(${scale})`;$('zoom').value=`${Math.round(scale*100)}%`;}
+function fit(){const {w,h}=canvasSize();scale=Math.max(.14,Math.min((w-40)/1520,(h-115)/960,1.1));tx=(w-1520*scale)/2;ty=67+(h-115-960*scale)/2;transform();}
+function focusNode(n){const {w,h}=canvasSize();scale=Math.max(.45,Math.min(1.5,(w-95)/(n.w+250),(h-125)/(n.h+180)));tx=w/2-(n.x+n.w/2)*scale;ty=(h+35)/2-(n.y+n.h/2)*scale;transform();}
+function updateHighlight(){const neighbors=new Set(selected?[selected,...(byId[selected].related||[])]:[]);document.querySelectorAll('.node').forEach(el=>{el.classList.toggle('selected',el.dataset.id===selected);el.classList.toggle('dimmed',!!selected&&!neighbors.has(el.dataset.id));el.setAttribute('aria-pressed',String(el.dataset.id===selected));});$('world').classList.toggle('has-selection',!!selected);document.querySelectorAll('.edge').forEach(el=>el.classList.toggle('active',!!selected&&(el.dataset.from===selected||el.dataset.to===selected)));}
+function renderNode(n){$('details').innerHTML=`<span class="eyebrow">${escapeHTML(n.kicker)}</span><h2 tabindex="-1" id="detail-title">${escapeHTML(n.title)}</h2><p class="lead">${escapeHTML(n.intro)}</p><section class="detail-section"><h3>How it works</h3><ul>${n.steps.map(s=>`<li>${escapeHTML(s)}</li>`).join('')}</ul></section>${n.code?`<section class="detail-section"><h3>Flow &amp; interfaces</h3><pre class="codeblock">${escapeHTML(n.code)}</pre></section>`:''}<section class="detail-section"><h3>Connected components</h3><div class="related">${n.related.map(id=>`<button data-open="${id}">${escapeHTML(byId[id].short)} ↗</button>`).join('')}</div></section>`;$('details').scrollTop=0;$('position').textContent=`${String(nodes.indexOf(n)+1).padStart(2,'0')} / ${nodes.length} COMPONENTS`;$('announcement').textContent=`${n.title}. Architecture details opened.`;}
+function select(id,{fromTour=false,hash=true}={}){if(!byId[id])return;if(!fromTour){tourName=null;$('tour').hidden=true;}selected=id;$('sidebar').hidden=false;renderNode(byId[id]);updateHighlight();requestAnimationFrame(()=>focusNode(byId[id]));if(hash)history.replaceState(null,'',`#${id}`);closeSearch();}
+function welcome(){tourName=null;tourStep=0;selected=null;$('tour').hidden=true;$('sidebar').hidden=false;$('details').innerHTML=`<span class="badge">Interactive field guide</span><h2 id="detail-title">One layer.<br>Every boundary.</h2><p class="lead">Start with the system, then move inside it. Select any block to inspect its responsibilities, interfaces and place in the request flow.</p><div class="welcome-graphic" aria-hidden="true"><span>REQUEST</span>→<span>CONTROL</span>→<span>RESOURCE</span></div><section class="detail-section"><h3>Walk through a flow</h3><div class="welcome-list"><button class="walk" data-tour="clean"><strong>01 &nbsp; An allowed chat request ↗</strong><span>Interface → controls → model → response</span></button><button class="walk" data-tour="suspicious"><strong>02 &nbsp; A suspicious request ↗</strong><span>Flag → semantic verdict → refusal</span></button><button class="walk" data-tour="tool"><strong>03 &nbsp; An MCP tool result ↗</strong><span>Authorization → tool → result inspection</span></button></div></section><section class="detail-section"><h3>Architecture at a glance</h3><p>Fast controls inspect every boundary. Semantic analysis adds context. One central policy governs identity, data access and resource use, with every decision feeding the audit trail.</p></section><section class="detail-section"><h3>Navigation</h3><p class="hint">Click a block · zoom into its details<br>Drag canvas · explore the neighborhood<br>+ / − · zoom &nbsp; 0 · fit map<br>/ · find a component &nbsp; Esc · overview</p></section><section class="detail-section"><h3>System foundations</h3><p>Rust gateway and policy engine. Next.js user and security interfaces. Supabase persistence. Self-hosted model services. MCP tools behind a common resource boundary.</p><p class="hint">A complete view of the architecture.<br>No external libraries or network requests.</p></section>`;$('details').scrollTop=0;$('position').textContent=`ARCHITECTURE / ${nodes.length} BLOCKS`;updateHighlight();history.replaceState(null,'',location.pathname+location.search);requestAnimationFrame(fit);}
+function startTour(name){tourName=name;tourStep=0;renderTour();}
+function renderTour(){const t=tours[tourName];const [id,note]=t.steps[tourStep];select(id,{fromTour:true});$('tour').hidden=false;$('tour').innerHTML=`<div class="tour-meta">${escapeHTML(t.title)} · ${tourStep+1}/${t.steps.length}</div><p>${escapeHTML(note)}</p><div class="tour-actions"><button id="end-tour">End tour</button><div><button id="tour-prev" ${tourStep===0?'disabled':''}>←</button> <button class="next" id="tour-next">${tourStep===t.steps.length-1?'Finish ✓':'Next step →'}</button></div></div>`;}
+function zoomBy(factor,px,py){const {w,h}=canvasSize();px??=w/2;py??=h/2;const next=Math.max(.14,Math.min(2.5,scale*factor));tx=px-(px-tx)*next/scale;ty=py-(py-ty)*next/scale;scale=next;transform(true);}
+function closeSearch(){$('results').hidden=true;$('search').setAttribute('aria-expanded','false');}
+$('nodes').addEventListener('click',e=>{const el=e.target.closest('[data-id]');if(el&&!dragged)select(el.dataset.id);});
+$('details').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.open)select(b.dataset.open);if(b.dataset.tour)startTour(b.dataset.tour);});
+$('tour').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='end-tour')welcome();else if(b.id==='tour-prev'&&tourStep>0){tourStep--;renderTour();}else if(b.id==='tour-next'){if(tourStep===tours[tourName].steps.length-1)welcome();else{tourStep++;renderTour();}}});
+$('overview').onclick=welcome;$('back').onclick=welcome;$('guide').onclick=welcome;
+$('close').onclick=()=>{const prior=selected;$('sidebar').hidden=true;selected=null;tourName=null;$('tour').hidden=true;updateHighlight();history.replaceState(null,'',location.pathname+location.search);requestAnimationFrame(fit);if(prior)$('node-'+prior).focus({preventScroll:true});};
+$('fit').onclick=fit;$('in').onclick=()=>zoomBy(1.2);$('out').onclick=()=>zoomBy(1/1.2);
+function adjacent(offset){const index=selected?nodes.findIndex(n=>n.id===selected):-1;select(nodes[(index+offset+nodes.length)%nodes.length].id);}
+$('previous').onclick=()=>adjacent(-1);$('next').onclick=()=>adjacent(1);
+$('search').addEventListener('input',()=>{const q=$('search').value.trim().toLowerCase();if(!q){closeSearch();return;}const matches=nodes.filter(n=>[n.title,n.kicker,n.intro,n.sub,...n.steps].join(' ').toLowerCase().includes(q));$('results').innerHTML=matches.length?matches.map(n=>`<button data-open="${n.id}">${escapeHTML(n.title)}<small>${escapeHTML(n.kicker)}</small></button>`).join(''):'<p>No components found. Try “policy” or “MCP”.</p>';$('results').hidden=false;$('search').setAttribute('aria-expanded','true');});
+$('search').addEventListener('keydown',e=>{if(e.key==='Enter'){const first=$('results').querySelector('button');if(first){select(first.dataset.open);$('search').blur();$('detail-title').focus({preventScroll:true});}}if(e.key==='ArrowDown'){e.preventDefault();$('results').querySelector('button')?.focus();}if(e.key==='Escape'){closeSearch();$('search').blur();e.stopPropagation();}});
+$('results').addEventListener('click',e=>{const b=e.target.closest('button');if(b){select(b.dataset.open);$('detail-title').focus({preventScroll:true});}});
+document.addEventListener('click',e=>{if(!e.target.closest('.searchbox'))closeSearch();});
+let pointer=null;
+$('viewport').addEventListener('pointerdown',e=>{if(e.target.closest('button')||e.button!==0)return;pointer={id:e.pointerId,x:e.clientX,y:e.clientY,tx,ty};dragged=false;$('viewport').setPointerCapture(e.pointerId);$('viewport').classList.add('dragging');});
+$('viewport').addEventListener('pointermove',e=>{if(!pointer||pointer.id!==e.pointerId)return;const dx=e.clientX-pointer.x,dy=e.clientY-pointer.y;if(Math.abs(dx)+Math.abs(dy)>4)dragged=true;tx=pointer.tx+dx;ty=pointer.ty+dy;transform(true);});
+function endPan(){pointer=null;$('viewport').classList.remove('dragging');requestAnimationFrame(()=>{dragged=false;});}
+$('viewport').addEventListener('pointerup',endPan);$('viewport').addEventListener('pointercancel',endPan);
+$('viewport').addEventListener('wheel',e=>{e.preventDefault();const r=$('viewport').getBoundingClientRect();zoomBy(Math.exp(-Math.max(-100,Math.min(100,e.deltaY))*.002),e.clientX-r.left,e.clientY-r.top);},{passive:false});
+document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select')||e.ctrlKey||e.metaKey||e.altKey)return;if(e.key==='/'){e.preventDefault();$('search').focus();}else if(e.key==='Escape')welcome();else if(e.key==='+'||e.key==='=')zoomBy(1.2);else if(e.key==='-')zoomBy(1/1.2);else if(e.key==='0')fit();});
+window.addEventListener('hashchange',()=>{const id=location.hash.slice(1);if(byId[id])select(id,{hash:false});else welcome();});
+let lastWidth=0,lastHeight=0;new ResizeObserver(()=>{const {w,h}=canvasSize();if(w===lastWidth&&h===lastHeight)return;lastWidth=w;lastHeight=h;if(selected)focusNode(byId[selected]);else fit();}).observe($('viewport'));
+const initialId=location.hash.slice(1);if(byId[initialId])select(initialId,{hash:false});else{welcome();if(innerWidth<=760)$('sidebar').hidden=true;}
+</script>
+</body>
+</html>
