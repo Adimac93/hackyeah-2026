@@ -67,8 +67,8 @@ report:
     cargo run --quiet -p gateway --bin report
 
 # prove the audit log has not been edited; requires DATABASE_URL
-verify-audit:
-    cargo run --quiet -p gateway --bin verify-audit
+verify-audit *ARGS:
+    cargo run --quiet -p gateway --bin verify-audit -- {{ARGS}}
 
 # new schema migration: just db-new add_something
 db-new NAME:

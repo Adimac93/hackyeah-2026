@@ -10,6 +10,10 @@
 //!
 //! Exit code is 0 for an intact chain, 1 for a broken one, so CI and a demo can
 //! both depend on it.
+//!
+//! `verify-audit --file export.json` checks a JSON export from
+//! `GET /admin/audit/export` instead, with no database: every row must
+//! reproduce its own hash. An auditor holding only the file can run it.
 
 use anyhow::Context as _;
 use sqlx::postgres::PgPoolOptions;
@@ -17,6 +21,13 @@ use sqlx::postgres::PgPoolOptions;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => {}
+        [flag, path] if flag == "--file" => return verify_file(path),
+        _ => anyhow::bail!("usage: verify-audit [--file export.json]"),
+    }
 
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL is not set")?;
     let pool = PgPoolOptions::new()
@@ -40,6 +51,36 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("CHAIN BROKEN at event(s): {broken:?}");
         println!("{} of {checked} events no longer verify", broken.len());
+        std::process::exit(1);
+    }
+}
+
+fn verify_file(path: &str) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
+    let rows: Vec<gateway::admin::export::Row> = serde_json::from_str(&text)
+        .with_context(|| format!("{path} is not a JSON export from /admin/audit/export"))?;
+    let report = gateway::admin::export::verify_export(&rows);
+
+    if report.rows == 0 {
+        println!("{path}: no events in the export");
+        return Ok(());
+    }
+    // A complete export is one segment; filters and the row limit leave gaps,
+    // which are not tampering, so say so rather than failing on them.
+    let gaps = match report.segments {
+        1 => "contiguous".to_owned(),
+        n => format!("{n} segments: filtered or truncated export"),
+    };
+    if report.broken.is_empty() {
+        println!("export intact: {} events verified ({gaps})", report.rows);
+        Ok(())
+    } else {
+        println!("EXPORT TAMPERED at event(s): {:?}", report.broken);
+        println!(
+            "{} of {} events no longer verify ({gaps})",
+            report.broken.len(),
+            report.rows
+        );
         std::process::exit(1);
     }
 }

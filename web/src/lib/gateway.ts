@@ -291,3 +291,48 @@ export function describePolicySave(result: PolicySaveResult): string {
   const changes = result.diff.length === 0 ? "" : ` ${result.diff.join("; ")}`;
   return `Saved and active as version #${String(result.version_id)}.${changes}`;
 }
+
+/** Formats `GET /admin/audit/export` serves. */
+export const EXPORT_FORMATS = ["csv", "json"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+/** The Activity page's filters that the gateway's export can apply. */
+export interface AuditExportFilters {
+  verdict?: string;
+  channel?: string;
+  /** Principal slug (the page filters by id; the export takes the slug). */
+  principal?: string;
+}
+
+/**
+ * Path + query for the gateway's audit export. Unknown verdicts and channels
+ * are dropped rather than forwarded, so a tampered link cannot smuggle extra
+ * query parameters through the console.
+ */
+export function auditExportPath(
+  format: ExportFormat,
+  filters: AuditExportFilters,
+): string {
+  const query = new URLSearchParams({ format });
+  if (
+    filters.verdict !== undefined &&
+    (VERDICTS as readonly string[]).includes(filters.verdict)
+  ) {
+    query.set("verdict", filters.verdict);
+  }
+  if (
+    filters.channel !== undefined &&
+    (CHANNELS as readonly string[]).includes(filters.channel)
+  ) {
+    query.set("channel", filters.channel);
+  }
+  if (filters.principal !== undefined && filters.principal !== "") {
+    query.set("principal", filters.principal);
+  }
+  return `/admin/audit/export?${query.toString()}`;
+}
+
+/** Download name for an export: `audit-log-2026-10-04.csv`. */
+export function auditExportFilename(format: ExportFormat, now: Date): string {
+  return `audit-log-${now.toISOString().slice(0, 10)}.${format}`;
+}

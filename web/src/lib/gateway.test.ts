@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import {
   MAX_POLICY_BYTES,
+  auditExportFilename,
+  auditExportPath,
   budgetSpend,
   checkPolicyUpload,
   describePolicySave,
@@ -172,5 +174,38 @@ void test("describePolicySave summarises the diff", () => {
   assert.match(
     describePolicySave({ ...result, changed: false, diff: [] }),
     /nothing changed/,
+  );
+});
+
+void test("auditExportPath forwards only the filters the gateway knows", () => {
+  assert.equal(auditExportPath("csv", {}), "/admin/audit/export?format=csv");
+  assert.equal(
+    auditExportPath("json", {
+      verdict: "block",
+      channel: "mcp",
+      principal: "demo-agent",
+    }),
+    "/admin/audit/export?format=json&verdict=block&channel=mcp&principal=demo-agent",
+  );
+  // unknown values are dropped, not forwarded
+  assert.equal(
+    auditExportPath("csv", {
+      verdict: "nope",
+      channel: "x&limit=1",
+      principal: "",
+    }),
+    "/admin/audit/export?format=csv",
+  );
+  // a slug cannot add parameters of its own
+  assert.equal(
+    auditExportPath("csv", { principal: "a&limit=1" }),
+    "/admin/audit/export?format=csv&principal=a%26limit%3D1",
+  );
+});
+
+void test("auditExportFilename dates the download", () => {
+  assert.equal(
+    auditExportFilename("json", new Date("2026-10-04T10:00:00Z")),
+    "audit-log-2026-10-04.json",
   );
 });

@@ -65,7 +65,7 @@ the contract, so the stack can change without retraining anyone.
 | `just db-new <name>` | new migration file |
 | `just seed` | load demo data |
 | `just report` | render the PDF security report (needs `DATABASE_URL`, `typst`) |
-| `just verify-audit` | prove the audit hash chain is intact (needs `DATABASE_URL`) |
+| `just verify-audit` | prove the audit hash chain is intact (needs `DATABASE_URL`); `--file export.json` checks an exported log offline |
 | `just deploy` | ship the gateway to Cloud Run (runs `just check` first) |
 | `just wt <name>` | new isolated worktree + branch + its own PORT |
 | `just wt-rm <name>` | remove that worktree |

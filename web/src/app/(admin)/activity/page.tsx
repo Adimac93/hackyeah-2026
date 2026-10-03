@@ -86,6 +86,13 @@ export default async function ActivityPage({
     Principal,
     "id" | "slug" | "display_name"
   >[];
+  // Same filters as the table, minus `status`: that is a console view
+  // concept the gateway's export does not know.
+  const exportQuery = new URLSearchParams(
+    Object.entries({ verdict, channel, principal }).filter(([, v]) => v !== ""),
+  );
+  const exportHref = (format: "csv" | "json") =>
+    `/activity/export?${new URLSearchParams([...exportQuery, ["format", format]]).toString()}`;
 
   return (
     <>
@@ -143,6 +150,23 @@ export default async function ActivityPage({
             Reset
           </Link>
         ) : null}
+        <span className="ml-auto flex items-center gap-2">
+          {status ? (
+            <span className="text-xs text-zinc-500">
+              Exports ignore the status filter
+            </span>
+          ) : null}
+          {(["csv", "json"] as const).map((format) => (
+            <a
+              key={format}
+              href={exportHref(format)}
+              title="Up to 10,000 events with their hash-chain fields. Verify the file offline with `just verify-audit --file` (JSON)."
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+            >
+              Export {format.toUpperCase()}
+            </a>
+          ))}
+        </span>
       </form>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
