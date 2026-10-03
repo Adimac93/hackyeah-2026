@@ -122,11 +122,11 @@ id = "secret.bearer-token"
 hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "high"
 action = "redact"
-pattern = '(?i)\b(bearer|api[_-]?key|authorization)\s*[:=]\s*[A-Za-z0-9._\-]{20,}'
+# Covers `Authorization: Bearer <token>` as well as `api_key=<token>`.
+pattern = '(?i)\b(?:bearer|api[_-]?key|authorization)\s*[:=]?\s*(?:bearer\s+)?[A-Za-z0-9._\-]{20,}'
 
-# OWASP LLM02 secrets. They run before the pii.* redactors on purpose:
-# controls apply in catalog order, and a PII pattern that redacts a token's
-# digit run first would leave the rest of the secret in the text.
+# OWASP LLM02 secrets. Every secret.* control runs before the pii.* ones;
+# see the note above pii.email.
 
 [[controls.deterministic]]
 id = "secret.github-token"
@@ -173,26 +173,31 @@ action = "redact"
 pattern = '''(?i)\b(?:[a-z0-9_]*pass(?:word|wd)?|pwd|[a-z0-9_]*secret|hasło|haslo)\s*[:=]\s*["']?[^\s"'`]{6,}'''
 
 [[controls.deterministic]]
+id = "secret.jwt"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'
+
+[[controls.deterministic]]
+id = "secret.connection-string"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "redact"
+pattern = '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s:@/]+:[^\s@/]+@'
+
+# Personal data after every secret, most specific first. Controls apply in
+# catalog order and each redaction rewrites the text the next one sees: a
+# loose pattern that ran early (pii.phone matches any long digit run, pii.email
+# matches `password@host`) would consume an IBAN, a card or a credential and
+# leave part of it in the clear.
+
+[[controls.deterministic]]
 id = "pii.email"
 hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "medium"
 action = "redact"
 pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
-
-[[controls.deterministic]]
-id = "pii.pesel"
-# Polish national identification number — 11 digits.
-hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
-severity = "high"
-action = "redact"
-pattern = '\b[0-9]{11}\b'
-
-[[controls.deterministic]]
-id = "pii.phone"
-hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
-severity = "medium"
-action = "redact"
-pattern = '(?x)(?:\+?\d{1,3}[ .-]?)?(?:\(?\d{2,4}\)?[ .-]?){2,4}\d{2,4}'
 
 [[controls.deterministic]]
 id = "pii.iban"
@@ -210,18 +215,23 @@ action = "redact"
 pattern = '\b(?:[0-9][ -]?){13,19}\b'
 
 [[controls.deterministic]]
-id = "secret.jwt"
+id = "pii.pesel"
+# Polish national identification number — 11 digits.
 hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
 severity = "high"
 action = "redact"
-pattern = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'
+pattern = '\b[0-9]{11}\b'
 
 [[controls.deterministic]]
-id = "secret.connection-string"
+id = "pii.phone"
 hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
-severity = "critical"
+severity = "medium"
 action = "redact"
-pattern = '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s:@/]+:[^\s@/]+@'
+# No (?x): extended mode ignores whitespace inside classes, which silently
+# dropped the space from [ .-] and stopped `+48 601 234 567` matching.
+# Known over-match: ISO dates, IPv4 addresses and bare 10-digit references
+# are redacted too. Redaction is the safe direction for a PII control.
+pattern = '(?:\+?\d{1,3}[ .-]?)?(?:\(?\d{2,4}\)?[ .-]?){2,4}\d{2,4}'
 
 [[controls.deterministic]]
 id = "obfuscation.invisible-unicode"
