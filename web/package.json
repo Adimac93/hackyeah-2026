@@ -9,15 +9,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
-    "prepare": "cd .. && husky web/.husky || true",
     "start": "next start",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.ts\"",
     "typecheck": "next typegen && tsc --noEmit",
     "types:check": "tsc --noEmit",
     "types:generate": "next typegen"
-  },
-  "lint-staged": {
-    "*": "prettier -w --ignore-unknown"
   },
   "prettier": "@solvro/config/prettier",
   "dependencies": {
@@ -30,7 +26,6 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@commitlint/cli": "^20.5.3",
     "@next/eslint-plugin-next": "^16.3.8",
     "@solvro/config": "^3.0.1",
     "@tailwindcss/postcss": "^4",
@@ -40,8 +35,6 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
-    "husky": "^9.1.7",
-    "lint-staged": "^17.6.0",
     "prettier": "^3.9.9",
     "tailwindcss": "^4",
     "typescript": "^5"
