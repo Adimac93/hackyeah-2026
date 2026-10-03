@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::audit::{self, Auditor};
 use crate::engine::{self, Verdict};
+use crate::mock;
 use crate::policy::{Action, Budget, Hook, Policy, PolicyHandle, Severity};
 use crate::semantic::Registry;
 
@@ -125,34 +126,13 @@ pub async fn chat_completions(
 
     // --- upstream ---------------------------------------------------------
     let started = std::time::Instant::now();
-    let upstream = state
-        .http
-        .post(format!("{}/v1/chat/completions", state.upstream))
-        .json(&upstream_body)
-        .send()
-        .await;
-
-    let upstream = match upstream {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::error!(%error, "upstream request failed");
-            return refusal(
-                trace_id,
-                StatusCode::BAD_GATEWAY,
-                "upstream_unavailable",
-                "the upstream model is unreachable",
-            );
+    let (status, mut completion) = if state.upstream == mock::MOCK {
+        (StatusCode::OK, mock::completion(&upstream_body))
+    } else {
+        match forward(&state, trace_id, &upstream_body).await {
+            Ok(reply) => reply,
+            Err(refused) => return refused,
         }
-    };
-
-    let status = upstream.status();
-    let Ok(mut completion) = upstream.json::<Value>().await else {
-        return refusal(
-            trace_id,
-            StatusCode::BAD_GATEWAY,
-            "upstream_unreadable",
-            "the upstream response was not JSON",
-        );
     };
     let upstream_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
 
@@ -221,6 +201,39 @@ pub async fn chat_completions(
     });
 
     (StatusCode::OK, Json(completion)).into_response()
+}
+
+async fn forward(
+    state: &ProxyState,
+    trace_id: Uuid,
+    body: &Value,
+) -> Result<(StatusCode, Value), Response> {
+    let upstream = state
+        .http
+        .post(format!("{}/v1/chat/completions", state.upstream))
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "upstream request failed");
+            refusal(
+                trace_id,
+                StatusCode::BAD_GATEWAY,
+                "upstream_unavailable",
+                "the upstream model is unreachable",
+            )
+        })?;
+
+    let status = upstream.status();
+    let completion = upstream.json::<Value>().await.map_err(|_| {
+        refusal(
+            trace_id,
+            StatusCode::BAD_GATEWAY,
+            "upstream_unreadable",
+            "the upstream response was not JSON",
+        )
+    })?;
+    Ok((status, completion))
 }
 
 fn summarise(evaluation: &engine::Evaluation) -> Value {

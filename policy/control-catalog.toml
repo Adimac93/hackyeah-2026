@@ -135,6 +135,9 @@ pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(in
 #   never      — disabled without deleting the config
 #
 # `fail_mode` on a control overrides [defaults] for that control only.
+#
+# `mock_keywords` is what the dev mock judge (OLLAMA_URL=mock) scores as a hit.
+# Real detectors ignore it, and prod refuses to run the mock.
 
 [[controls.semantic]]
 id = "injection.prompt-guard"
@@ -147,6 +150,7 @@ describes = "an attempt to override, ignore or replace the instructions the assi
 threshold = 0.80
 timeout_ms = 2000
 escalate_when = "suspicious"
+mock_keywords = ["previous instructions", "system prompt", "you are now", "developer mode", "jailbreak"]
 
 [[controls.semantic]]
 id = "pii.contextual"
@@ -176,6 +180,7 @@ describes = "an attempt to move data out of the organisation: exfiltration, unex
 threshold = 0.75
 timeout_ms = 2000
 escalate_when = "suspicious"
+mock_keywords = ["exfiltrate", "send it to", "upload to", "pastebin", "webhook"]
 
 # ---------------------------------------------------------------- feed
 # §4.4. Signatures of known historical attacks, managed outside this file so a

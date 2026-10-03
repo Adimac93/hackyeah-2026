@@ -183,14 +183,7 @@ pub async fn escalate(
 
     for control in policy.semantic_for(hook, evaluation.suspicious) {
         ran = true;
-        let outcome = detectors
-            .score(
-                &control.detector,
-                &evaluation.text,
-                &control.describes,
-                control.timeout,
-            )
-            .await;
+        let outcome = detectors.score(control, &evaluation.text).await;
 
         match outcome {
             Ok(score) if score >= control.threshold => {

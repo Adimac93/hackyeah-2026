@@ -27,7 +27,7 @@ use gateway::semantic::Registry;
 
 const DEFAULT_POLICY_PATH: &str = "policy/control-catalog.toml";
 
-const DEFAULT_UPSTREAM: &str = "http://localhost:11434";
+const DEFAULT_UPSTREAM: &str = gateway::mock::MOCK;
 
 #[derive(Clone)]
 struct AppState {
@@ -131,6 +131,11 @@ async fn main() -> anyhow::Result<()> {
 
     let http = reqwest::Client::new();
     let detectors = Arc::new(Registry::from_env(http.clone()));
+
+    // A mock fabricates answers and verdicts; fine for a laptop, never for prod.
+    if production && (upstream == gateway::mock::MOCK || detectors.mocked()) {
+        anyhow::bail!("ENVIRONMENT=prod refuses a mock: set UPSTREAM_URL and OLLAMA_URL");
+    }
 
     let proxy_state = ProxyState {
         policy: policy.clone(),

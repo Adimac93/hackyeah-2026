@@ -185,6 +185,9 @@ struct RawSemantic {
     timeout_ms: u64,
     /// Overrides `defaults.fail_mode` for this control only.
     fail_mode: Option<FailMode>,
+    /// What the `dev` mock judge treats as a hit. Ignored by real detectors.
+    #[serde(default)]
+    mock_keywords: Vec<String>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -222,6 +225,7 @@ pub struct SemanticControl {
     pub describes: String,
     pub timeout: std::time::Duration,
     pub fail_mode: FailMode,
+    pub mock_keywords: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -379,6 +383,7 @@ impl Policy {
                 action: control.action.unwrap_or(raw.defaults.on_detect),
                 timeout: std::time::Duration::from_millis(control.timeout_ms),
                 fail_mode: control.fail_mode.unwrap_or(raw.defaults.fail_mode),
+                mock_keywords: control.mock_keywords,
                 detector: control.detector,
                 threshold: control.threshold,
                 escalate_when: control.escalate_when,
