@@ -147,28 +147,35 @@ impl Auditor {
         self.principal(slug).await.map(|p| p.id)
     }
 
-    /// Tokens spent by a principal inside the trailing window.
-    pub async fn tokens_used(&self, principal: Option<Uuid>, window_secs: i32) -> i64 {
+    /// Tokens and USD spent inside the trailing window, narrowed to a principal
+    /// and/or a model when given.
+    pub async fn usage_in_window(
+        &self,
+        principal: Option<Uuid>,
+        model: Option<&str>,
+        window_secs: i32,
+    ) -> (i64, f64) {
         let Some(pool) = self.db.as_ref() else {
-            return 0;
+            return (0, 0.0);
         };
-        let used = sqlx::query_scalar::<_, Option<i64>>(
-            "select sum(prompt_tokens + completion_tokens)::bigint from usage
+        let used = sqlx::query_as::<_, (i64, f64)>(
+            "select coalesce(sum(prompt_tokens + completion_tokens), 0)::bigint,
+                    coalesce(sum(cost_usd), 0)::float8
+             from usage
              where ts > now() - make_interval(secs => $1::int)
-               and ($2::uuid is null or principal_id = $2::uuid)",
+               and ($2::uuid is null or principal_id = $2::uuid)
+               and ($3::text is null or model = $3::text)",
         )
         .bind(window_secs)
         .bind(principal)
+        .bind(model)
         .fetch_one(pool)
         .await;
 
-        match used {
-            Ok(total) => total.unwrap_or(0),
-            Err(error) => {
-                tracing::error!(%error, "budget lookup failed");
-                0
-            }
-        }
+        used.unwrap_or_else(|error| {
+            tracing::error!(%error, "budget lookup failed");
+            (0, 0.0)
+        })
     }
 
     pub async fn record_usage(
@@ -178,19 +185,22 @@ impl Auditor {
         model: &str,
         prompt_tokens: i32,
         completion_tokens: i32,
+        cost_usd: f64,
     ) {
         let Some(pool) = self.db.as_ref() else {
             return;
         };
         let result = sqlx::query(
-            "insert into usage (event_id, principal_id, model, prompt_tokens, completion_tokens)
-             values ($1, $2, $3, $4, $5)",
+            "insert into usage
+               (event_id, principal_id, model, prompt_tokens, completion_tokens, cost_usd)
+             values ($1, $2, $3, $4, $5, $6)",
         )
         .bind(event_id)
         .bind(principal)
         .bind(model)
         .bind(prompt_tokens)
         .bind(completion_tokens)
+        .bind(cost_usd)
         .execute(pool)
         .await;
 

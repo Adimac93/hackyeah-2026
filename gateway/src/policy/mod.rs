@@ -5,9 +5,11 @@
 //! so it is cheap to test, which is where most of the real bugs in a policy
 //! engine live.
 
+mod budget;
 mod feed;
 mod watch;
 
+pub use budget::{Budget, Budgets, Price};
 pub use watch::{PolicyHandle, spawn_watcher};
 
 use feed::compile_feed;
@@ -115,6 +117,8 @@ struct RawCatalog {
     models: Models,
     #[serde(default)]
     budgets: Budgets,
+    #[serde(default)]
+    pricing: HashMap<String, Price>,
     #[serde(default)]
     controls: RawControls,
     signatures: Option<SignatureFeed>,
@@ -227,33 +231,8 @@ pub struct Models {
     pub denied: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Budget {
-    #[serde(default = "default_window")]
-    pub window_secs: i32,
-    pub limit_usd: Option<f64>,
-    pub limit_tokens: Option<i64>,
-    #[serde(default = "default_true")]
-    pub hard: bool,
-}
-
-fn default_window() -> i32 {
-    86_400
-}
-
 fn default_true() -> bool {
     true
-}
-
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Budgets {
-    pub global: Option<Budget>,
-    #[serde(default)]
-    pub principal: HashMap<String, Budget>,
-    #[serde(default)]
-    pub model: HashMap<String, Budget>,
 }
 
 /// What to do with a caller we have no `principals` row for.
@@ -320,6 +299,8 @@ pub struct Policy {
     pub fail_mode: FailMode,
     pub models: Models,
     pub budgets: Budgets,
+    /// Per-model price, keyed by model name. An unpriced model costs nothing.
+    pub pricing: HashMap<String, Price>,
     pub deterministic: Vec<DeterministicControl>,
     pub semantic: Vec<SemanticControl>,
     pub signatures: Option<SignatureFeed>,
@@ -447,6 +428,7 @@ impl Policy {
             fail_mode: raw.defaults.fail_mode,
             models: raw.models,
             budgets: raw.budgets,
+            pricing: raw.pricing,
             deterministic,
             semantic,
             signatures: raw.signatures,
@@ -481,6 +463,13 @@ impl Policy {
                     EscalateWhen::Never => false,
                 }
         })
+    }
+
+    /// What a call cost in USD, from the pricing table.
+    pub fn cost_usd(&self, model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
+        self.pricing
+            .get(model)
+            .map_or(0.0, |price| price.cost(prompt_tokens, completion_tokens))
     }
 
     /// Deny wins over allow. An empty allow list means "anything not denied".

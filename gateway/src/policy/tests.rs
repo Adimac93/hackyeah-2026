@@ -214,3 +214,12 @@ fn shipped_feed_is_loaded_and_tracked_for_reload() {
             .is_some_and(|p| p.ends_with("signatures.toml"))
     );
 }
+
+#[test]
+fn cost_comes_from_the_pricing_table() {
+    let src = format!("{MINIMAL}\n[pricing.\"m\"]\ninput_per_mtok = 2.0\noutput_per_mtok = 10.0\n");
+    let policy = parse(&src).unwrap();
+    let cost = policy.cost_usd("m", 500_000, 100_000);
+    assert!((cost - 2.0).abs() < 1e-9, "{cost}");
+    assert!(policy.cost_usd("unpriced", 1_000_000, 1_000_000).abs() < f64::EPSILON);
+}

@@ -26,8 +26,27 @@ fail_mode = "closed"
 allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b"]
 denied = []
 
+# ---------------------------------------------------------------- pricing
+# USD per million tokens, used for `limit_usd` budgets and cost reporting. The
+# local models carry an internal chargeback rate; a commercial model would use
+# its list price. An unpriced model costs nothing.
+
+[pricing."llama3.1:8b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
+[pricing."qwen2.5:7b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
+[pricing."mistral:7b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
 # ---------------------------------------------------------------- budgets
 # §4.3. Hard budgets reject the call; soft budgets record and warn.
+# A budget may set `limit_tokens`, `limit_usd` or both; the first one reached
+# applies. Scopes: global (everyone), principal.<slug>, model.<name>.
 
 [budgets.global]
 window_secs = 86_400

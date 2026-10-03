@@ -177,6 +177,7 @@ pub async fn chat_completions(
             &model,
             prompt_tokens,
             completion_tokens,
+            policy.cost_usd(&model, prompt_tokens, completion_tokens),
         )
         .await;
 
@@ -229,8 +230,9 @@ fn refusal(trace_id: Uuid, status: StatusCode, code: &str, message: &str) -> Res
         .into_response()
 }
 
-/// Budget check. The global budget applies to everyone; a principal budget
-/// narrows it further. A soft budget warns instead of refusing.
+/// Budget check. The global budget applies to everyone, a model budget to all
+/// traffic on that model, a principal budget to that caller. A soft budget
+/// warns instead of refusing.
 async fn over_budget(
     policy: &Policy,
     auditor: &Auditor,
@@ -242,32 +244,35 @@ async fn over_budget(
         return None;
     }
 
-    let mut checks: Vec<(&str, Option<Uuid>, &Budget)> = Vec::new();
+    let mut checks: Vec<(&str, Option<Uuid>, Option<&str>, &Budget)> = Vec::new();
     if let Some(budget) = policy.budgets.global.as_ref() {
-        checks.push(("global", None, budget));
+        checks.push(("global", None, None, budget));
     }
-    if let Some(budget) = policy.budgets.principal.get(slug) {
-        checks.push((slug, principal_id, budget));
+    // Without a resolved principal the usage cannot be attributed, and summing
+    // everyone's would charge this caller for the whole organisation.
+    if let (Some(budget), Some(id)) = (policy.budgets.principal.get(slug), principal_id) {
+        checks.push((slug, Some(id), None, budget));
     }
     if let Some(budget) = policy.budgets.model.get(model) {
-        checks.push((model, principal_id, budget));
+        checks.push((model, None, Some(model), budget));
     }
 
-    for (scope, owner, budget) in checks {
-        let Some(limit) = budget.limit_tokens else {
-            continue;
+    for (scope, owner, model, budget) in checks {
+        let (tokens, usd) = auditor
+            .usage_in_window(owner, model, budget.window_secs)
+            .await;
+        let spent = match (budget.limit_tokens, budget.limit_usd) {
+            (Some(limit), _) if tokens >= limit => format!("{tokens}/{limit} tokens"),
+            (_, Some(limit)) if usd >= limit => format!("${usd:.4}/${limit:.2}"),
+            _ => continue,
         };
-        let used = auditor.tokens_used(owner, budget.window_secs).await;
-        if used < limit {
-            continue;
-        }
         if budget.hard {
             return Some(format!(
-                "{scope} budget exhausted: {used}/{limit} tokens in the last {}s",
+                "{scope} budget exhausted: {spent} in the last {}s",
                 budget.window_secs
             ));
         }
-        tracing::warn!(scope, used, limit, "soft budget exceeded");
+        tracing::warn!(scope, %spent, "soft budget exceeded");
     }
     None
 }
