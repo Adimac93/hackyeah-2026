@@ -8,6 +8,9 @@ import { checkPolicyUpload, describePolicySave } from "@/lib/gateway";
 import type { PolicySaveResult } from "@/lib/gateway";
 import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
+/** Validating and storing a whole catalog takes longer than a live read. */
+const UPLOAD_TIMEOUT_MS = 15_000;
+
 /**
  * Save the edited control catalog (TOML) through `POST /admin/policy`, as the
  * signed-in admin. The gateway validates it, stores it as a new policy version
@@ -30,6 +33,7 @@ export async function savePolicy(
 
   const saved = await gatewayFetch<PolicySaveResult>("/admin/policy", {
     body: { catalog_toml: checked.value },
+    timeoutMs: UPLOAD_TIMEOUT_MS,
   });
   if (!saved.ok) {
     return { error: `${saved.error} The active policy is unchanged.` };

@@ -35,8 +35,18 @@ void test("budgetUsed is null without a token cap", () => {
 });
 
 void test("liveError explains auth failures distinctly", () => {
-  assert.match(liveError(401), /rejected your session/);
-  assert.match(liveError(403), /team role/);
+  assert.match(liveError(401), /didn't accept your session/);
+  assert.match(liveError(403), /role/);
+  // a 503 is not always the database: surface the gateway's own reason
+  assert.match(
+    liveError(503, {
+      error: {
+        message: "SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are not set",
+      },
+    }),
+    /HTTP 503: SUPABASE_URL/,
+  );
+  assert.match(liveError(503, { error: "nope" }), /HTTP 503\.$/);
   assert.match(liveError(500), /HTTP 500/);
 });
 

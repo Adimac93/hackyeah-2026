@@ -154,23 +154,36 @@ export interface UserRisk {
 
 export type Live<T> = { ok: true; data: T } | { ok: false; error: string };
 
+/** The `error.message` of a gateway refusal body, if it has one. */
+export function gatewayMessage(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || !("error" in body)) {
+    return null;
+  }
+  const error = (body as { error: unknown }).error;
+  if (typeof error !== "object" || error === null || !("message" in error)) {
+    return null;
+  }
+  const message = (error as { message: unknown }).message;
+  return typeof message === "string" && message !== "" ? message : null;
+}
+
 /** Why a gateway call failed, in words an analyst can act on. */
-export function liveError(status: number): string {
+export function liveError(status: number, body?: unknown): string {
+  const detail = gatewayMessage(body);
   switch (status) {
     case 401: {
-      return "The gateway rejected your session. Sign in again.";
+      return `The gateway didn't accept your session${detail === null ? "" : ` (${detail})`}. Sign out and in again.`;
     }
     case 403: {
-      return "Your team role isn't allowed to do this on the gateway.";
+      return "Your security team role doesn't allow this on the gateway.";
     }
     case 404: {
       return "This gateway build doesn't expose that endpoint.";
     }
-    case 503: {
-      return "The gateway's database is unavailable.";
-    }
     default: {
-      return `The gateway answered HTTP ${String(status)}.`;
+      return detail === null
+        ? `The gateway answered HTTP ${String(status)}.`
+        : `The gateway answered HTTP ${String(status)}: ${detail}`;
     }
   }
 }
