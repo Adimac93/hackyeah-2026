@@ -196,6 +196,9 @@ pub struct DeterministicControl {
     pub severity: Severity,
     pub action: Action,
     pub regex: Regex,
+    /// `source@version` of the signature feed this came from; `None` for a
+    /// catalog control. Recorded with every match (§4.4).
+    pub feed: Option<String>,
 }
 
 #[derive(Debug)]
@@ -321,6 +324,8 @@ pub struct Policy {
     /// controls because the two have different lifecycles: a feed refresh is an
     /// operational event, a catalog edit is a policy change.
     pub signature_controls: Vec<DeterministicControl>,
+    /// The resolved feed file, so the watcher can reload when it changes.
+    pub feed_path: Option<PathBuf>,
     pub mcp: McpSettings,
 }
 
@@ -354,6 +359,7 @@ impl Policy {
             })?;
             policy.signature_controls = compile_feed(&raw, &resolved.display().to_string())?;
             policy.sha256 = sha256_hex(&format!("{source}{raw}"));
+            policy.feed_path = Some(resolved);
             tracing::debug!(
                 signatures = policy.signature_controls.len(),
                 "attack signature feed loaded"
@@ -398,6 +404,7 @@ impl Policy {
                 severity: control.severity,
                 action: control.action.unwrap_or(raw.defaults.on_detect),
                 regex,
+                feed: None,
             });
         }
 
@@ -441,6 +448,7 @@ impl Policy {
             semantic,
             signatures: raw.signatures,
             signature_controls: Vec::new(),
+            feed_path: None,
             mcp: raw.mcp,
         })
     }
@@ -482,12 +490,16 @@ impl Policy {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawFeed {
+    source: String,
+    version: u32,
     #[serde(default, rename = "signature")]
     signatures: Vec<RawSignature>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawSignature {
     external_id: String,
     title: String,
@@ -519,6 +531,7 @@ fn compile_feed(source: &str, origin: &str) -> Result<Vec<DeterministicControl>,
         source,
     })?;
 
+    let provenance = format!("{}@{}", feed.source, feed.version);
     let mut compiled = Vec::with_capacity(feed.signatures.len());
     for signature in feed.signatures {
         let id = format!("signature.{}", signature.external_id);
@@ -543,6 +556,7 @@ fn compile_feed(source: &str, origin: &str) -> Result<Vec<DeterministicControl>,
             severity: signature.severity,
             action: signature.action.unwrap_or(Action::Block),
             regex,
+            feed: Some(provenance.clone()),
         });
     }
     Ok(compiled)

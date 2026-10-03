@@ -58,22 +58,24 @@ impl PolicyHandle {
 /// Watch the catalog and reload on change.
 ///
 /// The returned watcher must be kept alive: dropping it stops the watch. The
-/// parent directory is watched rather than the file itself, because editors
-/// that save by rename replace the inode and leave a file watch pointing at
-/// nothing.
+/// parent directories are watched rather than the files themselves, because
+/// editors that save by rename replace the inode and leave a file watch
+/// pointing at nothing. The signature feed is watched too: a feed edit is part
+/// of the policy version, so it must reload the same way.
 pub fn spawn_watcher(handle: PolicyHandle) -> notify::Result<RecommendedWatcher> {
     let target = handle.path().to_path_buf();
-    let dir = target
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let feed = handle.load().feed_path.clone();
+    let mut dirs = vec![parent_of(&target)];
+    if let Some(feed) = &feed
+        && !dirs.contains(&parent_of(feed))
+    {
+        dirs.push(parent_of(feed));
+    }
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| match res {
         Ok(event) => {
-            let touches_target = event
-                .paths
-                .iter()
-                .any(|p| p.ends_with(&target) || *p == target);
+            let touches = |file: &Path| event.paths.iter().any(|p| p.ends_with(file));
+            let touches_target = touches(&target) || feed.as_deref().is_some_and(touches);
             let is_write = matches!(
                 event.kind,
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
@@ -88,7 +90,15 @@ pub fn spawn_watcher(handle: PolicyHandle) -> notify::Result<RecommendedWatcher>
         Err(error) => tracing::error!(%error, "policy watch error"),
     })?;
 
-    watcher.watch(&dir, RecursiveMode::NonRecursive)?;
-    tracing::info!(dir = %dir.display(), "watching policy directory");
+    for dir in &dirs {
+        watcher.watch(dir, RecursiveMode::NonRecursive)?;
+        tracing::info!(dir = %dir.display(), "watching policy directory");
+    }
     Ok(watcher)
+}
+
+fn parent_of(file: &Path) -> PathBuf {
+    file.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }

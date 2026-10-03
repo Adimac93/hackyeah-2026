@@ -171,3 +171,46 @@ fn rejects_an_unknown_key() {
     let src = MINIMAL.replace(r#"id = "a""#, "id = \"a\"\nenabeld = false");
     assert!(matches!(parse(&src), Err(PolicyError::Parse { .. })));
 }
+
+const FEED: &str = r#"
+source = "test-feed"
+version = 7
+
+[[signature]]
+external_id = "T-1"
+title = "test"
+severity = "high"
+pattern = 'evil'
+"#;
+
+#[test]
+fn feed_signatures_carry_their_feed_version() {
+    let compiled = compile_feed(FEED, "test").unwrap();
+    assert_eq!(compiled[0].id, "signature.T-1");
+    assert_eq!(compiled[0].feed.as_deref(), Some("test-feed@7"));
+}
+
+#[test]
+fn rejects_an_unknown_feed_key() {
+    let src = FEED.replace("title", "titel");
+    assert!(matches!(
+        compile_feed(&src, "test"),
+        Err(PolicyError::Parse { .. })
+    ));
+}
+
+#[test]
+fn shipped_feed_is_loaded_and_tracked_for_reload() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../policy/control-catalog.toml"
+    );
+    let policy = Policy::load(path).unwrap();
+    assert!(!policy.signature_controls.is_empty());
+    assert!(
+        policy
+            .feed_path
+            .as_deref()
+            .is_some_and(|p| p.ends_with("signatures.toml"))
+    );
+}

@@ -61,6 +61,9 @@ pub struct Evidence {
     pub first_offset: usize,
     /// A masked excerpt: enough to recognise the finding, not enough to use it.
     pub excerpt: String,
+    /// `source@version` of the signature feed, when a feed signature matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +185,7 @@ pub async fn escalate(
                         matches: 1,
                         first_offset: 0,
                         excerpt: format!("{} scored {score:.2}", control.detector),
+                        feed: None,
                     },
                 });
             }
@@ -202,6 +206,7 @@ pub async fn escalate(
                             matches: 0,
                             first_offset: 0,
                             excerpt: error.to_string(),
+                            feed: None,
                         },
                     });
                 }
@@ -238,6 +243,7 @@ fn scan(control: &DeterministicControl, text: &str) -> Option<Evidence> {
         matches: count,
         first_offset: first.start(),
         excerpt: mask(first.as_str()),
+        feed: control.feed.clone(),
     })
 }
 
