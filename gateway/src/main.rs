@@ -148,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = Router::new()
+        .route("/", get(index))
         .route("/health", get(health))
         .route("/policy", get(active_policy))
         .with_state(AppState { db, policy })
@@ -174,6 +175,32 @@ async fn main() -> anyhow::Result<()> {
         .context("serving")?;
 
     Ok(())
+}
+
+/// Service index. Anyone who opens the base URL in a browser — a judge, a
+/// teammate wiring up the dashboard — should see what this is and what it
+/// serves, not a blank 404.
+async fn index(State(state): State<AppState>) -> Json<Value> {
+    let policy = state.policy.load();
+    Json(json!({
+        "service": "ai-control-layer",
+        "description": "Security gateway for agent, LLM and MCP traffic. \
+                        Every interception is policed at one of four hooks and \
+                        written to a hash-chained audit log.",
+        "version": env!("CARGO_PKG_VERSION"),
+        "policy": {
+            "version": policy.sha256,
+            "deterministic_controls": policy.deterministic.len() + policy.signature_controls.len(),
+            "semantic_controls": policy.semantic.len(),
+            "fail_mode": policy.fail_mode,
+        },
+        "endpoints": {
+            "GET  /health": "liveness, and whether the audit database is reachable",
+            "GET  /policy": "the catalog currently being enforced",
+            "POST /v1/chat/completions": "OpenAI-compatible. Hooks: prompt_in, response_out",
+            "POST /mcp": "MCP 2026-07-28. Hooks: tool_call, tool_result",
+        },
+    }))
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
