@@ -11,6 +11,12 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Next
 
+- [ ] migrate-end-users — `just migrate` for 20261004090000_end_users_activity_status, `just seed` (adds `console-chat`), then `supabase db advisors` (@)
+- [ ] web-on-behalf — chat sends `X-On-Behalf-Of: <user email>` instead of `x-principal`, with `GATEWAY_API_KEY=console-chat-dev-key`, so budgets/risk/activity are per user (@)
+- [ ] web-refusal-stage — on a refused prompt show "doesn't meet deterministic requirements" when `error.stage == "deterministic"` (@)
+- [ ] web-live-activity — activity reads the `activity` view, filters by `status` (secure/flagged/redacted/blocked), live via Realtime inserts on `events`; drop the incidents panel (@)
+- [ ] web-risk-tab — risk tab with user search on `GET /admin/risk?q=` (@)
+- [ ] web-controls-policies — one page: catalog TOML in a text area → `POST /admin/policy` (user's access token); controls table from `GET /policy` (resources) + per-user budgets (@)
 - [ ] web-gateway-auth — web chat still sends `x-principal`, which the gateway no longer trusts, so "Gateway (protected)" chat gets 401; send `Authorization: Bearer $GATEWAY_API_KEY` from the server (@)
 - [ ] web-policy-upload — console policy page: upload catalog TOML (+ optional signatures) to `POST /admin/policy` with the user's Supabase access token, show the returned diff and `/admin/policy/versions` (@)
 - [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)

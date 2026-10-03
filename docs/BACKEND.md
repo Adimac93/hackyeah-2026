@@ -11,7 +11,8 @@ Security gateway (overall) specification:
 - Semantic analysis is performed on the interface → analysis → LLM path. It's mentioned in the security gateway, because it uses policies/data used for checking from the gateway. It is async by default and runs synchronously only when escalated (see the semantic guardrails spec).
 - Request flow from the architecture diagram: user → provisioned interface / user dashboard → deterministic guardrails (security proxy) → "is secure" decision → LLM (allowed) or prompt helper (rejected); LLM ↔ MCP ↔ gateway ↔ resources (database, files); LLM response → back through the deterministic guardrails → user.
 - The gateway is the only component allowed to touch resources (database, files); LLMs, agents and MCP servers reach them exclusively through it.
-- The gateway receives the user identity directly from the user/interface side as a per-identity API key (`Authorization: Bearer`), so every request is evaluated against a known, authenticated identity. A self-declared identity header is never trusted on its own.
+- The gateway receives the caller's identity directly from the user/interface side as a per-identity API key (`Authorization: Bearer`), so every request is evaluated against a known, authenticated identity. A self-declared identity header is never trusted on its own.
+- Users, not principals, are what budgets, risk and activity are kept for. An application that serves many people through one key (the console chat) is a principal with `delegates_users`; it names the signed-in person in `X-On-Behalf-Of`, and that name is trusted only because the key is. Any other principal sending the header is refused (`403 delegation_refused`). A caller that delegates nothing is its own user, named by its slug.
 - It must be integrable by developers with minimal effort for agent-to-agent, app-to-agent, agent-to-MCP and agent-to-model traffic (§3.1) — e.g. an OpenAI-compatible HTTP endpoint and an MCP-proxy endpoint, so existing clients only change a base URL.
 - Implements a hybrid defense: fast deterministic (non-AI, full-text search instead) controls on the synchronous path, and AI-based semantic controls where they add value (§2, §4.2) — asynchronous by default, synchronous only when a deterministic control escalates the request.
 - Everything must run locally (`dev`) or on Google Cloud platform (`prod`) - depending on the `ENVIRONMENT` config variable (`dev`, `prod`).
@@ -31,10 +32,12 @@ Centralized policy engine and configuration file specification:
 - The configuration file is in the TOML format.
 - The catalog defines: list of controls with `enabled` flag, action per control, failure mode per control (`closed` or `open`, falling back to a file-wide default), sensitivity thresholds (e.g. adherence % or classifier score cutoffs), the global model allow/deny list, a per-model pricing table, the attack-history risk thresholds, runaway-agent limits, MCP servers (with pinned tool hashes) and resource access rules.
 - Actions: `allow` (record only), `flag` (record and mark the request suspicious, which escalates it to the semantic tier), `redact` (replace the match and continue), `block` (stop the request).
-- Identity and grants live in the database, not the catalog: `principals` holds each identity, the hash of its API key, and its `allowed_models` / `allowed_tools`. Grants are deny-by-default: an empty list grants nothing.
-- Budgets live in the database (`budgets`), not the catalog, and are edited through the gateway admin API.
+- Identity and grants live in the database, not the catalog: `principals` holds each identity, the hash of its API key, its `allowed_models` / `allowed_tools` and whether it `delegates_users`. Grants are deny-by-default: an empty list grants nothing. A delegated user inherits the delegating principal's grants and never more.
+- Budgets live in the database (`budgets`), not the catalog, are kept per user (not per principal), and are edited through the gateway admin API.
 - Unknown keys are a validation error, so a typo such as `enabeld = false` is rejected instead of silently leaving the control on.
 - Supports named strictness profiles (e.g. `permissive`, `balanced`, `strict`) that set defaults for all controls; individual controls can override the profile (§3.2).
+- The console edits the catalog as text: its controls-and-policies page shows the active version's `catalog_toml` (read through the Data API) in a text area, and saving sends the whole edited text to `POST /admin/policy` with the signed-in user's Supabase access token. There is no partial update; the uploaded text is the next version.
+- `GET /policy` describes what is enforced for the console's controls table: every control (id, kind, hooks, severity, action), the model lists, the risk and runaway limits, the MCP servers and the resource access grants (`[resources]`: identity → tables). Budgets come from the `budgets` table.
 - Every upload is validated against the schema before it is stored; an invalid upload is rejected with the error returned to the uploader, recorded in `admin_actions`, and the last valid policy stays active.
 - Every accepted upload produces a policy version id and a human-readable control-level diff (controls added, removed, and changed field by field), stored with the version and the uploader, and visible in the admin dashboard.
 - Each decision in the audit log references the policy version and control id that produced it.
@@ -47,7 +50,7 @@ Policy settings flow:
 startup ─► select active policy_versions row
             ├─ found ─► compile catalog_toml + signatures_toml ─► active policy
             └─ none  ─► insert the built-in sample as active ─► active policy
-security admin (Supabase session, team role admin)
+security admin (Supabase session, team role admin) edits the TOML in the console
   POST /admin/policy {catalog_toml, signatures_toml?}
     ─► compile + validate ── invalid ─► 422, admin_actions(rejected); active unchanged
     ─► control-level diff against the active version
@@ -64,6 +67,7 @@ Deterministic guardrails (security proxy) specification:
 - Historical attack mitigation patterns (see the malicious patterns detection spec) are applied on both input and output paths.
 - Action per finding follows the policy: `block` stops the request, `redact` replaces the match with a placeholder naming the control (e.g. `[REDACTED:pii.email]`) and continues, `flag` records it and escalates the request to the semantic tier, `allow` only records it.
 - Produces a verdict (`allow`, `redact`, `block`) with the list of triggered control ids and a risk score that drives the "is secure" decision.
+- A refusal says which check stopped it, so the interface can tell the user their prompt does not meet the deterministic requirements: `error.stage` is `deterministic` (a pattern control), `semantic` (an escalated semantic control) or `access` (model grant, budget, risk history), and `error.hook` is `prompt_in` or `response_out`. Detection internals (patterns, scores, thresholds) are never returned.
 - Must be fast: target low single-digit milliseconds per check stage, with per-stage latency recorded in telemetry.
 - Hands every prompt to the async semantic analysis without blocking, unless a finding escalates it, in which case the escalated semantic controls run synchronously before the "is secure" decision.
 
@@ -89,6 +93,7 @@ Data access control specification:
 - Every user and every agent has an identity authenticated by its own API key; anonymous traffic and unknown keys are rejected on every endpoint (§1: agents need modern authentication and access control). Only a hash of each key is stored.
 - Access to resources (database tables/rows, file paths), MCP servers and individual MCP tools is deny-by-default: tools are granted per identity in `principals.allowed_tools`, resources per identity in the catalog's resource rules.
 - Agents act on behalf of a user with delegated, narrowed scope; an agent never gets more permissions than the user it acts for, which prevents impersonation and privilege escalation.
+- Delegation is explicit: only a principal with `delegates_users` may name an end user (`X-On-Behalf-Of`, at most 254 printable bytes). The user is recorded as `end_user` on every event, usage row and attack-history row, next to the principal that carried it.
 - Destructive or irreversible operations (delete, write, payments, external sends) are classified by the policy and require an explicit allow rule and, where configured, human confirmation.
 - Data retrieved from protected resources never reaches the LLM (see the MCP integration spec); it is filtered (redacted if required by the policy) before it reaches the user (output guardrails).
 - Access to persistent agent memory and shared context stores is controlled per identity, so one agent cannot retrieve another's memory (§1).
@@ -96,8 +101,8 @@ Data access control specification:
 
 Budget and resource governance specification:
 - Enforces budgets for both external commercial APIs and locally hosted models (§2, §4.3): token spend, monetary cost, compute time, request count and concurrency.
-- Budgets are scoped hierarchically (identity → team → organization) and per model, with time windows (per minute, hour, day, month).
-- Budgets are rows in the `budgets` table (scope, window, token / USD / request-count / concurrency limits, hard or soft), edited only through the gateway admin API.
+- Budgets are per user, not per principal: scoped hierarchically (user → team → organization) and per model, with time windows (per minute, hour, day, month). A user is the delegated end user, or a principal acting for no one under its slug; several users behind one console principal each spend their own budget.
+- Budgets are rows in the `budgets` table (scope `global` | `user` | `model`, scope id, window, token / USD / request-count / concurrency limits, hard or soft), edited only through the gateway admin API. A refusal's detection id is `budget.<scope>.<scope id>`.
 - Costs come from a per-model pricing table in the catalog; local models are accounted for by compute time and tokens.
 - Only models allowed for the identity are reachable: the global deny list wins, then the global allow list, then the identity's `allowed_models` narrows it further (empty grants nothing); requests for other models are blocked (§4.1).
 - Runaway agent protection: limits on tool-call count, agent loop iterations, recursion depth and repeated identical calls per session (§1: runaway execution loops).
@@ -110,8 +115,9 @@ Malicious patterns detection and historical attack mitigation specification:
 - Attack signatures come from an externally managed feed, uploaded together with the catalog (`signatures_toml`) and versioned with it; the feed format is documented so security teams can add signatures without code changes.
 - On every activation the gateway mirrors the active signatures into the `attack_signatures` table so the dashboard can show feed status.
 - Allowlists for model sources and MCP servers (with pinned versions/hashes) are part of the policy.
-- The history store keeps past blocked and flagged interactions per identity and session.
-- History is used to detect multi-step or repeated attacks: identities with recent violations get a higher risk score, which tightens checks or blocks them according to policy.
+- The history store keeps past blocked and flagged interactions per user and session.
+- History is used to detect multi-step or repeated attacks: users with recent violations get a higher risk score, which tightens checks or blocks them according to policy.
+- `GET /admin/risk?q=` lists every user seen in the audit log with their score inside the catalog's `[risk]` window, violation count, last violation, last activity, the principals that carried them and a status (`normal`, `escalate`, `block`) from the active thresholds — the same score the next request is gated on. `q` is a case-insensitive substring search on the user; the console's risk tab is built on it.
 - Matches report the signature id and feed version in the audit log.
 - History doubles as the source of regression cases for the self-testing suite and as data for security reporting (the diagram groups them as "Security Reporting & Mitigation").
 
@@ -135,16 +141,18 @@ Resource processing engine and resources specification:
 Monitoring, security reporting and auditing specification:
 - Monitoring collects every event from all modules: verdicts, triggered controls, budget usage, latencies, policy reloads, signature feed updates, model outages (§4.5).
 - Monitoring feeds the async semantic analysis inside the gateway for behavioral analysis of sessions and agents.
-- Audit log is structured (e.g. JSON lines), append-only, and records for every interaction: timestamp, identity, agent, model, policy version, triggered controls, action taken, risk score, token/cost usage, per-stage latency. Redacted content is stored redacted.
-- Audit logs are exportable (JSON and CSV) with filters by time range, identity, control and action, for security teams (§4.5).
+- Audit log is structured (e.g. JSON lines), append-only, and records for every interaction: timestamp, identity (principal), end user, agent, model, policy version, triggered controls, action taken, risk score, token/cost usage, per-stage latency. Redacted content is stored redacted.
+- Every event has a security status, exposed by the `activity` view (events plus `status`): `blocked` (verdict block), `redacted` (verdict redact), `flagged` (allowed, but a control flagged it) or `secure`. It is derived only from hash-chained fields, so it cannot be edited apart from the record. The console's activity feed filters on it; custom incidents are not part of the backend.
+- New events reach the console live: `events` is in the `supabase_realtime` publication, so the console subscribes over the Supabase Realtime websocket and RLS limits the stream to the security team. Every prompt sent through the gateway, the console chat included, is an event.
+- Audit logs are exportable (JSON and CSV) with filters by time range, identity, end user, control and action, for security teams (§4.5).
 - Real-time metrics for management: blocked/redacted/allowed counts, top triggered controls, budget usage and cost per team/model, overall security posture.
 - The gateway persists these to Supabase Postgres, where the admin dashboard reads them; the dashboard UI itself is a separate feature.
 
 Admin dashboard backend API specification:
 - The admin dashboard (security team) reads persisted data — audit log, detections, policy versions, usage, signature feed mirror — directly through the Supabase Data API, authenticated as the security team; RLS grants it read-only access, so the dashboard can never rewrite the audit log it displays.
 - The gateway writes through its privileged connection only. It exposes HTTP endpoints for live state the database does not hold (e.g. the active policy and its reload status, telemetry) and an authenticated admin API for the dashboard's writes (policy upload, and runtime settings once any exist). The dashboard never writes through the Data API.
-- Together these provide: active controls and their state, current policy version and reload diff history, live and historical metrics, blocked threats with details, budget usage, audit log search and export, signature feed status (§3.3).
-- Gateway admin endpoints authenticate the console user with their Supabase access token (`Authorization: Bearer <access_token>`); the gateway verifies it with Supabase Auth and reads the user's `team_members.role`. `viewer`, `analyst` and `admin` may read; only `admin` may change state (policy upload, budgets). Every state-changing admin action, accepted or rejected, is recorded in `admin_actions`. The exception is `/admin/approvals/*`: the console server calls those with the `secops-console` principal's API key (`GATEWAY_ADMIN_KEY`, `principals.role = security_admin`) after checking the user's team role itself, and decisions are recorded in `access_requests`.
+- Together these provide: active controls and their state (with resource access and budgets), current policy version, its TOML and reload diff history, live and historical metrics, blocked threats with details, per-user budget usage and risk scores, the live activity feed with its security status, audit log search and export, signature feed status (§3.3).
+- Gateway admin endpoints authenticate the console user with their Supabase access token (`Authorization: Bearer <access_token>`); the gateway verifies it with Supabase Auth and reads the user's `team_members.role`. `viewer`, `analyst` and `admin` may read (active policy, versions, metrics, budgets, risk, export); only `admin` may change state (policy upload, budgets). Every state-changing admin action, accepted or rejected, is recorded in `admin_actions`. The exception is `/admin/approvals/*`: the console server calls those with the `secops-console` principal's API key (`GATEWAY_ADMIN_KEY`, `principals.role = security_admin`) after checking the user's team role itself, and decisions are recorded in `access_requests`.
 - Data API reads are restricted to the security team by RLS.
 
 Performance telemetry specification:
