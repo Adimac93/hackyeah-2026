@@ -3,6 +3,7 @@
 import { clampTtl } from "@/lib/approvals";
 import { requireWriter } from "@/lib/auth";
 import { gatewayAdmin } from "@/lib/gateway-admin";
+import { gatewayRequest } from "@/lib/gateway-http";
 
 /** Approve or deny an agent's access request. Admin/analyst only. */
 export async function decideAccess(
@@ -22,7 +23,7 @@ export async function decideAccess(
 
   let response: Response;
   try {
-    response = await fetch(
+    response = await gatewayRequest(
       `${gateway.base}/admin/approvals/${encodeURIComponent(id)}`,
       {
         method: "POST",

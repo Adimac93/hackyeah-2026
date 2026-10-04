@@ -3,6 +3,7 @@ import OpenAI from "openai";
 
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
+import { gatewayRequest } from "@/lib/gateway-http";
 
 import {
   decodeGatewaySse,
@@ -151,10 +152,14 @@ function idleTimeout(ms: number) {
   };
 }
 
-function timeoutError(error: unknown): ProviderError {
+/** `timedOut`: our idle timer fired (node:http reports that abort as an AbortError). */
+function timeoutError(error: unknown, timedOut: boolean): ProviderError {
   const name = error instanceof Error ? error.name : "unknown";
-  console.error("[assistant] gateway unreachable", name);
-  if (name === "TimeoutError") {
+  console.error(
+    "[assistant] gateway unreachable",
+    timedOut ? "TimeoutError" : name,
+  );
+  if (timedOut || name === "TimeoutError") {
     return new ProviderError(
       `The gateway went quiet for ${String(TIMEOUT_MS / 1000)} s. Its model may be cold-starting; try again.`,
     );
@@ -182,7 +187,7 @@ async function callGateway(
   try {
     let response: Response;
     try {
-      response = await fetch(`${base}/v1/chat/completions`, {
+      response = await gatewayRequest(`${base}/v1/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -200,7 +205,7 @@ async function callGateway(
         signal: idle.signal,
       });
     } catch (error) {
-      throw timeoutError(error);
+      throw timeoutError(error, idle.signal.aborted);
     }
 
     // refusals before the answer starts (prompt_in, budgets, upstream down) are plain JSON
@@ -246,7 +251,7 @@ async function callGateway(
         handle(events);
       }
     } catch (error) {
-      throw timeoutError(error);
+      throw timeoutError(error, idle.signal.aborted);
     }
     handle(decodeGatewaySse(`${buffer}\n`).events);
     return gatewayReply(finishGatewayStream(text, ending), response.status);
@@ -383,9 +388,8 @@ export async function checkModel(option: ModelOption): Promise<ModelCheck> {
     }
     const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
     try {
-      const response = await fetch(`${base}/health`, {
+      const response = await gatewayRequest(`${base}/health`, {
         signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
-        cache: "no-store",
       });
       const body = (await response.json().catch(() => null)) as {
         status?: string;

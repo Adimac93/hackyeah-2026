@@ -1,6 +1,7 @@
 // Server-only: talks to the gateway as the signed-in console user. Never import
 // from a client component — the user's access token must not be logged or echoed.
 import { gatewayAsUser, gatewayUrl } from "./gateway-admin";
+import { gatewayRequest } from "./gateway-http";
 import { liveError } from "./gateway-live";
 import type {
   GatewayHealth,
@@ -38,7 +39,7 @@ export async function gatewayFetch<T>(
   }
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
+    response = await gatewayRequest(`${base}${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: {
         Accept: "application/json",
@@ -46,8 +47,6 @@ export async function gatewayFetch<T>(
         ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store",
-      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
