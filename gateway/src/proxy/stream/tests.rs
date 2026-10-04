@@ -129,3 +129,47 @@ fn a_redaction_reaching_sent_text_retracts_the_answer() {
     let step = releaser.push(&policy, &format!("@example.com{}", " ".repeat(STEP)));
     assert!(matches!(step, Step::Diverged), "{step:?}");
 }
+
+#[test]
+fn tool_calls_stream_in_pieces_and_are_reassembled() {
+    // OpenAI: one call across chunks, keyed by index
+    let mut parser = UpstreamParser::default();
+    let wire = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"resources__query\",\"arguments\":\"\"}}]}}]}\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"sql\\\":\\\"select 1\"}}]}}]}\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]}}]}\n",
+        "data: [DONE]\n",
+    );
+    let mut pending = PendingCalls::default();
+    for event in parser.feed(wire.as_bytes()) {
+        if let Upstream::ToolCall { index, id, name, arguments } = event {
+            pending.add(index, id, name, &arguments);
+        }
+    }
+    assert!(!pending.is_empty());
+    let (calls, asked) = pending.finish();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call_a");
+    assert_eq!(calls[0].name, "resources__query");
+    assert_eq!(calls[0].arguments, serde_json::json!({ "sql": "select 1" }));
+    assert_eq!(asked["tool_calls"][0]["function"]["arguments"], "{\"sql\":\"select 1\"}");
+}
+
+#[test]
+fn a_whole_tool_call_with_object_arguments_is_read_too() {
+    // Ollama: the call arrives whole, arguments as an object, no index
+    let mut parser = UpstreamParser::default();
+    let events = parser.feed(
+        b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"resources__describe\",\"arguments\":{\"tables\":[\"customers\"]}}}]}}]}\n",
+    );
+    let mut pending = PendingCalls::default();
+    for event in events {
+        if let Upstream::ToolCall { index, id, name, arguments } = event {
+            pending.add(index, id, name, &arguments);
+        }
+    }
+    let (calls, _) = pending.finish();
+    assert_eq!(calls[0].id, "call_0");
+    assert_eq!(calls[0].arguments, serde_json::json!({ "tables": ["customers"] }));
+    assert!(PendingCalls::default().is_empty());
+}
