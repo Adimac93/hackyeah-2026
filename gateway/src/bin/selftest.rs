@@ -14,10 +14,11 @@
 //! Every case names a fresh end user, so the refusals the suite provokes
 //! never add up to a risk block outside the history case that wants one.
 //!
-//! The expectations follow the catalog active in the database, policy version
-//! 65 ([`CATALOG`]): its 13 deterministic controls, 3 semantic controls and
-//! signatures AIS-0001..0004. Run against another catalog, the header says so
-//! and a failing case may be a catalog change rather than a defect.
+//! The expectations follow the catalog in `policy/selftest/`, a byte-for-byte
+//! copy of the team's upload (policy version 65): 13 deterministic controls,
+//! 3 semantic controls and signatures AIS-0001..0004. The header says whether
+//! the gateway runs that catalog; against another one, a failing case may be a
+//! catalog change rather than a defect. Upload both files to test it.
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -25,8 +26,16 @@ use std::time::Duration;
 use gateway::selftest::{self, Call, Caller, Case, Expect, case};
 use serde_json::{Value, json};
 
-/// sha256 of the catalog these cases were written for (`policy_versions` id 65).
-const CATALOG: &str = "c3a669a819d99df78668e0711e8250e1e13f073565b19dc9056a907a99ee7f98";
+/// The catalog these cases were written for, and the signature feed with it.
+const CATALOG: &str = include_str!("../../../policy/selftest/control-catalog.toml");
+const SIGNATURES: &str = include_str!("../../../policy/selftest/signatures.toml");
+
+/// The policy version the gateway reports when it runs [`CATALOG`].
+fn expected_version() -> String {
+    gateway::policy::Policy::compile(CATALOG, Some(SIGNATURES), "policy/selftest")
+        .map(|policy| policy.sha256)
+        .unwrap_or_default()
+}
 
 struct Run {
     base: String,
@@ -92,11 +101,11 @@ async fn main() -> ExitCode {
         policy["semantic_controls"],
         policy["fail_mode"].as_str().unwrap_or("?"),
     );
-    if policy["version"].as_str() == Some(CATALOG) {
-        println!("  catalog         the one these cases were written for (policy version 65)");
+    if policy["version"].as_str() == Some(expected_version().as_str()) {
+        println!("  catalog         policy/selftest/, the one these cases were written for");
     } else {
-        println!("  catalog         WARNING: not the catalog these cases were written for ({});", &CATALOG[..12]);
-        println!("                  a failing case may be a catalog change rather than a defect");
+        println!("  catalog         WARNING: not policy/selftest/, the catalog these cases were written for;");
+        println!("                  upload it, or read a failing case as a possible catalog change");
     }
     println!("  semantic judge  {}", index["semantic_judge"].as_str().unwrap_or("unknown"));
     println!("  chat upstream   {}", index["chat_upstream"].as_str().unwrap_or("unknown"));
@@ -355,4 +364,17 @@ fn history(run: &Run) -> Vec<Case> {
         Block("risk_blocked"),
     ));
     cases
+}
+
+#[cfg(test)]
+mod tests {
+    /// The source of truth must compile, and keep the version the database
+    /// gave it: a changed byte (line endings included) breaks the header match.
+    #[test]
+    fn the_selftest_catalog_is_policy_version_65() {
+        assert_eq!(
+            super::expected_version(),
+            "c3a669a819d99df78668e0711e8250e1e13f073565b19dc9056a907a99ee7f98"
+        );
+    }
 }

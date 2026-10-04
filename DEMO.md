@@ -96,9 +96,10 @@ attack-history block, each printed with its result and risk score. Needs
 local: `SELFTEST_URL=https://… just test system` (it must have `mcp-demo`
 behind it as the `docs` server for the tool-result cases). The header says
 whether the semantic judge is the mock or a real model, and whether the active
-catalog is the one the cases were written for (policy version 65, the team's
-current upload); after a catalog change, update the expectations in
-`gateway/src/bin/selftest.rs`.
+catalog is `policy/selftest/` — the source of truth the cases were written for,
+a byte-for-byte copy of the team's upload (policy version 65). To change it,
+replace both files with the new upload and update the expectations in
+`gateway/src/bin/selftest.rs` together.
 
 ## Fallback
 
