@@ -30,6 +30,32 @@ Built at **HackYeah 2026** for the *AI Control Layer* challenge
 The four control boundaries: **01** prompts · **02** model responses ·
 **03** tool calls · **04** tool results.
 
+## Built on the OWASP Top 10 for LLM Applications
+
+The challenge brief asks for controls grounded in sources like OWASP. Cogut's
+control catalog ([`policy/control-catalog.toml`](policy/control-catalog.toml))
+and attack-signature feed ([`policy/signatures.toml`](policy/signatures.toml))
+are organised around the
+[OWASP Top 10 for LLM Applications (2025)](https://genai.owasp.org/llm-top-10/).
+The proxy scans every prompt, response, tool call and tool result for these risks:
+
+| OWASP risk | How Cogut covers it |
+|---|---|
+| **LLM01** Prompt injection | `injection.*` patterns (instruction override, role hijack, fake delimiters, indirect injection in tool output), `obfuscation.*` (invisible Unicode, encoded payloads), escalated to the `injection.prompt-guard` AI judge |
+| **LLM02** Sensitive information disclosure | `secret.*` (cloud, Git, LLM, Stripe keys, JWTs, private keys, connection strings) and `pii.*` (email, phone, PESEL, IBAN, payment cards) redact or block; `exfiltration.intent` AI judge; divergence (training-data extraction) attack |
+| **LLM03** Supply chain | signature feed: unpinned model repositories, `trust_remote_code=True` |
+| **LLM04** Data and model poisoning | signature feed: pickle, `joblib`/`dill` and `allow_pickle` loaders; `exploit.unsafe-deserialization` |
+| **LLM05** Improper output handling | `output.*`: markdown image exfiltration, script injection, SQL injection, path traversal; `exploit.code-execution` |
+| **LLM06** Excessive agency | `agency.*` (destructive commands, credential access), known exfiltration endpoints, deny-by-default tool/resource grants, human approval of access requests |
+| **LLM07** System prompt leakage | `leak.system-prompt-request` |
+| **LLM10** Unbounded consumption | per-identity token and USD budgets, model allow list, `[runaway]` limits on tool-call rate, repeats and agent depth |
+
+LLM08 (vector and embedding weaknesses) and LLM09 (misinformation) have no
+pattern-shaped signal at the gateway and are deliberately out of scope; the
+catalog says so next to its OWASP section. The gateway's tests
+([`gateway/src/engine/tests.rs`](gateway/src/engine/tests.rs)) exercise the
+shipped catalog risk by risk.
+
 ## Architecture
 
 ```
@@ -99,6 +125,10 @@ For the console demo, set `DEMO_ADMIN_LOGIN=true` (plus `DEMO_ADMIN_EMAIL` /
 Open <https://cogut-frontend.cloud.run>. On the sign-in page, select
 **Log in as admin** to enter the full SecOps console. No local installation is
 needed to explore the deployed product.
+
+The policies you will see are mapped to the OWASP Top 10 for LLM Applications
+(2025) — see [Built on the OWASP Top 10](#built-on-the-owasp-top-10-for-llm-applications)
+for which controls cover which risk.
 
 Start on **Overview**, then use **Assistant** and **Activity** side by side:
 
