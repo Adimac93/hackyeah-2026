@@ -136,7 +136,19 @@ pages in the sidebar:
    Filter by the `blocked` status, then click a request's model to see which
    controls blocked it.
 3. **Controls and policies** shows the enforced policies, budgets, resource access
-   and the attack signatures that were tried against the models.
+   and the attack signatures that were tried against the models. To add a policy,
+   click **Add control**, fill in the fields below and click **Add & activate**:
+
+   | field | value |
+   |---|---|
+   | Type | Deterministic |
+   | Control id | `confidential.project-falcon` |
+   | Action | block |
+   | Hooks | `prompt_in` |
+   | Pattern (regex) | `(?i)\bproject\s*falcon\b` |
+
+   Then send `Tell me about Project Falcon` in **Assistant**. The gateway blocks
+   it right away, with no restart.
 4. **User risk** shows the risk score of `developer@hackyeah.sidequestly.xyz`,
    which went up after the blocked prompts above.
 5. **Models** connects model providers such as Anthropic, OpenAI and Google Gemini.
@@ -146,37 +158,3 @@ pages in the sidebar:
    ```text
    Aggregate the number of customers in every country
    ```
-
-### Add a control
-
-This scenario adds a rule that keeps a confidential project codename, Project
-Falcon, out of every prompt and answer. The rule takes effect as soon as you
-save it, with no restart.
-
-1. Open **Assistant** and send this prompt. The model answers it, because no
-   control covers the codename yet:
-
-   ```text
-   Write a short press release announcing Project Falcon
-   ```
-
-2. Open **Controls and policies** and click **Add control**.
-3. Fill in the form:
-
-   | field | value |
-   |---|---|
-   | Type | Deterministic |
-   | Control id | `confidential.project-falcon` |
-   | Enabled | on |
-   | Severity | high |
-   | Action | block |
-   | Hooks | `prompt_in`, `response_out` |
-   | Pattern (regex) | `(?i)\bproject[\s_-]*falcon\b` |
-
-   Type the pattern exactly as shown. `(?i)` makes it ignore case, so it also
-   catches `PROJECT FALCON` and `project-falcon`.
-4. Click **Add & activate**. The console adds the control to the catalog and
-   activates it as a new policy version.
-5. Go back to **Assistant** and send the same prompt again. This time the gateway
-   blocks it, and **Activity** shows `confidential.project-falcon` as the control
-   that fired.
