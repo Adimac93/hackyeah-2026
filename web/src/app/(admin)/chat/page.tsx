@@ -72,52 +72,61 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
           </form>
         )
       }
-      className={consoleView ? "lg:col-span-3" : ""}
+      className={
+        consoleView
+          ? "lg:col-span-3"
+          : // full height below main's padding, so the input sits at the bottom
+            "flex min-h-[70dvh] flex-col md:h-[calc(100dvh-4rem)] md:min-h-0"
+      }
+      bodyClassName={consoleView ? "p-5" : "flex min-h-0 flex-1 flex-col p-5"}
     >
-      <div className="space-y-4">
-        {messages.length === 0 && (
-          <div className="rounded-lg border border-dashed border-zinc-800 p-5 text-sm text-zinc-400">
-            <p>Try asking:</p>
-            <ul className="mt-2 list-inside list-disc space-y-1 text-zinc-300">
-              {SUGGESTIONS.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              title={fmtDateTime(m.created_at)}
-              className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
-                m.role === "user"
-                  ? "bg-emerald-500/15 text-emerald-50 ring-1 ring-emerald-500/30"
-                  : "bg-zinc-800/80 text-zinc-200"
-              }`}
-            >
-              {m.content}
-              {m.model === null ? null : (
-                <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
-                  <ProviderIcon
-                    icon={
-                      models.find((o) => o.id === m.model)?.icon ?? "custom"
-                    }
-                    size="sm"
-                  />
-                  {modelLabel(m.model, models)}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
       <ChatComposer
         action={sendChatMessage.bind(null, active?.id ?? null)}
         placeholder="Ask anything… (never paste real secrets)"
+        fill={!consoleView}
+        messageCount={messages.length}
+        thread={
+          <>
+            {messages.length === 0 && (
+              <div className="rounded-lg border border-dashed border-zinc-800 p-5 text-sm text-zinc-400">
+                <p>Try asking:</p>
+                <ul className="mt-2 list-inside list-disc space-y-1 text-zinc-300">
+                  {SUGGESTIONS.map((s) => (
+                    <li key={s}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  title={fmtDateTime(m.created_at)}
+                  className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+                    m.role === "user"
+                      ? "bg-emerald-500/15 text-emerald-50 ring-1 ring-emerald-500/30"
+                      : "bg-zinc-800/80 text-zinc-200"
+                  }`}
+                >
+                  {m.content}
+                  {m.model === null ? null : (
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
+                      <ProviderIcon
+                        icon={
+                          models.find((o) => o.id === m.model)?.icon ?? "custom"
+                        }
+                        size="sm"
+                      />
+                      {modelLabel(m.model, models)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </>
+        }
       >
         <Field label="Model">
           <ModelSelect

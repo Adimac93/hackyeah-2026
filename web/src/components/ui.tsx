@@ -105,11 +105,14 @@ export function Card({
   actions,
   children,
   className = "",
+  bodyClassName = "p-5",
 }: {
   title?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** classes for the content area under the header */
+  bodyClassName?: string;
 }) {
   return (
     <section
@@ -121,7 +124,7 @@ export function Card({
           {actions}
         </header>
       ) : null}
-      <div className="p-5">{children}</div>
+      <div className={bodyClassName}>{children}</div>
     </section>
   );
 }
