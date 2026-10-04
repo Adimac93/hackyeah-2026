@@ -16,7 +16,7 @@ pub mod store;
 pub use diff::diff;
 pub use feed::{Feed, FeedEntry};
 pub use handle::PolicyHandle;
-pub use limits::{Resources, Risk, Runaway};
+pub use limits::{ALL_TABLES, Resources, Risk, Runaway, TEAM_ROLES};
 pub use mcp::{McpServer, McpSettings, UnknownPrincipal};
 pub use pricing::Price;
 
@@ -114,6 +114,8 @@ pub enum PolicyError {
     ReservedServer { name: String },
     #[error("resources: table {table:?} is both granted and requestable for {identity}")]
     RequestableGranted { identity: String, table: String },
+    #[error("resources.role_grants: {role:?} is not a team role (admin, analyst, viewer, developer)")]
+    UnknownTeamRole { role: String },
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -356,6 +358,9 @@ impl Policy {
             });
         }
 
+        if let Some(role) = raw.resources.unknown_role() {
+            return Err(PolicyError::UnknownTeamRole { role: role.to_owned() });
+        }
         if let Some((identity, table)) = raw.resources.overlap() {
             return Err(PolicyError::RequestableGranted {
                 identity: identity.to_owned(),

@@ -111,6 +111,12 @@ demo-agent = ["customers", "invoices"]
 # The console chat answers business questions without approval...
 console-chat = ["products", "subscriptions", "invoices", "support_tickets"]
 
+# By the end user's team role, for identities that act for people (the
+# console chat names each user in X-On-Behalf-Of; matched to team_members by
+# email). "*" is every table in the resources schema, including later ones.
+[resources.role_grants]
+admin = ["*"]
+
 # ...but customer records (names, emails, phones) need a human: the model asks
 # with `control__request_access {table, reason}`, the security team approves in
 # the console, and the grant covers that one end user for the approved time.

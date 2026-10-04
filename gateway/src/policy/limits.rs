@@ -76,6 +76,13 @@ pub struct Resources {
     /// granted to that one end user for the approved time.
     #[serde(default)]
     pub requestable: BTreeMap<String, Vec<String>>,
+    /// team role -> tables, for identities that act for people (the console
+    /// chat): the end user it names in `X-On-Behalf-Of` is looked up in
+    /// `team_members` by email, and their role's tables are added to the
+    /// identity's own. `"*"` is every table in the `resources` schema,
+    /// including ones created later.
+    #[serde(default)]
+    pub role_grants: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_max_rows")]
     pub max_rows: i64,
     #[serde(default = "default_statement_timeout")]
@@ -87,6 +94,7 @@ impl Default for Resources {
         Self {
             grants: BTreeMap::new(),
             requestable: BTreeMap::new(),
+            role_grants: BTreeMap::new(),
             max_rows: default_max_rows(),
             statement_timeout_ms: default_statement_timeout(),
         }
@@ -101,7 +109,27 @@ const fn default_statement_timeout() -> u64 {
     2_000
 }
 
+/// In `role_grants`: every table in the `resources` schema.
+pub const ALL_TABLES: &str = "*";
+
+/// The console's team roles (`public.team_role`).
+pub const TEAM_ROLES: [&str; 4] = ["admin", "analyst", "viewer", "developer"];
+
 impl Resources {
+    /// The tables a team role is granted; may contain [`ALL_TABLES`].
+    pub fn tables_for_role(&self, role: &str) -> &[String] {
+        self.role_grants.get(role).map_or(&[], Vec::as_slice)
+    }
+
+    /// A `role_grants` key that is not a team role: a typo would silently
+    /// grant nothing, so the upload is refused instead.
+    pub fn unknown_role(&self) -> Option<&str> {
+        self.role_grants
+            .keys()
+            .map(String::as_str)
+            .find(|role| !TEAM_ROLES.contains(role))
+    }
+
     pub fn tables_for(&self, slug: &str) -> &[String] {
         self.grants.get(slug).map_or(&[], Vec::as_slice)
     }

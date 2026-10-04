@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::admin::auth::refusal;
 use crate::audit::Principal;
 use crate::engine::{self, Evaluation};
-use crate::policy::{Hook, Policy};
+use crate::policy::{ALL_TABLES, Hook, Policy};
 use crate::proxy::bearer_principal;
 use crate::state::AppState;
 
@@ -116,6 +116,45 @@ impl Access<'_> {
 /// The tables this identity may query (and may ask for), or the columns of
 /// the ones it asked for. Asking for a table outside the grant is refused,
 /// whether or not it exists.
+/// Tables the end user's team role adds (`[resources.role_grants]`), for an
+/// identity that acts for people. The user is the one its trusted key named in
+/// `X-On-Behalf-Of`, matched to `team_members` by email; anyone else (an
+/// agent, an unknown user) gets nothing here. `"*"` expands to every table in
+/// the `resources` schema now. A lookup failure grants nothing.
+pub async fn role_tables(db: &PgPool, policy: &Policy, principal: &Principal) -> Vec<String> {
+    if !principal.delegates_users || policy.resources.role_grants.is_empty() {
+        return Vec::new();
+    }
+    let role = sqlx::query_scalar::<_, String>(
+        "select role::text from public.team_members where lower(email) = lower($1) limit 1",
+    )
+    .bind(&principal.user)
+    .fetch_optional(db)
+    .await;
+    let role = match role {
+        Ok(Some(role)) => role,
+        Ok(None) => return Vec::new(),
+        Err(error) => {
+            tracing::error!(%error, "looking up the end user's team role failed; no role grant");
+            return Vec::new();
+        }
+    };
+    let tables = policy.resources.tables_for_role(&role);
+    if !tables.iter().any(|table| table == ALL_TABLES) {
+        return tables.to_vec();
+    }
+    sqlx::query_scalar::<_, String>(
+        "select table_name::text from information_schema.tables
+         where table_schema = 'resources' and table_type = 'BASE TABLE' order by 1",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_else(|error| {
+        tracing::error!(%error, "listing the resources schema failed; no role grant");
+        Vec::new()
+    })
+}
+
 pub async fn describe(
     pool: &PgPool,
     access: &Access<'_>,

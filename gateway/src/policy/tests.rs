@@ -324,3 +324,20 @@ fn requestable_tables_parse_and_may_not_also_be_granted() {
         Err(PolicyError::RequestableGranted { identity, table }) if identity == "app" && table == "customers"
     ));
 }
+
+#[test]
+fn role_grants_parse_and_refuse_an_unknown_role() {
+    let src = format!(
+        "{MINIMAL}\n[resources.role_grants]\nadmin = [\"*\"]\nanalyst = [\"invoices\"]\n"
+    );
+    let policy = parse(&src).unwrap();
+    assert_eq!(policy.resources.tables_for_role("admin"), [crate::policy::ALL_TABLES]);
+    assert_eq!(policy.resources.tables_for_role("analyst"), ["invoices"]);
+    assert!(policy.resources.tables_for_role("developer").is_empty());
+
+    let typo = format!("{MINIMAL}\n[resources.role_grants]\nadmins = [\"*\"]\n");
+    assert!(matches!(
+        parse(&typo),
+        Err(PolicyError::UnknownTeamRole { role }) if role == "admins"
+    ));
+}

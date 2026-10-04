@@ -434,9 +434,10 @@ async fn resource_call(
         .resources
         .as_ref()
         .ok_or("resource tools are not configured on this gateway")?;
-    // The catalog's grant, plus requestable tables a human approved for this
-    // end user.
+    // The catalog's grant, the end user's team role, plus requestable tables a
+    // human approved for this end user.
     let mut granted = policy.resources.tables_for(&principal.slug).to_vec();
+    granted.extend(resources::role_tables(state.db(), policy, principal).await);
     granted.extend(
         state
             .approvals
