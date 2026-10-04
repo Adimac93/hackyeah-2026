@@ -136,7 +136,19 @@ pages in the sidebar:
    Filter by the `blocked` status, then click a request's model to see which
    controls blocked it.
 3. **Controls and policies** shows the enforced policies, budgets, resource access
-   and the attack signatures that were tried against the models.
+   and the attack signatures that were tried against the models. To add a policy,
+   click **Add control**, fill in the fields below and click **Add & activate**:
+
+   | field | value |
+   |---|---|
+   | Type | Deterministic |
+   | Control id | `confidential.project-falcon` |
+   | Action | block |
+   | Hooks | `prompt_in` |
+   | Pattern (regex) | `(?i)\bproject\s*falcon\b` |
+
+   Then send `Tell me about Project Falcon` in **Assistant**. The gateway blocks
+   it right away, with no restart.
 4. **User risk** shows the risk score of `developer@hackyeah.sidequestly.xyz`,
    which went up after the blocked prompts above.
 5. **Models** connects model providers such as Anthropic, OpenAI and Google Gemini.
