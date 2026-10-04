@@ -53,6 +53,7 @@ export default async function EditConnectionPage({
           <ProviderForm
             action={updateConnection.bind(null, data.id)}
             submitLabel="Save changes"
+            connectionId={data.id}
             initial={{
               preset: isPresetId(data.preset) ? data.preset : "custom",
               name: data.name,

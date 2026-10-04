@@ -46,9 +46,17 @@ pub struct Principal {
     pub user: String,
 }
 
+/// Grant token in `allowed_models`: every model an enabled console LLM
+/// connection (Models page) claims.
+pub const CONSOLE_MODELS_GRANT: &str = "console:*";
+
 impl Principal {
     pub fn may_use_model(&self, model: &str) -> bool {
         self.allowed_models.iter().any(|m| m == model)
+    }
+
+    pub fn may_use_console_models(&self) -> bool {
+        self.may_use_model(CONSOLE_MODELS_GRANT)
     }
 
     pub fn may_call_tool(&self, tool: &str) -> bool {

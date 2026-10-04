@@ -15,6 +15,7 @@ import { defaultModel, modelLabel } from "@/lib/llm/models";
 import { storedSteps } from "@/lib/tool-steps";
 
 import { deleteAllConversations, deleteConversation } from "./actions";
+import { AddModelDialog } from "./add-model-dialog";
 import { AttachmentChip, FileChip } from "./attachment-chip";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
@@ -85,13 +86,16 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
     <Card
       title={active?.title ?? "New chat"}
       actions={
-        active === null ? null : (
-          <form action={deleteConversation.bind(null, active.id, null)}>
-            <ConfirmButton confirmLabel="Delete this chat?">
-              Delete
-            </ConfirmButton>
-          </form>
-        )
+        <div className="flex items-center gap-3">
+          {member.role === "admin" ? <AddModelDialog /> : null}
+          {active === null ? null : (
+            <form action={deleteConversation.bind(null, active.id, null)}>
+              <ConfirmButton confirmLabel="Delete this chat?">
+                Delete
+              </ConfirmButton>
+            </form>
+          )}
+        </div>
       }
       className={
         consoleView

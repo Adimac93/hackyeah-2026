@@ -7,6 +7,10 @@
 //! policy catalog never names a URL or a key, so editing it cannot redirect
 //! traffic or a credential. Anthropic connections are not routed: this
 //! gateway speaks the OpenAI chat API.
+//!
+//! A model a connection claims is also allowed without a catalog entry, for
+//! identities granted `console:*` (see `proxy::gate_model`): an admin adding
+//! it on the Models page is the allow decision. The deny list still wins.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -34,6 +38,8 @@ pub struct Upstream {
     pub name: String,
     /// The deterministic stand-in (`UPSTREAM_URL=mock`).
     pub mock: bool,
+    /// Claimed by a console LLM connection rather than `UPSTREAM_URL`.
+    pub connection: bool,
 }
 
 impl std::fmt::Debug for Upstream {
@@ -44,6 +50,7 @@ impl std::fmt::Debug for Upstream {
             .field("key", &self.key.as_ref().map(|_| "<set>"))
             .field("name", &self.name)
             .field("mock", &self.mock)
+            .field("connection", &self.connection)
             .finish()
     }
 }
@@ -56,6 +63,7 @@ pub fn default_for(url: &str) -> Upstream {
             key: None,
             name: mock::MOCK.to_owned(),
             mock: true,
+            connection: false,
         };
     }
     Upstream {
@@ -63,6 +71,7 @@ pub fn default_for(url: &str) -> Upstream {
         key: None,
         name: "default".to_owned(),
         mock: false,
+        connection: false,
     }
 }
 
@@ -119,6 +128,11 @@ impl Upstreams {
         }
     }
 
+    /// Whether an enabled console connection claims `model`.
+    pub async fn is_connection_model(&self, model: &str) -> bool {
+        self.resolve(model).await.connection
+    }
+
     async fn lookup(&self, model: &str) -> sqlx::Result<Option<Upstream>> {
         let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<String>)>(
             "select p.id, p.name, p.kind, p.base_url, s.decrypted_secret
@@ -143,6 +157,7 @@ impl Upstreams {
             key: key.filter(|key| !key.trim().is_empty()),
             name,
             mock: false,
+            connection: true,
         }))
     }
 }
@@ -157,6 +172,7 @@ mod tests {
         assert_eq!(ollama.endpoint, "https://ollama.example.run.app/v1/chat/completions");
         assert_eq!(ollama.key, None);
         assert!(!ollama.mock);
+        assert!(!ollama.connection);
         assert!(default_for("mock").mock);
     }
 
@@ -185,6 +201,7 @@ mod tests {
             key: Some("sk-secret-value".to_owned()),
             name: "OpenAI".to_owned(),
             mock: false,
+            connection: true,
         };
         let shown = format!("{upstream:?}");
         assert!(!shown.contains("sk-secret"), "{shown}");

@@ -89,11 +89,22 @@ fn authentication_refusal(message: &str) -> Response {
 }
 
 /// The global deny list wins, then the global allow list, then the identity's
-/// own grant narrows it. Grants are deny-by-default.
-pub fn gate_model(policy: &Policy, principal: &Principal, model: &str, evaluation: &mut Evaluation) {
-    let reason = if !policy.model_allowed(model) {
+/// own grant narrows it. Grants are deny-by-default. A model a console LLM
+/// connection claims (`connection_model`) counts as globally allowed, and is
+/// granted to identities holding `console:*`.
+pub fn gate_model(
+    policy: &Policy,
+    principal: &Principal,
+    model: &str,
+    connection_model: bool,
+    evaluation: &mut Evaluation,
+) {
+    let denied = policy.models.denied.iter().any(|m| m == model);
+    let reason = if denied || !(policy.model_allowed(model) || connection_model) {
         format!("model {model} is not in the allow list")
-    } else if !principal.may_use_model(model) {
+    } else if !(principal.may_use_model(model)
+        || (connection_model && principal.may_use_console_models()))
+    {
         format!("model {model} is not granted to this identity")
     } else {
         return;
@@ -127,7 +138,8 @@ pub async fn chat_completions(
 
     // Model grants (§4.1), budgets (§4.3) and history (§4.4) gate the same
     // evaluation, so a refusal is audited like any control.
-    gate_model(&policy, &principal, &model, &mut inbound);
+    let connection_model = state.upstreams.is_connection_model(&model).await;
+    gate_model(&policy, &principal, &model, connection_model, &mut inbound);
     let inflight = state
         .budgets
         .check(&principal, Some(&model), &mut inbound)

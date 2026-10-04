@@ -1,4 +1,5 @@
 use super::*;
+use crate::audit::CONSOLE_MODELS_GRANT;
 
 const CATALOG: &str = r#"
 schema_version = 1
@@ -33,7 +34,13 @@ fn principal(models: &[&str]) -> Principal {
 
 fn model_verdict(principal: &Principal, model: &str) -> Verdict {
     let mut evaluation = engine::evaluate(&policy(), Hook::PromptIn, "hi");
-    gate_model(&policy(), principal, model, &mut evaluation);
+    gate_model(&policy(), principal, model, false, &mut evaluation);
+    evaluation.verdict
+}
+
+fn connection_verdict(principal: &Principal, model: &str) -> Verdict {
+    let mut evaluation = engine::evaluate(&policy(), Hook::PromptIn, "hi");
+    gate_model(&policy(), principal, model, true, &mut evaluation);
     evaluation.verdict
 }
 
@@ -49,6 +56,24 @@ fn deny_beats_the_global_allow_and_the_grant_narrows_it() {
     assert_eq!(model_verdict(&granted, "qwen2.5:7b"), Verdict::Block, "global deny wins");
     assert_eq!(model_verdict(&granted, "mistral:7b"), Verdict::Block, "not globally allowed");
     assert_eq!(model_verdict(&principal(&["qwen2.5:7b"]), "llama3.1:8b"), Verdict::Block);
+}
+
+#[test]
+fn a_console_connection_model_needs_no_catalog_entry_for_a_console_grant() {
+    let console = principal(&[CONSOLE_MODELS_GRANT]);
+    assert_eq!(connection_verdict(&console, "my-vllm-model"), Verdict::Allow);
+    assert_eq!(model_verdict(&console, "my-vllm-model"), Verdict::Block, "unclaimed stays refused");
+}
+
+#[test]
+fn a_console_connection_model_is_refused_without_the_console_grant() {
+    assert_eq!(connection_verdict(&principal(&["llama3.1:8b"]), "my-vllm-model"), Verdict::Block);
+}
+
+#[test]
+fn the_deny_list_still_beats_a_console_connection() {
+    let console = principal(&[CONSOLE_MODELS_GRANT, "qwen2.5:7b"]);
+    assert_eq!(connection_verdict(&console, "qwen2.5:7b"), Verdict::Block);
 }
 
 /// The old redaction wrote the whole joined conversation into the last
@@ -122,7 +147,7 @@ async fn refusal_error(hook: Hook, blocker: &Detection) -> (StatusCode, Value) {
 #[tokio::test]
 async fn a_refusal_says_which_stage_and_hook_stopped_it() {
     let mut evaluation = engine::evaluate(&policy(), Hook::PromptIn, "hi");
-    gate_model(&policy(), &principal(&[]), "llama3.1:8b", &mut evaluation);
+    gate_model(&policy(), &principal(&[]), "llama3.1:8b", false, &mut evaluation);
     let mut blocker = evaluation.blocked_by().unwrap().clone();
 
     let (status, error) = refusal_error(Hook::PromptIn, &blocker).await;
