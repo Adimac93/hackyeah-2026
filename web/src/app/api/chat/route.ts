@@ -189,7 +189,9 @@ export async function POST(request: Request) {
           role: "assistant",
           content: reply.slice(0, MAX_STORED_LENGTH),
           model: model.id,
-          tool_calls: steps.length === 0 ? null : steps,
+          // only when there are steps: otherwise the column keeps its default, whatever
+          // the database says that is (an explicit null breaks a not-null column)
+          ...(steps.length === 0 ? {} : { tool_calls: steps }),
         });
       if (replyError === null) {
         await supabase
