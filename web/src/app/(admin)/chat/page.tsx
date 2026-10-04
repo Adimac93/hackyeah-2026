@@ -11,11 +11,7 @@ import { fmtDateTime, timeAgo } from "@/lib/format";
 import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
 
-import {
-  deleteAllConversations,
-  deleteConversation,
-  sendChatMessage,
-} from "./actions";
+import { deleteAllConversations, deleteConversation } from "./actions";
 import { ChatComposer } from "./chat-composer";
 import { ModelSelect } from "./model-select";
 
@@ -181,7 +177,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
           </div>
 
           <ChatComposer
-            action={sendChatMessage.bind(null, active?.id ?? null)}
+            conversationId={active?.id ?? null}
             placeholder="Ask anything… (never paste real secrets)"
           >
             <Field label="Model">

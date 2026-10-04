@@ -4,7 +4,12 @@ import OpenAI from "openai";
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
 
-import { interpretGatewayResponse } from "./gateway";
+import {
+  decodeGatewaySse,
+  finishGatewayStream,
+  interpretGatewayResponse,
+} from "./gateway";
+import type { GatewayOutcome, GatewayStreamEvent } from "./gateway";
 import { describeProviderError, normalizeHistory } from "./models";
 import type { ModelOption } from "./models";
 import { loadConnectionSecret } from "./secrets";
@@ -68,6 +73,7 @@ async function callAnthropic(
   model: string,
   system: string,
   messages: ChatTurn[],
+  onDelta: ((text: string) => void) | undefined,
 ): Promise<string> {
   const client = new Anthropic({
     apiKey: credentials.apiKey,
@@ -75,7 +81,7 @@ async function callAnthropic(
     maxRetries: 1,
   });
   const fiveFamily = CLAUDE_5_FAMILY.has(model);
-  const response = await client.beta.messages.create({
+  const stream = client.beta.messages.stream({
     model,
     max_tokens: MAX_TOKENS,
     system,
@@ -89,6 +95,10 @@ async function callAnthropic(
         }
       : {}),
   });
+  if (onDelta !== undefined) {
+    stream.on("text", onDelta);
+  }
+  const response = await stream.finalMessage();
   if (response.stop_reason === "refusal") {
     return REFUSAL_REPLY;
   }
@@ -103,52 +113,151 @@ async function callOpenAICompatible(
   model: string,
   system: string,
   messages: ChatTurn[],
+  onDelta: ((text: string) => void) | undefined,
 ): Promise<string> {
-  const completion = await client.chat.completions.create({
+  const stream = await client.chat.completions.create({
     model,
     messages: [{ role: "system", content: system }, ...messages],
+    stream: true,
   });
-  return completion.choices[0]?.message.content?.trim() ?? "";
+  let reply = "";
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta.content ?? "";
+    if (delta !== "") {
+      reply += delta;
+      onDelta?.(delta);
+    }
+  }
+  return reply.trim();
 }
 
-/** Through the AI Control Layer gateway. Plain fetch: we need its refusal bodies and `x_control_layer`. */
+/** A timer that aborts with a `TimeoutError` unless `touch`ed again within `ms`. */
+function idleTimeout(ms: number) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      controller.abort(new DOMException("idle", "TimeoutError"));
+    }, ms);
+  };
+  touch();
+  return {
+    signal: controller.signal,
+    touch,
+    stop: () => {
+      clearTimeout(timer);
+    },
+  };
+}
+
+function timeoutError(error: unknown): ProviderError {
+  const name = error instanceof Error ? error.name : "unknown";
+  console.error("[assistant] gateway unreachable", name);
+  if (name === "TimeoutError") {
+    return new ProviderError(
+      `The gateway went quiet for ${String(TIMEOUT_MS / 1000)} s. Its model may be cold-starting; try again.`,
+    );
+  }
+  return new ProviderError(
+    "The AI Control Layer gateway is unreachable. Is it running?",
+  );
+}
+
+/**
+ * Through the AI Control Layer gateway, streamed. Plain fetch: we need its refusal bodies
+ * and `x_control_layer`. The gateway releases only text its output controls already saw;
+ * its last event (verdict or refusal) decides the stored reply.
+ */
 async function callGateway(
   model: string,
   system: string,
   messages: ChatTurn[],
   principal: string | undefined,
+  onDelta: ((text: string) => void) | undefined,
 ): Promise<string> {
   const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
-  let response: Response;
+  // an idle limit, not a total one: a long answer keeps streaming
+  const idle = idleTimeout(TIMEOUT_MS);
   try {
-    response = await fetch(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        // the gateway resolves the calling principal from this key; no key, no call
-        authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
-        // the console-chat principal delegates: budgets, risk and activity are per user
-        ...(principal === undefined ? {} : { "x-on-behalf-of": principal }),
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "system", content: system }, ...messages],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (error) {
-    console.error(
-      "[assistant] gateway unreachable",
-      error instanceof Error ? error.name : "unknown",
-    );
-    throw new ProviderError(
-      "The AI Control Layer gateway is unreachable. Is it running?",
-    );
+    let response: Response;
+    try {
+      response = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          // the gateway resolves the calling principal from this key; no key, no call
+          authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
+          // the console-chat principal delegates: budgets, risk and activity are per user
+          ...(principal === undefined ? {} : { "x-on-behalf-of": principal }),
+        },
+        body: JSON.stringify({
+          model,
+          stream: true,
+          messages: [{ role: "system", content: system }, ...messages],
+        }),
+        signal: idle.signal,
+      });
+    } catch (error) {
+      throw timeoutError(error);
+    }
+
+    // refusals before the answer starts (prompt_in, budgets, upstream down) are plain JSON
+    if (
+      !response.ok ||
+      response.body === null ||
+      !(response.headers.get("content-type") ?? "").includes(
+        "text/event-stream",
+      )
+    ) {
+      const body: unknown = await response.json().catch(() => null);
+      return gatewayReply(
+        interpretGatewayResponse(response.status, body),
+        response.status,
+      );
+    }
+
+    let text = "";
+    let ending: Parameters<typeof finishGatewayStream>[1];
+    let buffer = "";
+    const handle = (events: GatewayStreamEvent[]) => {
+      for (const event of events) {
+        if (event.type === "delta") {
+          text += event.text;
+          onDelta?.(event.text);
+        } else if (event.type !== "done") {
+          ending = event;
+        }
+      }
+    };
+    try {
+      const reader = response.body
+        .pipeThrough(new TextDecoderStream())
+        .getReader();
+      for (;;) {
+        const { done, value: piece } = await reader.read();
+        if (done) {
+          break;
+        }
+        idle.touch();
+        const { events, rest } = decodeGatewaySse(buffer + piece);
+        buffer = rest;
+        handle(events);
+      }
+    } catch (error) {
+      throw timeoutError(error);
+    }
+    handle(decodeGatewaySse(`${buffer}\n`).events);
+    return gatewayReply(finishGatewayStream(text, ending), response.status);
+  } finally {
+    idle.stop();
   }
-  const body: unknown = await response.json().catch(() => null);
-  const outcome = interpretGatewayResponse(response.status, body);
+}
+
+function gatewayReply(outcome: GatewayOutcome, status: number): string {
   if (!outcome.ok) {
-    console.error("[assistant] gateway failed", response.status);
+    console.error("[assistant] gateway failed", status);
     throw new ProviderError(outcome.error);
   }
   return outcome.reply;
@@ -179,13 +288,19 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     return mockProvider;
   }
 
-  return async ({ history, policies, principal }) => {
+  return async ({ history, policies, principal, onDelta }) => {
     const system = buildSystemPrompt(policies);
     const messages = normalizeHistory(history);
     try {
       let reply: string;
       if (option.provider === "gateway") {
-        reply = await callGateway(option.model, system, messages, principal);
+        reply = await callGateway(
+          option.model,
+          system,
+          messages,
+          principal,
+          onDelta,
+        );
       } else {
         const credentials =
           option.connectionId === undefined
@@ -193,12 +308,19 @@ export function getAssistant(option: ModelOption): AssistantProvider {
             : await connectionCredentials(option.connectionId);
         reply =
           option.provider === "anthropic"
-            ? await callAnthropic(credentials, option.model, system, messages)
+            ? await callAnthropic(
+                credentials,
+                option.model,
+                system,
+                messages,
+                onDelta,
+              )
             : await callOpenAICompatible(
                 openAIClient(credentials),
                 option.model,
                 system,
                 messages,
+                onDelta,
               );
       }
       if (reply === "") {
