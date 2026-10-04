@@ -35,7 +35,7 @@ values
    array['llama3.1:8b', 'qwen2.5:7b', 'gpt-5', 'gpt-5-mini'], array['resources__describe', 'resources__query'],
    'a9f5584b7e7fb03131d7d2887d521492591b1ad4fd9c88db49ae00686d4ba164', 'member', true),
 
-  -- The self-test program (`just test system`). It names a fresh end user for
+  -- The self-test (the console's Self-test page). It names a fresh end user for
   -- every case, so its own refusals never add up to a risk block on anyone
   -- else, and holds one model and one tool so the grant refusals have
   -- something to refuse.

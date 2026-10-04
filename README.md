@@ -72,20 +72,15 @@ is in [`DEMO.md`](DEMO.md).
 
 ### 2. Run the self-tests
 
-For the full end-to-end self-test, first configure `DATABASE_URL` in `.env` and
-load the demo data, then run:
+The full end-to-end self-test runs from the console. Load the demo data once
+(`just seed`), start the gateway with the deliberately vulnerable demo MCP
+server behind it (`just demo`) and the web app, then sign in as a security team
+admin, open **Self-test** and press **Perform self-test**.
 
-```bash
-just seed
-just test system
-```
-
-The suite starts the gateway and deliberately vulnerable demo MCP server, then
-prints the outcome and risk score for prompt, response, identity/model grant,
-MCP tool-call, tool-result and attack-history checks. Service logs are written
-to `target/selftest-services.log`; the command exits non-zero if any expected
-control outcome is missed. To target an already-running compatible gateway,
-run `SELFTEST_URL=https://your-gateway.example just test system` instead.
+The gateway sends every case through its own routes and the page shows the log
+as it is written: the outcome and risk score for prompt, response,
+identity/model grant, MCP tool-call, tool-result and attack-history checks,
+ending in `RESULT: PASS` or `RESULT: FAIL`.
 
 ## Tech
 

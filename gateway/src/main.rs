@@ -197,6 +197,7 @@ fn index_json(state: &AppState) -> Value {
             "GET  /policy": "admin: the catalog currently being enforced",
             "POST /admin/policy": "admin: upload and activate a catalog",
             "GET  /admin/risk": "admin: per-user risk scores, searchable with ?q=",
+            "POST /admin/selftest": "admin: run the full-system self-test, streaming its log",
             "GET  /admin/approvals/stream": "SSE of pending access requests (security_admin)",
             "POST /admin/approvals/{id}": "approve or deny an access request (security_admin)",
         },

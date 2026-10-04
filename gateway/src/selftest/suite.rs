@@ -1,12 +1,13 @@
-//! Self-test of the full running system (`just test system`).
+//! Self-test of the full running system, started from the console's Self-test
+//! page (`POST /admin/selftest`).
 //!
-//! Sends prompts and tool calls to a running gateway, which polices them with
-//! its active catalog, its database (identities, audit, history), its semantic
-//! judge (the mock, or the Ollama at `OLLAMA_URL`) and the `mcp-demo` server
-//! behind it, and prints every input with what the gateway did to it and the
-//! risk score it assigned. Exits non-zero when any case misses.
+//! Sends prompts and tool calls to this gateway over HTTP, which polices them
+//! with its active catalog, its database (identities, audit, history), its
+//! semantic judge (the mock, or the Ollama at `OLLAMA_URL`) and the `mcp-demo`
+//! server behind it, and logs every input with what the gateway did to it and
+//! the risk score it assigned.
 //!
-//! - `SELFTEST_URL`    gateway to test (default `http://localhost:$PORT`, PORT 8080)
+//! - `SELFTEST_URL`    gateway to test (default `http://127.0.0.1:$PORT`, PORT 8080)
 //! - `SELFTEST_KEY`    a principal that delegates users (default `selftest-dev-key`)
 //! - `AGENT_KEY`       a principal that does not (default `demo-agent-dev-key`)
 //! - `SELFTEST_MODEL`  model granted to the self-test principal (default `llama3.1:8b`)
@@ -20,11 +21,13 @@
 //! the gateway runs that catalog; against another one, a failing case may be a
 //! catalog change rather than a defect. Upload both files to test it.
 
-use std::process::ExitCode;
 use std::time::Duration;
 
-use gateway::selftest::{self, Call, Caller, Case, Expect, case};
 use serde_json::{Value, json};
+use tokio::sync::mpsc::UnboundedSender;
+
+use super::{Call, Caller, Case, Expect, case};
+use crate::state::AppState;
 
 /// The catalog these cases were written for, and the signature feed with it.
 const CATALOG: &str = include_str!("../../../policy/selftest/control-catalog.toml");
@@ -32,15 +35,15 @@ const SIGNATURES: &str = include_str!("../../../policy/selftest/signatures.toml"
 
 /// The policy version the gateway reports when it runs [`CATALOG`].
 fn expected_version() -> String {
-    gateway::policy::Policy::compile(CATALOG, Some(SIGNATURES), "policy/selftest")
+    crate::policy::Policy::compile(CATALOG, Some(SIGNATURES), "policy/selftest")
         .map(|policy| policy.sha256)
         .unwrap_or_default()
 }
 
-struct Run {
+pub struct Run {
     base: String,
     http: reqwest::Client,
-    id: String,
+    pub id: String,
     key: String,
     agent_key: String,
     model: String,
@@ -48,6 +51,21 @@ struct Run {
 }
 
 impl Run {
+    pub fn from_env() -> Self {
+        let base = env("SELFTEST_URL").unwrap_or_else(|| {
+            format!("http://127.0.0.1:{}", env("PORT").unwrap_or_else(|| "8080".into()))
+        });
+        Self {
+            base: base.trim_end_matches('/').to_owned(),
+            http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build().expect("http client"),
+            id: uuid::Uuid::new_v4().simple().to_string()[..8].to_owned(),
+            key: env("SELFTEST_KEY").unwrap_or_else(|| "selftest-dev-key".into()),
+            agent_key: env("AGENT_KEY").unwrap_or_else(|| "demo-agent-dev-key".into()),
+            model: env("SELFTEST_MODEL").unwrap_or_else(|| "llama3.1:8b".into()),
+            users: 0,
+        }
+    }
+
     /// The self-test principal acting for a user nobody else is.
     fn fresh(&mut self) -> Caller {
         self.users += 1;
@@ -71,44 +89,30 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    dotenvy::dotenv().ok();
-    let base = env("SELFTEST_URL").unwrap_or_else(|| {
-        format!("http://localhost:{}", env("PORT").unwrap_or_else(|| "8080".into()))
-    });
-    let mut run = Run {
-        base: base.trim_end_matches('/').to_owned(),
-        http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build().expect("http client"),
-        id: uuid::Uuid::new_v4().simple().to_string()[..8].to_owned(),
-        key: env("SELFTEST_KEY").unwrap_or_else(|| "selftest-dev-key".into()),
-        agent_key: env("AGENT_KEY").unwrap_or_else(|| "demo-agent-dev-key".into()),
-        model: env("SELFTEST_MODEL").unwrap_or_else(|| "llama3.1:8b".into()),
-        users: 0,
+/// Run every case against the gateway `state` belongs to, sending the log to
+/// `log` line by line. Stops early once nobody reads the log any more.
+pub async fn run(state: AppState, mut run: Run, log: UnboundedSender<String>) {
+    let say = |line: String| {
+        let _ = log.send(line + "\n");
     };
-
-    let Some(index) = wait_for(&run).await else {
-        eprintln!("no gateway answered at {} — start it (`just demo`) or set SELFTEST_URL", run.base);
-        return ExitCode::FAILURE;
-    };
-    let policy = &index["policy"];
-    println!("AI Control Layer self-test, run {}", run.id);
-    println!("  gateway         {}", run.base);
-    println!(
+    let policy = state.policy.load();
+    say(format!("AI Control Layer self-test, run {}", run.id));
+    say(format!("  gateway         {}", run.base));
+    say(format!(
         "  policy          {} ({} deterministic, {} semantic controls, fail mode {})",
-        policy["version"].as_str().unwrap_or("?").get(..12).unwrap_or("?"),
-        policy["deterministic_controls"],
-        policy["semantic_controls"],
-        policy["fail_mode"].as_str().unwrap_or("?"),
-    );
-    if policy["version"].as_str() == Some(expected_version().as_str()) {
-        println!("  catalog         policy/selftest/, the one these cases were written for");
+        policy.sha256.get(..12).unwrap_or("?"),
+        policy.deterministic.len() + policy.signature_controls.len(),
+        policy.semantic.len(),
+        json!(policy.fail_mode).as_str().unwrap_or("?"),
+    ));
+    if policy.sha256 == expected_version() {
+        say("  catalog         policy/selftest/, the one these cases were written for".into());
     } else {
-        println!("  catalog         WARNING: not policy/selftest/, the catalog these cases were written for;");
-        println!("                  upload it, or read a failing case as a possible catalog change");
+        say("  catalog         WARNING: not policy/selftest/, the catalog these cases were written for;".into());
+        say("                  upload it, or read a failing case as a possible catalog change".into());
     }
-    println!("  semantic judge  {}", index["semantic_judge"].as_str().unwrap_or("unknown"));
-    println!("  chat upstream   {}", index["chat_upstream"].as_str().unwrap_or("unknown"));
+    say(format!("  semantic judge  {}", if state.detectors.mocked() { "mock" } else { "llm_judge" }));
+    say(format!("  chat upstream   {}", if state.upstream == crate::mock::MOCK { "mock" } else { "model" }));
 
     let sections = [
         ("Prompts — deterministic tier", prompts(&mut run)),
@@ -124,13 +128,16 @@ async fn main() -> ExitCode {
     let mut failed = Vec::new();
     let mut number = 0;
     for (title, cases) in sections {
-        println!("\n=== {title} ===\n");
+        say(format!("\n=== {title} ===\n"));
         let mut passed = 0;
         for case in &cases {
+            if log.is_closed() {
+                return;
+            }
             number += 1;
-            let outcome = selftest::send(&run.http, &run.base, &case.call).await;
+            let outcome = super::send(&run.http, &run.base, &case.call).await;
             let ok = outcome.as_ref().is_ok_and(|seen| seen.passed(case.expect));
-            println!("{}", selftest::render(number, case, &outcome));
+            say(super::render(number, case, &outcome));
             if ok {
                 passed += 1;
             } else {
@@ -140,32 +147,21 @@ async fn main() -> ExitCode {
         summary.push((title, passed, cases.len()));
     }
 
-    println!("=== Summary ===\n");
+    say("=== Summary ===\n".into());
     for (title, passed, total) in &summary {
-        println!("  {passed:>2}/{total:<2}  {title}");
+        say(format!("  {passed:>2}/{total:<2}  {title}"));
     }
     let total: usize = summary.iter().map(|(_, _, total)| total).sum();
-    println!("\n  {} of {total} cases passed", total - failed.len());
+    say(format!("\n  {} of {total} cases passed", total - failed.len()));
     if failed.is_empty() {
-        return ExitCode::SUCCESS;
+        say("\nRESULT: PASS".into());
+        return;
     }
-    println!("\n  failed:");
+    say("\n  failed:".into());
     for name in &failed {
-        println!("    {name}");
+        say(format!("    {name}"));
     }
-    ExitCode::FAILURE
-}
-
-/// The gateway's index once `/health` answers, retrying while it starts.
-async fn wait_for(run: &Run) -> Option<Value> {
-    for _ in 0..60 {
-        if run.http.get(format!("{}/health", run.base)).send().await.is_ok_and(|r| r.status().is_success()) {
-            let index = run.http.get(&run.base).header("accept", "application/json").send().await.ok()?;
-            return index.json().await.ok();
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    None
+    say("\nRESULT: FAIL".into());
 }
 
 /// Token-shaped strings are assembled at runtime so the source never holds a

@@ -138,6 +138,11 @@ pub fn document() -> Value {
                     {"name": "limit", "in": "query", "schema": {"type": "integer", "maximum": 500, "default": 500}}
                 ],
                 "responses": with(json!({"200": ok("Thresholds and users", json!({"$ref": "#/components/schemas/RiskReport"}))}), admin_errors())}},
+            "/admin/selftest": {"post": {
+                "tags": ["admin"], "summary": "Run the full-system self-test against this gateway",
+                "description": "Sends every self-test case through this gateway's own routes and streams the log as plain text while it runs; the last line is `RESULT: PASS` or `RESULT: FAIL`. Admin role only.",
+                "security": admin,
+                "responses": with(json!({"200": {"description": "Self-test log", "content": {"text/plain": {"schema": {"type": "string"}}}}}), admin_errors())}},
             "/admin/approvals/stream": {"get": {
                 "tags": ["admin"], "summary": "Stream access requests awaiting a human decision",
                 "description": "Server-sent events. Pending requests are replayed on connect, then `request`, `decided` and `expired` events follow; each event's data is JSON with a `type` field. Takes a security_admin principal's API key.",

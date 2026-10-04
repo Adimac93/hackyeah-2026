@@ -8,6 +8,7 @@ pub mod auth;
 pub mod budgets;
 pub mod export;
 pub mod risk;
+pub mod selftest;
 
 use axum::Json;
 use axum::extract::State;

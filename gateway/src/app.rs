@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/budgets/{id}", delete(admin::budgets::delete))
         .route("/admin/audit/export", get(admin::export::export))
         .route("/admin/risk", get(admin::risk::list))
+        .route("/admin/selftest", post(admin::selftest::run))
         .route("/admin/approvals/stream", get(approvals::http::stream))
         .route("/admin/approvals/{id}", post(approvals::http::decide))
 }

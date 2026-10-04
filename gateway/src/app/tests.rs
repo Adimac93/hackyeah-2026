@@ -8,8 +8,8 @@
 //! and history reads and writes fail fast and are skipped.
 //!
 //! The same cases against the full running system, with a database, a real
-//! MCP server and whichever judge the gateway is configured with, are the
-//! `selftest` binary's (`just test system`).
+//! MCP server and whichever judge the gateway is configured with, run from
+//! the console's Self-test page (`selftest::suite`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,7 +148,7 @@ fn tool(name: &str, arguments: Value) -> Call {
 }
 
 /// Run every case and fail with the ones that missed. The report is printed
-/// only when something fails; `just test system` is the run to read.
+/// only when something fails; the console's Self-test page is the run to read.
 async fn run(title: &str, gateway: &Gateway, cases: Vec<Case>) {
     let mut report = format!("\n=== {title} ===\n");
     let mut failed = Vec::new();

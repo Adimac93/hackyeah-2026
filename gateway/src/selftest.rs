@@ -2,9 +2,11 @@
 //! HTTP, read back what the control layer did with it, and say whether that
 //! is what the case expected.
 //!
-//! Two drivers use it. The `selftest` binary runs it against the full running
-//! system (`just test system`) and prints every case; the cargo tests in
+//! Two drivers use it. [`suite`] runs it against the full running system
+//! from the console's Self-test page and logs every case; the cargo tests in
 //! `app/tests.rs` run it against the routes served in-process.
+
+pub mod suite;
 
 use std::fmt::{self, Write as _};
 use std::time::Instant;

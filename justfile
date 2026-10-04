@@ -35,37 +35,11 @@ typecheck:
 lint:
     cd web && pnpm lint && pnpm format:check
 
-# `system` drives the full system — gateway, database, semantic judge and
-# mcp-demo — and prints every prompt, its result and risk score. It starts
-# them itself (needs DATABASE_URL and `just seed`), or set SELFTEST_URL to test
-# a gateway that is already running.
-# unit + in-process tests for both apps; `just test system`: full-system self-test
-test target="unit":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{target}}" in
-      unit)
-        cargo test --workspace --all-targets
-        cd web && pnpm test
-        ;;
-      system)
-        cargo build -p gateway --bin gateway --bin selftest -p mcp-demo --bin mcp-demo
-        if [ -n "${SELFTEST_URL:-}" ]; then exec ./target/debug/selftest; fi
-        : "${DATABASE_URL:?set DATABASE_URL in .env, or SELFTEST_URL to test a running gateway}"
-        log=target/selftest-services.log
-        ./target/debug/mcp-demo > "$log" 2>&1 &
-        demo_pid=$!
-        ./target/debug/gateway >> "$log" 2>&1 &
-        api_pid=$!
-        trap 'kill $demo_pid $api_pid 2>/dev/null || true' EXIT
-        echo "gateway and mcp-demo started, their logs: $log"
-        ./target/debug/selftest
-        ;;
-      *)
-        echo "just test [unit|system]" >&2
-        exit 1
-        ;;
-    esac
+# unit + in-process tests for both apps. The full-system self-test runs from
+# the console's Self-test page.
+test:
+    cargo test --workspace --all-targets
+    cd web && pnpm test
 
 # gateway and web app together — what you want for the demo
 dev:
