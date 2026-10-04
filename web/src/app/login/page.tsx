@@ -2,9 +2,9 @@ import { redirect } from "next/navigation";
 
 import { AuthShell } from "@/components/auth-shell";
 import { getSession } from "@/lib/auth";
-import { demoAdmin } from "@/lib/demo-login";
+import { availableDemoAccounts } from "@/lib/demo-login";
 
-import { DemoAdminButton } from "./demo-admin-button";
+import { DemoLoginButton } from "./demo-login-button";
 import { LoginForm } from "./login-form";
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
@@ -13,6 +13,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
     redirect("/dashboard");
   }
   const { next, error } = await searchParams;
+  const demoAccounts = availableDemoAccounts();
 
   return (
     <AuthShell
@@ -31,12 +32,22 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         </p>
       )}
       <LoginForm next={typeof next === "string" ? next : undefined} />
-      {demoAdmin() === null ? null : (
+      {demoAccounts.length === 0 ? null : (
         <div className="mt-5 border-t border-zinc-800 pt-5">
           <p className="eyebrow mb-3 text-center text-zinc-500">
             Demo access — no account needed
           </p>
-          <DemoAdminButton next={typeof next === "string" ? next : undefined} />
+          <div
+            className={`grid gap-2 ${demoAccounts.length > 1 ? "sm:grid-cols-2" : ""}`}
+          >
+            {demoAccounts.map((account) => (
+              <DemoLoginButton
+                key={account}
+                account={account}
+                next={typeof next === "string" ? next : undefined}
+              />
+            ))}
+          </div>
         </div>
       )}
     </AuthShell>

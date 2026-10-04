@@ -3,7 +3,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { demoAdmin } from "@/lib/demo-login";
+import { demoAccount } from "@/lib/demo-login";
+import type { DemoAccount } from "@/lib/demo-login";
 import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
 import { createClient } from "@/lib/supabase/server";
@@ -59,27 +60,42 @@ export async function authenticate(
   redirect(safeNext(formData.get("next")));
 }
 
-/** Demo only: sign in as the configured admin. Refuses unless DEMO_ADMIN_LOGIN is on. */
-export async function loginAsDemoAdmin(
-  _previous: FormState,
+/** Demo only: sign in as a configured demo account. Refuses unless DEMO_ADMIN_LOGIN is on. */
+async function loginAsDemo(
+  account: DemoAccount,
   formData: FormData,
 ): Promise<FormState> {
-  const admin = demoAdmin();
-  if (admin === null) {
+  const credentials = demoAccount(account);
+  if (credentials === null) {
     return { error: "Demo login is disabled." };
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({
-    email: admin.email,
-    password: "Pa$$w0rd123456789",
-  });
+  const { error } = await supabase.auth.signInWithPassword(credentials);
   if (error !== null) {
-    console.error("[auth] demo admin login failed", error.status, error.code);
-    return { error: "Demo admin login failed." };
+    console.error(
+      `[auth] demo ${account} login failed`,
+      error.status,
+      error.code,
+    );
+    return { error: `Demo ${account} login failed.` };
   }
 
   redirect(safeNext(formData.get("next")));
+}
+
+export async function loginAsDemoAdmin(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  return loginAsDemo("admin", formData);
+}
+
+export async function loginAsDemoDeveloper(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  return loginAsDemo("developer", formData);
 }
 
 export async function signOut() {
