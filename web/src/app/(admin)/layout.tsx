@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { ApprovalPopup } from "@/components/approval-popup";
+import { ConfirmButton } from "@/components/confirm-button";
 import { ShieldIcon } from "@/components/icons";
 import { Nav } from "@/components/nav";
 import { StatusBadge } from "@/components/ui";
@@ -9,10 +11,22 @@ import { canAccessConsole, canWrite } from "@/lib/domain";
 
 import packageJson from "../../../package.json";
 import { signOut } from "../login/actions";
+import { deleteAllConversations } from "./chat/actions";
+import { ChatHistory } from "./chat/chat-history";
+import type { ConversationSummary } from "./chat/chat-history";
 
 export default async function AdminLayout({ children }: LayoutProps<"/">) {
-  const { member } = await requireAnyMember();
+  const { supabase, member } = await requireAnyMember();
   const hasConsole = canAccessConsole(member.role);
+  // developers only use the assistant: their sidebar is the chat history
+  const { data: conversationRows } = hasConsole
+    ? { data: null }
+    : await supabase
+        .from("chat_conversations")
+        .select("id, title, updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(50);
+  const conversations = (conversationRows ?? []) as ConversationSummary[];
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
@@ -23,7 +37,40 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
           </div>
           <span className="font-semibold text-zinc-50">SecOps Console</span>
         </div>
-        <Nav consoleAccess={hasConsole} />
+        {hasConsole ? (
+          <Nav consoleAccess />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <Link
+              href="/chat"
+              className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
+            >
+              <span aria-hidden className="text-base leading-none">
+                +
+              </span>
+              New chat
+            </Link>
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="mb-1 flex items-center justify-between px-2">
+                <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
+                  History
+                </p>
+                {conversations.length > 0 && (
+                  <form action={deleteAllConversations}>
+                    <ConfirmButton confirmLabel="Delete all?">
+                      Clear
+                    </ConfirmButton>
+                  </form>
+                )}
+              </div>
+              <div className="scrollbar-subtle -mx-1 max-h-64 overflow-y-auto px-1 md:max-h-none md:flex-1">
+                <Suspense>
+                  <ChatHistory conversations={conversations} />
+                </Suspense>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-2 pt-3 md:mt-auto md:block md:space-y-3 md:pt-4">
           <div className="min-w-0">
             <p className="truncate text-sm text-zinc-200">

@@ -1,18 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import { ConfirmButton } from "@/components/confirm-button";
-import { TrashIcon } from "@/components/icons";
 import { ProviderIcon } from "@/components/provider-icon";
 import { Card, Field, PageHeader } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
-import { fmtDateTime, timeAgo } from "@/lib/format";
+import { canAccessConsole } from "@/lib/domain";
+import { fmtDateTime } from "@/lib/format";
 import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
 
 import { deleteAllConversations, deleteConversation } from "./actions";
 import { ChatComposer } from "./chat-composer";
+import { ChatHistory } from "./chat-history";
 import { ModelSelect } from "./model-select";
 
 const SUGGESTIONS = [
@@ -52,90 +54,35 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
     notFound();
   }
 
-  return (
-    <>
-      <PageHeader
-        title="Security assistant"
-        subtitle="Ask about secure coding and company security policy. Your chats are private to you."
-      />
-
-      <div className="grid gap-6 lg:grid-cols-4">
-        <Card
-          title="Conversations"
-          actions={
-            <div className="flex items-center gap-3">
-              {conversations.length > 0 && (
-                <form action={deleteAllConversations}>
-                  <ConfirmButton confirmLabel="Delete all?">
-                    Delete all
-                  </ConfirmButton>
-                </form>
-              )}
-              <Link
-                href="/chat"
-                className="text-xs text-emerald-400 hover:underline"
-              >
-                New chat
-              </Link>
-            </div>
-          }
-          className="h-fit"
-        >
-          <ul className="-mx-2 space-y-0.5">
-            {conversations.map((conv) => (
-              <li
-                key={conv.id}
-                className={`group flex items-center gap-1 rounded-lg pr-2 ${
-                  conv.id === activeId
-                    ? "bg-zinc-800 text-zinc-50"
-                    : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
-                }`}
-              >
-                <Link
-                  href={`/chat?c=${conv.id}`}
-                  className="min-w-0 flex-1 px-2 py-1.5 text-sm"
-                >
-                  <span className="block truncate">{conv.title}</span>
-                  <span className="text-xs text-zinc-500">
-                    {timeAgo(conv.updated_at)}
-                  </span>
-                </Link>
-                <form
-                  action={deleteConversation.bind(null, conv.id, activeId)}
-                  className="shrink-0"
-                >
-                  <ConfirmButton
-                    title="Delete conversation"
-                    confirmLabel="Delete?"
-                    className="opacity-60 group-hover:opacity-100"
-                  >
-                    <TrashIcon className="h-3.5 w-3.5" />
-                  </ConfirmButton>
-                </form>
-              </li>
-            ))}
-            {conversations.length === 0 && (
-              <li className="px-2 text-sm text-zinc-500">
-                No conversations yet.
-              </li>
-            )}
-          </ul>
-        </Card>
-
-        <Card
-          title={active?.title ?? "New chat"}
-          actions={
-            active === null ? null : (
-              <form action={deleteConversation.bind(null, active.id, null)}>
-                <ConfirmButton confirmLabel="Delete this chat?">
-                  Delete
-                </ConfirmButton>
-              </form>
-            )
-          }
-          className="lg:col-span-3"
-        >
-          <div className="space-y-4">
+  // developers get the history in the sidebar and only the chat here
+  const consoleView = canAccessConsole(member.role);
+  const chatCard = (
+    <Card
+      title={active?.title ?? "New chat"}
+      actions={
+        active === null ? null : (
+          <form action={deleteConversation.bind(null, active.id, null)}>
+            <ConfirmButton confirmLabel="Delete this chat?">
+              Delete
+            </ConfirmButton>
+          </form>
+        )
+      }
+      className={
+        consoleView
+          ? "lg:col-span-3"
+          : // full height below main's padding, so the input sits at the bottom
+            "flex min-h-[70dvh] flex-col md:h-[calc(100dvh-4rem)] md:min-h-0"
+      }
+      bodyClassName={consoleView ? "p-5" : "flex min-h-0 flex-1 flex-col p-5"}
+    >
+      <ChatComposer
+        conversationId={active?.id ?? null}
+        placeholder="Ask anything… (never paste real secrets)"
+        fill={!consoleView}
+        messageCount={messages.length}
+        thread={
+          <>
             {messages.length === 0 && (
               <div className="rounded-lg border border-dashed border-zinc-800 p-5 text-sm text-zinc-400">
                 <p>Try asking:</p>
@@ -174,28 +121,67 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                 </div>
               </div>
             ))}
-          </div>
+          </>
+        }
+      >
+        <Field label="Model">
+          <ModelSelect
+            // remount when switching conversations so the default follows
+            key={active?.id ?? "new"}
+            name="model"
+            defaultValue={selected.id}
+            showDetails={member.role === "admin"}
+            options={models.map((o) => ({
+              value: o.id,
+              label: o.label,
+              icon: o.icon,
+            }))}
+          />
+        </Field>
+      </ChatComposer>
+    </Card>
+  );
+  if (!consoleView) {
+    return chatCard;
+  }
 
-          <ChatComposer
-            conversationId={active?.id ?? null}
-            placeholder="Ask anything… (never paste real secrets)"
-          >
-            <Field label="Model">
-              <ModelSelect
-                // remount when switching conversations so the default follows
-                key={active?.id ?? "new"}
-                name="model"
-                defaultValue={selected.id}
-                showDetails={member.role === "admin"}
-                options={models.map((o) => ({
-                  value: o.id,
-                  label: o.label,
-                  icon: o.icon,
-                }))}
-              />
-            </Field>
-          </ChatComposer>
+  return (
+    <>
+      <PageHeader
+        title="Security assistant"
+        subtitle="Ask about secure coding and company security policy. Your chats are private to you."
+      />
+
+      <div className="grid gap-6 lg:grid-cols-4">
+        <Card
+          title="Conversations"
+          actions={
+            <div className="flex items-center gap-3">
+              {conversations.length > 0 && (
+                <form action={deleteAllConversations}>
+                  <ConfirmButton confirmLabel="Delete all?">
+                    Delete all
+                  </ConfirmButton>
+                </form>
+              )}
+              <Link
+                href="/chat"
+                className="text-xs text-emerald-400 hover:underline"
+              >
+                New chat
+              </Link>
+            </div>
+          }
+          className="h-fit"
+        >
+          <div className="-mx-2">
+            <Suspense>
+              <ChatHistory conversations={conversations} />
+            </Suspense>
+          </div>
         </Card>
+
+        {chatCard}
       </div>
     </>
   );

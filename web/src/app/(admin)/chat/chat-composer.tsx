@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { KeyboardEvent, ReactNode, SubmitEvent } from "react";
 
 import { ArrowUpIcon } from "@/components/icons";
@@ -56,18 +56,28 @@ async function readChatStream(
 }
 
 /**
- * The chat input. Sends to `/api/chat` and streams the reply into an assistant bubble
- * under the conversation as the model writes it, then reloads the page's messages.
- * Enter (or ⌘/Ctrl+Enter) sends; Shift+Enter starts a new line.
+ * The conversation and its input. Sends to `/api/chat` and streams the reply into
+ * an assistant bubble at the end of the thread as the model writes it, then reloads
+ * the page's messages. Enter (or ⌘/Ctrl+Enter) sends; Shift+Enter starts a new line.
+ * With `fill`, the thread scrolls and the input stays pinned to the bottom.
  */
 export function ChatComposer({
   conversationId,
   placeholder,
+  thread,
+  messageCount,
+  fill = false,
   children,
 }: {
   /** null starts a new conversation */
   conversationId: string | null;
   placeholder: string;
+  /** the conversation's messages */
+  thread: ReactNode;
+  /** changes when a message is added, to keep the newest in view */
+  messageCount: number;
+  /** take the parent's full height: scrolling thread, input at the bottom */
+  fill?: boolean;
   /** extra fields under the input, e.g. the model picker */
   children?: ReactNode;
 }) {
@@ -79,7 +89,17 @@ export function ChatComposer({
   const [reply, setReply] = useState("");
   const [hasText, setHasText] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const pending = streaming || reloading;
+
+  // open on the newest message, and follow the thread as it grows (a no-op
+  // when the thread isn't its own scroll area)
+  useEffect(() => {
+    const element = scroller.current;
+    if (element !== null) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [messageCount, pending, reply]);
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // let an IME finish composing (Polish/CJK input) before Enter means "send"
@@ -167,38 +187,48 @@ export function ChatComposer({
   }
 
   return (
-    <>
-      {pending ? (
-        <div className="mt-4 space-y-4">
-          {sent === "" ? null : (
-            <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-emerald-50 ring-1 ring-emerald-500/30">
-                {sent}
+    <div className={fill ? "flex min-h-0 flex-1 flex-col" : ""}>
+      <div
+        ref={scroller}
+        className={
+          fill
+            ? "scrollbar-subtle -mr-3 min-h-0 flex-1 space-y-4 overflow-y-auto pr-3"
+            : "space-y-4"
+        }
+      >
+        {thread}
+        {pending ? (
+          <div className="space-y-4">
+            {sent === "" ? null : (
+              <div className="flex justify-end">
+                <div className="max-w-[85%] rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-emerald-50 ring-1 ring-emerald-500/30">
+                  {sent}
+                </div>
               </div>
-            </div>
-          )}
-          {reply === "" ? (
-            error === null ? (
-              <TypingBubble />
-            ) : null
-          ) : (
-            <div className="flex justify-start" aria-live="polite">
-              <div className="max-w-[85%] rounded-xl bg-zinc-800/80 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
-                {reply}
-                {streaming ? (
-                  <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
-                ) : null}
+            )}
+            {reply === "" ? (
+              error === null ? (
+                <TypingBubble />
+              ) : null
+            ) : (
+              <div className="flex justify-start" aria-live="polite">
+                <div className="max-w-[85%] rounded-xl bg-zinc-800/80 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
+                  {reply}
+                  {streaming ? (
+                    <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
+                  ) : null}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      ) : null}
+            )}
+          </div>
+        ) : null}
+      </div>
 
       <form
         onSubmit={(event) => {
           void onSubmit(event);
         }}
-        className="mt-6 space-y-3 border-t border-zinc-800 pt-5"
+        className="mt-6 shrink-0 space-y-3 border-t border-zinc-800 pt-5"
       >
         <div className="flex items-end gap-2 rounded-[28px] border border-zinc-800 bg-zinc-800/60 py-2 pr-2 pl-6 transition-colors focus-within:border-zinc-600">
           <textarea
@@ -236,6 +266,6 @@ export function ChatComposer({
           </p>
         )}
       </form>
-    </>
+    </div>
   );
 }
