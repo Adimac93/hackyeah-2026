@@ -235,6 +235,40 @@
   input[type="radio"] {
     accent-color: var(--b-500);
   }
+
+  /*
+   * One cursor language: everything clickable shows the pointer, everything
+   * disabled shows not-allowed. Tailwind's preflight leaves buttons on the
+   * default arrow, so links and buttons disagreed. Utilities (`cursor-*`)
+   * still win where a component needs something else.
+   */
+  a[href],
+  button,
+  [role="button"],
+  [role="radio"],
+  [role="tab"],
+  summary,
+  select,
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]),
+  label:has(input[type="file"]),
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="file"],
+  input[type="submit"],
+  input[type="button"],
+  ::file-selector-button {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled,
+  [aria-disabled="true"],
+  label:has(> input:disabled) {
+    cursor: not-allowed;
+  }
 }
 
 /* ------------------------------------------------------------ utilities */

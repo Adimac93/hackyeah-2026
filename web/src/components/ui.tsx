@@ -172,11 +172,11 @@ export function PageHeader({
 
 /** The landing's primary button: navy (blue in dark), lifts on hover. */
 export const buttonClass =
-  "inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px disabled:translate-y-0 hover:bg-emerald-600 disabled:bg-emerald-500 disabled:opacity-50";
 
 /** The landing's secondary button: hairline outline, sand on hover. */
 export const secondaryButtonClass =
-  "inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900 disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px disabled:translate-y-0 hover:bg-zinc-900 disabled:bg-transparent disabled:opacity-50";
 
 export function ButtonLink({
   href,

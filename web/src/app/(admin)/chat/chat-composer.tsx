@@ -481,7 +481,7 @@ export function ChatComposer({
             disabled={pending || !canSend}
             title="Send (Enter)"
             aria-label={pending ? "Sending" : "Send"}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:bg-zinc-800 disabled:text-zinc-500"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 transition enabled:hover:-translate-y-px enabled:hover:bg-emerald-600 disabled:bg-zinc-800 disabled:text-zinc-500"
           >
             <ArrowUpIcon className="h-3.5 w-3.5" />
           </button>

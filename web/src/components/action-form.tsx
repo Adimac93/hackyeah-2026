@@ -49,10 +49,10 @@ export function ActionForm({
       <button
         type="submit"
         disabled={pending || disabled}
-        className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] transition hover:-translate-y-px disabled:pointer-events-none disabled:opacity-50 ${
+        className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] transition enabled:hover:-translate-y-px disabled:opacity-50 ${
           danger === true
-            ? "bg-red-500 text-zinc-950 hover:bg-red-400"
-            : "bg-emerald-500 text-zinc-950 hover:bg-emerald-600"
+            ? "bg-red-500 text-zinc-950 enabled:hover:bg-red-400"
+            : "bg-emerald-500 text-zinc-950 enabled:hover:bg-emerald-600"
         }`}
       >
         {pending ? pendingLabel : submitLabel}

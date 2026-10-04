@@ -230,7 +230,7 @@ function RequestDialog({
                   onClick={() => {
                     decide("approve");
                   }}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition enabled:hover:-translate-y-px enabled:hover:bg-emerald-600 disabled:opacity-50"
                 >
                   Approve
                 </button>
