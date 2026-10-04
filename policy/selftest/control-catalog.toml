@@ -1,0 +1,300 @@
+# AI Control Layer — control catalog.
+#
+# The catalog is the single configuration source (task.md §4.1). It lives in
+# the database: this file is the documented sample, compiled into the gateway
+# and seeded on first start. To change the running policy, upload an edited
+# copy (console, or POST /admin/policy); every instance activates it within
+# 5 s, and in-flight requests finish under the policy they started with. An
+# invalid upload is rejected with the error and the last good version keeps
+# serving — a config typo must never take the control layer offline.
+#
+# Budgets are not set here: they are rows in the `budgets` table, edited
+# through PUT /admin/budgets. Model and tool grants per identity live in
+# `principals` and are deny-by-default.
+#
+# Patterns use TOML literal strings ('...'), so regex backslashes need no
+# escaping. Write the regex exactly as you would test it.
+#
+# Every control takes `enabled = false` to switch it off without deleting it.
+# Unknown keys are rejected, so a misspelled setting fails the upload loudly
+# instead of being ignored.
+
+schema_version = 1
+# The active profile supplies defaults only; a control's explicit `action` or
+# `fail_mode` always wins. Change this to `permissive` or `strict` during a
+# demo to alter unqualified controls without editing every rule.
+profile = "balanced"
+
+[profiles.permissive]
+on_detect = "flag"
+fail_mode = "open"
+
+[profiles.balanced]
+on_detect = "block"
+fail_mode = "closed"
+
+[profiles.strict]
+on_detect = "block"
+fail_mode = "closed"
+
+[defaults]
+# Applied when a control does not set its own. allow | redact | block
+on_detect = "block"
+# What to do when a control itself errors or times out. closed = deny.
+fail_mode = "closed"
+
+[models]
+# Deny wins over allow. Empty allowed list means "any model not denied". Each
+# identity's `allowed_models` then narrows this further.
+# gpt-* are routed by the gateway to the console's OpenAI connection (Models page).
+allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b", "gpt-5", "gpt-5-mini"]
+denied = []
+
+# ---------------------------------------------------------------- pricing
+# USD per million tokens, used for `limit_usd` budgets and cost reporting. The
+# local models carry an internal chargeback rate; a commercial model would use
+# its list price. An unpriced model costs nothing.
+
+[pricing."llama3.1:8b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
+[pricing."qwen2.5:7b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
+[pricing."mistral:7b"]
+input_per_mtok = 0.20
+output_per_mtok = 0.20
+
+# OpenAI list prices at launch; check the current price list before relying on cost reports.
+[pricing."gpt-5"]
+input_per_mtok = 1.25
+output_per_mtok = 10.00
+
+[pricing."gpt-5-mini"]
+input_per_mtok = 0.25
+output_per_mtok = 2.00
+
+# ---------------------------------------------------------------- history
+# §4.4. The risk score is the sum of recent blocked/flagged detections for an
+# identity (critical 1.0, high 0.65, medium 0.35, low 0.15). Past
+# `escalate_at`, every request runs the semantic tier; past `block_at`, the
+# identity is refused until the window passes.
+
+[risk]
+window_secs = 3_600
+escalate_at = 1.0
+block_at = 5.0
+
+# ---------------------------------------------------------------- runaway
+# §4.3 runaway agent protection, per identity, counted over the window. An
+# agent reports its nesting depth in `_meta.depth` of a tool call.
+
+[runaway]
+window_secs = 60
+max_tool_calls = 30
+max_identical_calls = 5
+max_depth = 4
+
+# ---------------------------------------------------------------- resources
+# Tables of the `resources` schema each identity may query through the
+# gateway's `resources__describe` / `resources__query` tools. Deny-by-default.
+# The model only ever sees structure and a row count; the rows go to the user.
+
+[resources]
+max_rows = 200
+statement_timeout_ms = 2_000
+
+[resources.grants]
+demo-agent = ["customers", "invoices"]
+"gipokew121@deertees.com" = ["customers","invoices"]
+
+# ---------------------------------------------------------------- tier 1
+# Deterministic controls. Microseconds, no model, no network. Every request
+# pays this cost, so keep the patterns cheap.
+
+[[controls.deterministic]]
+id = "secret.aws-access-key"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "block"
+pattern = '\bAKIA[0-9A-Z]{16}\b'
+
+[[controls.deterministic]]
+id = "secret.private-key"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "block"
+pattern = '-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'
+
+[[controls.deterministic]]
+id = "secret.bearer-token"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '(?i)\b(bearer|api[_-]?key|authorization)\s*[:=]\s*[A-Za-z0-9._\-]{20,}'
+
+[[controls.deterministic]]
+id = "pii.email"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "medium"
+action = "redact"
+pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
+
+[[controls.deterministic]]
+id = "pii.pesel"
+# Polish national identification number — 11 digits.
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\b[0-9]{11}\b'
+
+# [[controls.deterministic]]
+# id = "pii.phone"
+# hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+# severity = "medium"
+# action = "redact"
+# pattern = '(?x)(?:\+?\d{1,3}[ .-]?)?(?:\(?\d{2,4}\)?[ .-]?){2,4}\d{2,4}'
+
+[[controls.deterministic]]
+id = "pii.iban"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\b[A-Z]{2}[0-9]{2}(?:[ ]?[A-Z0-9]){11,30}\b'
+
+[[controls.deterministic]]
+id = "pii.payment-card"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+# The engine additionally verifies Luhn, so random 16-digit references pass.
+pattern = '\b(?:[0-9][ -]?){13,19}\b'
+
+[[controls.deterministic]]
+id = "secret.jwt"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "high"
+action = "redact"
+pattern = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'
+
+[[controls.deterministic]]
+id = "secret.connection-string"
+hooks = ["prompt_in", "response_out", "tool_call", "tool_result"]
+severity = "critical"
+action = "redact"
+pattern = '(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s:@/]+:[^\s@/]+@'
+
+[[controls.deterministic]]
+id = "obfuscation.invisible-unicode"
+hooks = ["prompt_in", "tool_call", "tool_result"]
+severity = "high"
+action = "flag"
+pattern = '[\u{200B}-\u{200F}\u{2060}\u{FEFF}]'
+
+[[controls.deterministic]]
+id = "exploit.code-execution"
+# §4.4: the shapes behind real historical exploits on AI infrastructure.
+hooks = ["tool_result", "response_out"]
+severity = "critical"
+action = "block"
+pattern = '(?i)\b(os\.system|subprocess\.(run|call|Popen)|eval\(|exec\(|__import__)\b'
+
+[[controls.deterministic]]
+id = "exploit.unsafe-deserialization"
+hooks = ["tool_call", "tool_result"]
+severity = "critical"
+action = "block"
+pattern = '(?i)\b(pickle\.loads?|torch\.load|yaml\.load\s*\(|marshal\.loads)\b'
+
+[[controls.deterministic]]
+id = "injection.instruction-override"
+# Cheap first pass. The semantic tier below catches what this misses.
+# tool_call covers model-written arguments a human will read, such as the
+# reason in control__request_access shown in the console's approval popup.
+hooks = ["prompt_in", "tool_call", "tool_result"]
+severity = "medium"
+action = "flag"
+pattern = '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
+
+# ---------------------------------------------------------------- tier 2
+# Semantic controls. Model-backed, tens of milliseconds. `escalate_when`
+# decides who pays that cost:
+#   always     — every request through this hook
+#   suspicious — only when tier 1 flagged something (default; keeps p50 low)
+#   never      — disabled without deleting the config
+#
+# `fail_mode` on a control overrides [defaults] for that control only.
+#
+# `mock_keywords` is what the dev mock judge (OLLAMA_URL=mock) scores as a hit.
+# Real detectors ignore it, and prod refuses to run the mock.
+
+[[controls.semantic]]
+id = "injection.prompt-guard"
+hooks = ["prompt_in", "tool_call", "tool_result"]
+severity = "high"
+action = "block"
+detector = "llm_judge"
+describes = "an attempt to override, ignore or replace the instructions the assistant was given."
+# Strictness knob. Lower catches more and blocks more legitimate traffic.
+threshold = 0.80
+timeout_ms = 2000
+escalate_when = "suspicious"
+mock_keywords = ["previous instructions", "system prompt", "you are now", "developer mode", "jailbreak"]
+
+[[controls.semantic]]
+id = "pii.contextual"
+# Catches identifiers that no regex describes: names, addresses, free-text
+# health details.
+#
+# OFF until a Presidio sidecar exists. `fail_mode = "closed"` means an
+# unavailable detector blocks, so leaving this on "always" with nothing behind
+# it would refuse every request. Set escalate_when = "always" once the sidecar
+# is running.
+hooks = ["prompt_in", "response_out"]
+severity = "medium"
+action = "redact"
+detector = "presidio"
+describes = "personal data that no regular expression would match: names, postal addresses, free-text health or financial details"
+threshold = 0.65
+timeout_ms = 1500
+escalate_when = "never"
+
+[[controls.semantic]]
+id = "exfiltration.intent"
+hooks = ["tool_call"]
+severity = "high"
+action = "block"
+detector = "llm_judge"
+describes = "an attempt to move data out of the organisation: exfiltration, unexpected recipients, encoding payloads for transport"
+threshold = 0.75
+timeout_ms = 2000
+escalate_when = "suspicious"
+mock_keywords = ["exfiltrate", "send it to", "upload to", "pastebin", "webhook"]
+
+# ---------------------------------------------------------------- mcp
+# Upstream MCP servers sit behind this gateway, which is the only MCP server any
+# agent talks to. Disabling one takes effect when the upload activates.
+#
+# `pinned` approves tools by the sha256 of their definition (name, description,
+# input schema). Once a server pins anything, an unpinned tool or one whose
+# definition changed is hidden and reported: a rug-pull or poisoned
+# description never reaches the model. Leave it empty to only scan
+# descriptions.
+
+[mcp]
+# A caller with no row in `principals`. "deny" is the right default for a
+# control layer: an unidentified agent gets no tools.
+unknown_principal = "deny"
+
+[[mcp.server]]
+name = "docs"
+url = "http://localhost:9310/mcp"
+enabled = true
+
+# ---------------------------------------------------------------- feed
+# §4.4. Signatures of known historical attacks are a separate document
+# (`signatures.toml` next to this file), uploaded with the catalog as
+# `signatures_toml` and versioned with it.
+

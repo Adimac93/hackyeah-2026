@@ -22,6 +22,10 @@ use crate::policy::Hook;
 pub struct Auditor {
     db: PgPool,
     chain: Mutex<Vec<u8>>,
+    /// Identities by key digest, used instead of `principals` by the
+    /// self-test suite, which runs without a database. Always `None` in the
+    /// service.
+    fixed: Option<std::collections::HashMap<String, Principal>>,
 }
 
 /// A registered caller: an agent, an application or a person.
@@ -86,6 +90,24 @@ impl Auditor {
         Self {
             db,
             chain: Mutex::new(tail),
+            fixed: None,
+        }
+    }
+
+    /// An auditor whose identities are `(api key, principal)` pairs held in
+    /// memory. Writes still go to `db`, so a pool that reaches nothing makes
+    /// every write a logged no-op.
+    #[cfg(test)]
+    pub(crate) fn with_principals(db: PgPool, principals: Vec<(&str, Principal)>) -> Self {
+        Self {
+            db,
+            chain: Mutex::default(),
+            fixed: Some(
+                principals
+                    .into_iter()
+                    .map(|(key, principal)| (sha256_hex(key.as_bytes()), principal))
+                    .collect(),
+            ),
         }
     }
 
@@ -97,6 +119,9 @@ impl Auditor {
     /// the digest, never a bearer secret. HTTP handlers must use this method,
     /// not a caller-supplied principal slug.
     pub async fn principal_for_api_key(&self, api_key: &str) -> Option<Principal> {
+        if let Some(fixed) = &self.fixed {
+            return fixed.get(&sha256_hex(api_key.as_bytes())).cloned();
+        }
         let row = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, Vec<String>, bool)>(
             "select id, slug, role, allowed_models, allowed_tools, delegates_users
              from principals where api_key_hash = $1 and enabled",
@@ -226,7 +251,7 @@ impl Auditor {
 
             // Keep only non-sensitive behavioral metadata for repeated-attack
             // scoring. The prompt itself remains represented by its hash.
-            if counts_as_attack(detection) {
+            if crate::risk::counts(detection) {
                 let result = sqlx::query(
                     "insert into attack_history
                        (principal_id, end_user, trace_id, control_id, action, risk_score)
@@ -237,7 +262,7 @@ impl Auditor {
                 .bind(record.trace_id)
                 .bind(&detection.control_id)
                 .bind(action_name(detection.action))
-                .bind(risk_for(detection.severity))
+                .bind(crate::risk::weight(detection.severity))
                 .execute(&mut *tx)
                 .await;
                 if let Err(error) = result {
@@ -266,27 +291,6 @@ async fn abandon(tx: sqlx::Transaction<'_, sqlx::Postgres>) -> Option<i64> {
         tracing::error!(%error, "could not roll back the audit transaction");
     }
     None
-}
-
-/// Blocked and flagged content feeds the risk score. Refusals on spend or on
-/// the score itself do not: an exhausted budget is not an attack, and a
-/// history refusal that raised the history would never expire.
-fn counts_as_attack(detection: &Detection) -> bool {
-    matches!(
-        detection.action,
-        crate::policy::Action::Block | crate::policy::Action::Flag
-    ) && !detection.control_id.starts_with(crate::budget::BUDGET_PREFIX)
-        && detection.control_id != crate::risk::RISK_CONTROL
-}
-
-const fn risk_for(severity: crate::policy::Severity) -> f32 {
-    match severity {
-        crate::policy::Severity::Info => 0.05,
-        crate::policy::Severity::Low => 0.15,
-        crate::policy::Severity::Medium => 0.35,
-        crate::policy::Severity::High => 0.65,
-        crate::policy::Severity::Critical => 1.0,
-    }
 }
 
 /// `sha256(prev_hash || the fields a tamperer would want to change)`.

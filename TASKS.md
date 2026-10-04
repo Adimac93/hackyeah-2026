@@ -21,10 +21,10 @@ Format: `- [ ] <name> — <what> (@who)`
 - [ ] fill in the ownership table in CLAUDE.md (@)
 - [ ] chat-upstream-prod — a real `UPSTREAM_URL` for prod chat ; wire it into cloudbuild.yaml (@)
 - [ ] more-patterns — request size limit, base64/homoglyph payloads, shell/SQL/HTML output checks (IBAN, Luhn cards, JWT, phone, invisible unicode are done) (@)
-- [ ] per-control-tests — positive + negative case per control, report per control (@)
 
 ## Done
 
+- [x] per-control-tests — `just test system`: self-test program against the full running system printing every prompt, result and risk score; the same harness in-process in `just check`; risk score returned per request
 - [x] web-results / resources-mcp — console chat uses the MCP data tools on gateway models, renders tool steps and the delivered rows; table access requests with per-user grants; results bound to the end user (docs/superpowers/plans/2026-10-04-resources-mcp.md)
 - [x] console-specs — per-user budgets/risk/activity (X-On-Behalf-Of), deterministic refusal notice, live activity with status filter, user risk tab, merged Controls & policies with TOML editor, incidents and company-policy pages dropped
 - [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API

@@ -12,20 +12,17 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::get,
 };
 use serde_json::{Value, json};
-use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use gateway::admin::{self, auth::AdminAuth};
-use gateway::approvals::{self, Approvals};
+use gateway::approvals::Approvals;
 use gateway::audit::Auditor;
 use gateway::budget::Budgets;
-use gateway::mcp;
 use gateway::policy::{PolicyHandle, store};
-use gateway::proxy;
 use gateway::semantic::Registry;
 use gateway::state::AppState;
 use gateway::telemetry::Telemetry;
@@ -59,11 +56,7 @@ async fn main() -> anyhow::Result<()> {
     // The policy, identities, grants and budgets all live in the database:
     // without it there is nothing to enforce, in any environment.
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
-    let db = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&url)
-        .await
-        .context("connecting to DATABASE_URL")?;
+    let db = gateway::db::connect(&url, 10).await?;
     tracing::info!("database connected");
 
     let loaded = store::load_or_seed(&db).await?;
@@ -141,22 +134,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/openapi.json", get(openapi))
         .route("/admin/docs", get(swagger_ui))
         .route("/metrics/prometheus", get(prometheus))
-        .route("/v1/chat/completions", post(proxy::chat_completions))
-        .route("/v1/results/{id}", get(mcp::resources::result))
-        .route("/mcp", post(mcp::endpoint))
-        .route("/policy", get(admin::active_policy))
-        .route("/metrics", get(admin::metrics))
-        .route("/admin/policy", post(admin::upload_policy))
-        .route("/admin/policy/versions", get(admin::policy_versions))
-        .route(
-            "/admin/budgets",
-            get(admin::budgets::list).put(admin::budgets::put),
-        )
-        .route("/admin/budgets/{id}", delete(admin::budgets::delete))
-        .route("/admin/audit/export", get(admin::export::export))
-        .route("/admin/risk", get(admin::risk::list))
-        .route("/admin/approvals/stream", get(approvals::http::stream))
-        .route("/admin/approvals/{id}", post(approvals::http::decide))
+        .merge(gateway::app::routes())
         .with_state(state)
         .layer(cors(&environment));
 
@@ -206,6 +184,9 @@ fn index_json(state: &AppState) -> Value {
             "semantic_controls": policy.semantic.len(),
             "fail_mode": policy.fail_mode,
         },
+        // Which models stand behind the gateway, without saying where they are.
+        "semantic_judge": if state.detectors.mocked() { "mock" } else { "llm_judge" },
+        "chat_upstream": if state.upstream == gateway::mock::MOCK { "mock" } else { "model" },
         "endpoints": {
             "GET  /health": "liveness, and whether the audit database is reachable",
             "GET  /admin/docs": "Swagger UI for the whole API",

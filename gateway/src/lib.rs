@@ -8,10 +8,12 @@
 #![recursion_limit = "256"]
 
 pub mod admin;
+pub mod app;
 pub mod approvals;
 pub mod audit;
 pub mod background;
 pub mod budget;
+pub mod db;
 pub mod engine;
 pub mod helper;
 pub mod mcp;
@@ -21,6 +23,7 @@ pub mod openapi;
 pub mod policy;
 pub mod proxy;
 pub mod risk;
+pub mod selftest;
 pub mod semantic;
 pub mod state;
 pub mod telemetry;

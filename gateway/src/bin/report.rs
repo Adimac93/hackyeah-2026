@@ -13,7 +13,6 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context as _, bail};
-use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,11 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(24);
 
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL is not set")?;
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&url)
-        .await
-        .context("connecting to the database")?;
+    let pool = gateway::db::connect(&url, 2).await?;
 
     let mut report = gateway::metrics::collect(&pool, window)
         .await

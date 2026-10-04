@@ -174,7 +174,7 @@ pub async fn chat_completions(
     state.telemetry.verdict("prompt_in", verdict_name(inbound.verdict));
 
     if let Some(blocker) = inbound.blocked_by() {
-        return refusal_for(trace_id, Hook::PromptIn, blocker, help);
+        return refusal_for(trace_id, Hook::PromptIn, blocker, help, risk::of(&inbound));
     }
     background::analyse(
         &state,
@@ -234,7 +234,8 @@ pub async fn chat_completions(
     drop(inflight);
 
     if let Some(blocker) = outbound.blocked_by() {
-        return refusal_for(trace_id, Hook::ResponseOut, blocker, None);
+        let risk_score = risk::of(&exchange.inbound) + risk::of(&outbound);
+        return refusal_for(trace_id, Hook::ResponseOut, blocker, None, risk_score);
     }
     if outbound.verdict == Verdict::Redact {
         replace_answer(&mut completion, &outbound.text);
@@ -356,8 +357,17 @@ pub const fn stage_of(blocker: &Detection) -> &'static str {
     }
 }
 
-fn refusal_for(trace_id: Uuid, hook: Hook, blocker: &Detection, help: Option<Help>) -> Response {
-    let (status, error) = refusal_body(hook, blocker, help);
+/// `risk_score` is what the request added to its user's attack history, so
+/// a caller can see how the refusal counts against them.
+fn refusal_for(
+    trace_id: Uuid,
+    hook: Hook,
+    blocker: &Detection,
+    help: Option<Help>,
+    risk_score: f32,
+) -> Response {
+    let (status, mut error) = refusal_body(hook, blocker, help);
+    error["risk_score"] = json!(risk_score);
     refusal(trace_id, status, error)
 }
 
@@ -415,6 +425,7 @@ pub fn summarise(evaluation: &Evaluation) -> Value {
     json!({
         "verdict": evaluation.verdict,
         "controls_fired": evaluation.detections.iter().map(|d| &d.control_id).collect::<Vec<_>>(),
+        "risk_score": risk::of(evaluation),
         "deterministic_us": evaluation.deterministic_us,
         "semantic_us": evaluation.semantic_us,
     })

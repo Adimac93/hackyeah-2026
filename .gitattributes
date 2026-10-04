@@ -1,1 +1,4 @@
 * text=auto eol=lf
+# Byte-for-byte copies of an uploaded catalog: the gateway hashes the raw text
+# (CRLF included) into the policy version, so line endings must not change.
+policy/selftest/*.toml -text

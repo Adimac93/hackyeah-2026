@@ -60,7 +60,7 @@ pub fn document() -> Value {
                 "responses": {
                     "200": ok("The upstream completion, redacted where policy requires, plus x_control_layer. With stream: true, an SSE stream of chat.completion.chunk events released only after the response_out controls saw them; the last event is a chunk with usage and x_control_layer, or {error, trace_id} retracting the answer, then [DONE]", json!({"$ref": "#/components/schemas/ChatResponse"})),
                     "401": refusal("authentication_required"),
-                    "403": refusal("model_not_allowed | blocked_by_control (with error.stage, error.hook and, on prompt_in, error.helper) | risk_blocked | delegation_refused"),
+                    "403": refusal("model_not_allowed | blocked_by_control (with error.stage, error.hook, error.risk_score and, on prompt_in, error.helper) | risk_blocked | delegation_refused"),
                     "429": refusal("budget_exceeded"),
                     "502": refusal("upstream_unavailable | upstream_unreadable | tool_loop_exceeded")
                 }}},

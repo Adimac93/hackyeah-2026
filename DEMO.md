@@ -152,6 +152,22 @@ message contains a SELECT; prod: ask in plain words).
   - before going on stage: put `pii.email` back to `redact` if a rehearsal changed it,
     and send one clean prompt so Overview isn't empty.
 
+## Self-test
+
+`just test system` starts the gateway and `mcp-demo` (logs in
+`target/selftest-services.log`) and runs the self-test against them: prompts,
+answers, identity and model grants, MCP tool calls and results, and the
+attack-history block, each printed with its result and risk score. Needs
+`DATABASE_URL` and `just seed` (the `selftest` principal, key
+`selftest-dev-key`). To test a gateway that is already running, deployed or
+local: `SELFTEST_URL=https://… just test system` (it must have `mcp-demo`
+behind it as the `docs` server for the tool-result cases). The header says
+whether the semantic judge is the mock or a real model, and whether the active
+catalog is `policy/selftest/` — the source of truth the cases were written for,
+a byte-for-byte copy of the team's upload (policy version 65). To change it,
+replace both files with the new upload and update the expectations in
+`gateway/src/bin/selftest.rs` together.
+
 ## Fallback
 
 Live demos fail on conference wifi. Before the final hour:
