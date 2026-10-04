@@ -46,6 +46,8 @@ fail_mode = "closed"
 [models]
 # Deny wins over allow. Empty allowed list means "any model not denied". Each
 # identity's `allowed_models` then narrows this further.
+# Models an enabled console LLM connection lists (Models page) are allowed
+# without an entry here, for identities granted `console:*`. Deny still wins.
 # gpt-* go to the console's OpenAI connection (Models page), not UPSTREAM_URL.
 allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b", "gpt-5", "gpt-5-mini"]
 denied = []

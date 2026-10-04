@@ -3,12 +3,22 @@ import type { ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 import { Wordmark } from "./wordmark";
 
-const BOUNDARIES = ["Prompts", "Model responses", "Tool calls", "Tool results"];
+/** OWASP Top 10 for LLM Applications (2025) risks the control catalog covers */
+const OWASP_RISKS = [
+  ["LLM01", "Prompt injection"],
+  ["LLM02", "Sensitive data disclosure"],
+  ["LLM03", "Supply chain"],
+  ["LLM04", "Data & model poisoning"],
+  ["LLM05", "Improper output handling"],
+  ["LLM06", "Excessive agency"],
+  ["LLM07", "System prompt leakage"],
+  ["LLM10", "Unbounded consumption"],
+];
 
 /**
  * Sign-in and account pages, laid out like the landing's hero: masthead,
- * serif headline and the four control boundaries on the left, the form in a
- * sand panel with the blue rule on the right.
+ * serif headline and the OWASP risks the gateway scans for on the left, the
+ * form in a sand panel with the blue rule on the right.
  */
 export function AuthShell({
   panelTitle,
@@ -52,19 +62,25 @@ export function AuthShell({
             policies. This console is where the security team sees every
             decision and sets the rules.
           </p>
-          <ol className="mt-8 grid max-w-[520px] grid-cols-2 gap-x-8 gap-y-3 border-t border-zinc-800 pt-5">
-            {BOUNDARIES.map((boundary, index) => (
-              <li
-                key={boundary}
-                className="flex items-center gap-3 text-[15px] text-zinc-200"
-              >
-                <b className="text-[11px] font-semibold tracking-[0.1em] text-emerald-400 tabular-nums">
-                  {String(index + 1).padStart(2, "0")}
-                </b>
-                {boundary}
-              </li>
-            ))}
-          </ol>
+          <div className="mt-8 max-w-[520px] border-t border-zinc-800 pt-5">
+            <p className="text-[13px] tracking-[0.02em] text-zinc-400">
+              Every request is scanned for the OWASP Top 10 for LLM
+              Applications:
+            </p>
+            <ul className="mt-3 grid grid-cols-2 gap-x-8 gap-y-2">
+              {OWASP_RISKS.map(([code, risk]) => (
+                <li
+                  key={code}
+                  className="flex items-center gap-3 text-[14px] text-zinc-200"
+                >
+                  <b className="text-[11px] font-semibold tracking-[0.1em] text-emerald-400 tabular-nums">
+                    {code}
+                  </b>
+                  {risk}
+                </li>
+              ))}
+            </ul>
+          </div>
         </section>
 
         <section

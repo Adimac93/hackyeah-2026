@@ -1,6 +1,5 @@
 "use server";
 
-import Anthropic from "@anthropic-ai/sdk";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -8,11 +7,19 @@ import { getSession } from "@/lib/auth";
 import { formString } from "@/lib/domain";
 import type { FormState } from "@/lib/domain";
 import { loadModels } from "@/lib/llm/catalog";
+import { listProviderModels } from "@/lib/llm/discover";
+import type { ModelList } from "@/lib/llm/discover";
 import { findModel } from "@/lib/llm/models";
-import { parseProviderInput } from "@/lib/llm/presets";
+import {
+  PRESETS,
+  isPresetId,
+  parseProviderInput,
+  validateBaseUrl,
+} from "@/lib/llm/presets";
 import { loadConnectionSecret } from "@/lib/llm/secrets";
 
-const TEST_TIMEOUT_MS = 10_000;
+/** Where a new connection's form may send the admin back to. Anything else is /models. */
+const RETURN_PATHS = new Set(["/models", "/chat"]);
 
 async function requireAdmin() {
   const session = await getSession();
@@ -99,7 +106,8 @@ export async function createConnection(
     }
   }
   refresh();
-  redirect("/models");
+  const returnTo = formString(formData, "return_to");
+  redirect(RETURN_PATHS.has(returnTo) ? returnTo : "/models");
 }
 
 export async function updateConnection(
@@ -180,62 +188,70 @@ export async function testConnection(
   if (connection === null) {
     return { error: "Connection not found." };
   }
-
-  try {
-    if (connection.kind === "anthropic") {
-      const client = new Anthropic({
-        apiKey: connection.apiKey ?? undefined,
-        timeout: TEST_TIMEOUT_MS,
-        maxRetries: 0,
-      });
-      const page = await client.models.list({ limit: 100 });
-      return { ok: `Connected · ${String(page.data.length)} models visible` };
-    }
-
-    const base = (connection.baseUrl ?? "https://api.openai.com/v1").replace(
-      /\/+$/,
-      "",
-    );
-    const response = await fetch(`${base}/models`, {
-      headers:
-        connection.apiKey === null
-          ? {}
-          : { authorization: `Bearer ${connection.apiKey}` },
-      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
-      redirect: "error",
-    });
-    if (response.status === 401 || response.status === 403) {
-      return { error: "The provider rejected the API key." };
-    }
-    if (!response.ok) {
-      return {
-        error: `The provider answered HTTP ${String(response.status)}.`,
-      };
-    }
-    const body = (await response.json().catch(() => null)) as {
-      data?: unknown[];
-    } | null;
-    const count = Array.isArray(body?.data) ? body.data.length : null;
-    return {
-      ok:
-        count === null
-          ? "Connected"
-          : `Connected · ${String(count)} models visible`,
-    };
-  } catch (error) {
-    if (error instanceof Anthropic.APIError) {
-      return {
-        error:
-          error.status === 401
-            ? "The provider rejected the API key."
-            : `The provider answered HTTP ${String(error.status)}.`,
-      };
-    }
-    // network errors: don't echo internals, just the kind
-    return {
-      error: `Couldn't reach the provider (${error instanceof Error ? error.name : "unknown error"}).`,
-    };
+  const result = await listProviderModels(connection);
+  if (!result.ok) {
+    return { error: result.error };
   }
+  return {
+    ok:
+      result.models.length === 0
+        ? "Connected"
+        : `Connected · ${String(result.models.length)} models visible`,
+  };
+}
+
+/**
+ * The model ids an endpoint serves, for the form's "Fetch models". Uses the typed key, or
+ * the stored one when editing a connection and the key field is blank.
+ */
+export async function discoverModels(input: {
+  preset: string;
+  baseUrl: string;
+  apiKey: string;
+  connectionId?: string;
+}): Promise<ModelList> {
+  const session = await requireAdmin();
+  if (session.error) {
+    return { ok: false, error: session.error };
+  }
+  if (!isPresetId(input.preset)) {
+    return { ok: false, error: "Pick a provider." };
+  }
+  const preset = PRESETS[input.preset];
+
+  let baseUrl: string | null = null;
+  if (preset.kind !== "anthropic") {
+    const candidate = input.baseUrl.trim() || preset.baseUrl;
+    if (candidate === null) {
+      return { ok: false, error: "Enter the base URL first." };
+    }
+    const checked = validateBaseUrl(candidate);
+    if (!checked.ok) {
+      return checked;
+    }
+    baseUrl = checked.value;
+  }
+
+  let apiKey: string | null = input.apiKey.trim() || null;
+  if (apiKey === null && input.connectionId !== undefined) {
+    const stored = await loadConnectionSecret(input.connectionId);
+    if (stored !== null && stored !== "no-service-key") {
+      apiKey = stored.apiKey;
+    }
+  }
+  if (apiKey === null && preset.requiresKey) {
+    return { ok: false, error: "Enter the API key first." };
+  }
+
+  const result = await listProviderModels({
+    kind: preset.kind,
+    baseUrl,
+    apiKey,
+  });
+  if (result.ok && result.models.length === 0) {
+    return { ok: false, error: "The provider didn't list any models." };
+  }
+  return result;
 }
 
 /** Set the model new chats start on. Must be one of the currently available models. */

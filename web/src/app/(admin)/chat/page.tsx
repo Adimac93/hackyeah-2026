@@ -15,6 +15,7 @@ import { defaultModel, modelLabel } from "@/lib/llm/models";
 import { storedSteps } from "@/lib/tool-steps";
 
 import { deleteAllConversations, deleteConversation } from "./actions";
+import { AddModelDialog } from "./add-model-dialog";
 import { AttachmentChip, FileChip } from "./attachment-chip";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
@@ -22,9 +23,9 @@ import { ModelSelect } from "./model-select";
 import { ToolSteps } from "./tool-steps";
 
 const SUGGESTIONS = [
-  "What are the password requirements for a new service?",
-  "How should I store confidential customer data?",
-  "What do I do if I committed an API key?",
+  "Show the top 5 customers by MRR",
+  "Email jan.kowalski@example.com about invoice 904",
+  "My AWS key is AKIAIOSFODNN7EXAMPLE, store it",
 ];
 
 /** A user's message: their text, with attached files folded into chips. */
@@ -85,13 +86,16 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
     <Card
       title={active?.title ?? "New chat"}
       actions={
-        active === null ? null : (
-          <form action={deleteConversation.bind(null, active.id, null)}>
-            <ConfirmButton confirmLabel="Delete this chat?">
-              Delete
-            </ConfirmButton>
-          </form>
-        )
+        <div className="flex items-center gap-3">
+          {member.role === "admin" ? <AddModelDialog /> : null}
+          {active === null ? null : (
+            <form action={deleteConversation.bind(null, active.id, null)}>
+              <ConfirmButton confirmLabel="Delete this chat?">
+                Delete
+              </ConfirmButton>
+            </form>
+          )}
+        </div>
       }
       className={
         consoleView
