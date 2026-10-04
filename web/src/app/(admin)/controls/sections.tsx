@@ -7,6 +7,7 @@ import {
   tdClass,
   thClass,
 } from "@/components/ui";
+import type { ControlRow } from "@/lib/catalog";
 import { budgetSpend, fmtWindow } from "@/lib/gateway";
 import type { Budget, UsageRow } from "@/lib/gateway";
 import type { LiveControl, LivePolicy } from "@/lib/gateway-live";
@@ -29,44 +30,111 @@ export function Chips({ items, empty }: { items: string[]; empty: string }) {
   );
 }
 
-/** Every control the gateway enforces right now, from `GET /policy`. */
-export function ControlsTable({ controls }: { controls: LiveControl[] }) {
+function ControlCells({ control }: { control: LiveControl }) {
+  const off = control.kind === "semantic" && control.escalate_when === "never";
+  return (
+    <>
+      <td className={tdClass}>
+        <p className="font-mono text-xs text-zinc-100">{control.id}</p>
+        <p className="text-xs text-zinc-500">
+          {control.kind}
+          {control.kind === "semantic"
+            ? ` · ${control.detector ?? "judge"} ≥ ${String(control.threshold ?? "—")} · escalate ${control.escalate_when ?? "suspicious"}`
+            : ""}
+          {typeof control.feed === "string" ? ` · feed ${control.feed}` : ""}
+          {off ? (
+            <span className="ml-1 text-amber-400/90">
+              (never runs: escalate_when = &quot;never&quot;)
+            </span>
+          ) : null}
+        </p>
+      </td>
+      <td className={tdClass}>
+        <Chips items={control.hooks} empty="—" />
+      </td>
+      <td className={tdClass}>
+        <ControlSeverityBadge severity={control.severity} />
+      </td>
+      <td className={`${tdClass} text-right`}>
+        <VerdictBadge verdict={control.action} />
+      </td>
+    </>
+  );
+}
+
+const ROW_NOTE: Record<"disabled" | "missing", string> = {
+  disabled: "disabled in the catalog (enabled = false)",
+  missing: "in the catalog, but the gateway doesn't enforce it",
+};
+
+function ControlsHead() {
+  return (
+    <thead className="border-b border-zinc-800">
+      <tr>
+        <th className={thClass}>Control</th>
+        <th className={thClass}>Hooks</th>
+        <th className={thClass}>Severity</th>
+        <th className={`${thClass} text-right`}>Action</th>
+      </tr>
+    </thead>
+  );
+}
+
+/**
+ * The catalog's controls in file order, each joined with what the gateway
+ * enforces (`GET /policy`), so the table matches the TOML above it 1:1.
+ */
+export function ControlsTable({ rows }: { rows: ControlRow[] }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
       <table className={tableClass}>
-        <thead className="border-b border-zinc-800">
-          <tr>
-            <th className={thClass}>Control</th>
-            <th className={thClass}>Hooks</th>
-            <th className={thClass}>Severity</th>
-            <th className={`${thClass} text-right`}>Action</th>
-          </tr>
-        </thead>
+        <ControlsHead />
         <tbody className="divide-y divide-zinc-800">
-          {controls.length === 0 && (
-            <EmptyRow cols={4}>The active policy enables no controls.</EmptyRow>
+          {rows.length === 0 && (
+            <EmptyRow cols={4}>The catalog declares no controls.</EmptyRow>
           )}
-          {controls.map((c) => (
-            <tr key={c.id}>
-              <td className={tdClass}>
-                <p className="font-mono text-xs text-zinc-100">{c.id}</p>
-                <p className="text-xs text-zinc-500">
-                  {c.kind}
-                  {c.kind === "semantic"
-                    ? ` · ${c.detector ?? "judge"} ≥ ${String(c.threshold ?? "—")}`
-                    : ""}
-                  {typeof c.feed === "string" ? ` · feed ${c.feed}` : ""}
-                </p>
-              </td>
-              <td className={tdClass}>
-                <Chips items={c.hooks} empty="—" />
-              </td>
-              <td className={tdClass}>
-                <ControlSeverityBadge severity={c.severity} />
-              </td>
-              <td className={`${tdClass} text-right`}>
-                <VerdictBadge verdict={c.action} />
-              </td>
+          {rows.map((row) =>
+            row.status === "active" || row.status === "extra" ? (
+              <tr
+                key={row.id}
+                className={row.status === "extra" ? "bg-amber-500/5" : ""}
+                title={
+                  row.status === "extra"
+                    ? "Enforced by the gateway, but not in this catalog"
+                    : undefined
+                }
+              >
+                <ControlCells control={row.control} />
+              </tr>
+            ) : (
+              <tr key={row.id} className="opacity-60">
+                <td className={tdClass} colSpan={4}>
+                  <p className="font-mono text-xs text-zinc-300">{row.id}</p>
+                  <p
+                    className={`text-xs ${row.status === "missing" ? "text-amber-400" : "text-zinc-500"}`}
+                  >
+                    {row.kind} · {ROW_NOTE[row.status]}
+                  </p>
+                </td>
+              </tr>
+            ),
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Controls the gateway compiles from the signature feed (signatures.toml), not the catalog. */
+export function FeedControlsTable({ controls }: { controls: LiveControl[] }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
+      <table className={tableClass}>
+        <ControlsHead />
+        <tbody className="divide-y divide-zinc-800">
+          {controls.map((control) => (
+            <tr key={control.id}>
+              <ControlCells control={control} />
             </tr>
           ))}
         </tbody>

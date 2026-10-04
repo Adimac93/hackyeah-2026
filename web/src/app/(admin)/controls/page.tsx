@@ -1,5 +1,6 @@
 import { Card, ControlSeverityBadge, PageHeader } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
+import { parseCatalogControls, reconcileControls } from "@/lib/catalog";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import type {
   AttackSignature,
@@ -11,7 +12,12 @@ import type { LivePolicy } from "@/lib/gateway-live";
 import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
 import { PolicyEditor } from "./policy-editor";
-import { Budgets, ControlsTable, ResourceAccess } from "./sections";
+import {
+  Budgets,
+  ControlsTable,
+  FeedControlsTable,
+  ResourceAccess,
+} from "./sections";
 
 const DAY_MS = 86_400_000;
 
@@ -61,8 +67,19 @@ export default async function ControlsPage() {
   const usage = (usageRows ?? []) as UsageRow[];
   const versions = (versionRows ?? []) as PolicyVersion[];
   const signatures = (signatureRows ?? []) as AttackSignature[];
-  const controls =
+  const liveControls =
     live.ok && Array.isArray(live.data.controls) ? live.data.controls : [];
+  const catalogToml =
+    typeof activeRow?.catalog_toml === "string" ? activeRow.catalog_toml : "";
+  const { rows, feed } = reconcileControls(
+    parseCatalogControls(catalogToml),
+    liveControls,
+  );
+  // the editor shows the stored active version; warn if the gateway runs another
+  const drift =
+    live.ok && activeRow !== null && live.data.version !== activeRow.sha256
+      ? { enforced: live.data.version, shown: activeRow.sha256 }
+      : null;
   const now = Date.now();
 
   return (
@@ -107,6 +124,9 @@ export default async function ControlsPage() {
         <section className="space-y-3">
           <h2 className="text-sm font-semibold text-zinc-300">
             Active controls
+            <span className="ml-2 text-xs font-normal text-zinc-500">
+              {rows.length} in the catalog
+            </span>
             {live.ok && typeof live.data.profile === "string" ? (
               <span className="ml-2 text-xs font-normal text-zinc-500">
                 profile {live.data.profile} · on detect {live.data.on_detect} ·
@@ -114,8 +134,31 @@ export default async function ControlsPage() {
               </span>
             ) : null}
           </h2>
+          {drift === null ? null : (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+              The gateway enforces version{" "}
+              <code>{drift.enforced.slice(0, 12)}</code>, not the catalog shown
+              above (<code>{drift.shown.slice(0, 12)}</code>). It picks up the
+              active version within a few seconds; if this persists, check the
+              gateway.
+            </p>
+          )}
           {live.ok ? (
-            <ControlsTable controls={controls} />
+            <>
+              <ControlsTable rows={rows} />
+              {feed.length === 0 ? null : (
+                <div className="space-y-2 pt-2">
+                  <h3 className="text-xs font-semibold text-zinc-400">
+                    From the signature feed ({feed.length})
+                    <span className="ml-2 font-normal text-zinc-500">
+                      compiled from signatures.toml, uploaded with the catalog —
+                      not part of the file above
+                    </span>
+                  </h3>
+                  <FeedControlsTable controls={feed} />
+                </div>
+              )}
+            </>
           ) : (
             <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
               Couldn&apos;t read the active controls from the gateway:{" "}

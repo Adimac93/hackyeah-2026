@@ -32,7 +32,7 @@ export interface LiveControl {
   feed?: string | null;
   detector?: string;
   threshold?: number;
-  escalate_when?: string[];
+  escalate_when?: string;
   fail_mode?: string;
 }
 
