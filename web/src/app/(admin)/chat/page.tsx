@@ -12,11 +12,7 @@ import { fmtDateTime } from "@/lib/format";
 import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
 
-import {
-  deleteAllConversations,
-  deleteConversation,
-  sendChatMessage,
-} from "./actions";
+import { deleteAllConversations, deleteConversation } from "./actions";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ModelSelect } from "./model-select";
@@ -81,7 +77,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
       bodyClassName={consoleView ? "p-5" : "flex min-h-0 flex-1 flex-col p-5"}
     >
       <ChatComposer
-        action={sendChatMessage.bind(null, active?.id ?? null)}
+        conversationId={active?.id ?? null}
         placeholder="Ask anything… (never paste real secrets)"
         fill={!consoleView}
         messageCount={messages.length}

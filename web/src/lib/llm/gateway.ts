@@ -97,3 +97,85 @@ export function interpretGatewayResponse(
         : `The gateway answered ${String(status)}. Try again or pick another model.`,
   };
 }
+
+// --- streamed answers (`stream: true`) ---------------------------------------------
+// The gateway releases text only after its response_out controls saw it, then ends with
+// a final chunk carrying `x_control_layer`, or the same `error` object a refusal has —
+// which retracts what was shown. The ending, not the deltas, decides the stored reply.
+
+export type GatewayStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "final"; layer: GatewayCompletion["x_control_layer"] }
+  | { type: "refusal"; body: GatewayRefusal }
+  | { type: "done" };
+
+interface GatewayChunk {
+  choices?: {
+    delta?: { content?: string | null };
+    finish_reason?: string | null;
+  }[];
+  x_control_layer?: GatewayCompletion["x_control_layer"];
+  error?: GatewayRefusal["error"];
+}
+
+function chunkEvent(data: string): GatewayStreamEvent | null {
+  if (data === "[DONE]") {
+    return { type: "done" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  const chunk = parsed as GatewayChunk;
+  if (chunk.error !== undefined) {
+    return { type: "refusal", body: chunk as GatewayRefusal };
+  }
+  if (chunk.x_control_layer !== undefined) {
+    return { type: "final", layer: chunk.x_control_layer };
+  }
+  const text = chunk.choices?.[0]?.delta?.content ?? "";
+  return text === "" ? null : { type: "delta", text };
+}
+
+/** Split buffered SSE text into events. `rest` is the unfinished last line; prepend it to the next chunk. */
+export function decodeGatewaySse(buffer: string): {
+  events: GatewayStreamEvent[];
+  rest: string;
+} {
+  const lines = buffer.split("\n");
+  const rest = lines.pop() ?? "";
+  const events: GatewayStreamEvent[] = [];
+  for (const line of lines) {
+    const data = line.trim();
+    if (!data.startsWith("data:")) {
+      continue;
+    }
+    const event = chunkEvent(data.slice("data:".length).trim());
+    if (event !== null) {
+      events.push(event);
+    }
+  }
+  return { events, rest };
+}
+
+/** The stored reply for a streamed answer: `text` is every delta, `ending` the last verdict event. */
+export function finishGatewayStream(
+  text: string,
+  ending?: Extract<GatewayStreamEvent, { type: "final" | "refusal" }>,
+): GatewayOutcome {
+  if (ending === undefined) {
+    return { ok: false, error: "The gateway's answer broke off. Try again." };
+  }
+  if (ending.type === "refusal") {
+    return interpretGatewayResponse(403, ending.body);
+  }
+  return interpretGatewayResponse(200, {
+    choices: [{ message: { content: text } }],
+    x_control_layer: ending.layer,
+  });
+}

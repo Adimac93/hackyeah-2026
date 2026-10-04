@@ -58,7 +58,7 @@ pub fn document() -> Value {
                 "parameters": [{"name": "X-On-Behalf-Of", "in": "header", "description": "End user the request is attributed to (budgets, risk, activity). Only principals with delegates_users may send it; otherwise the principal is its own user.", "schema": {"type": "string", "maxLength": 254}}],
                 "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatRequest"}}}},
                 "responses": {
-                    "200": ok("The upstream completion, redacted where policy requires, plus x_control_layer", json!({"$ref": "#/components/schemas/ChatResponse"})),
+                    "200": ok("The upstream completion, redacted where policy requires, plus x_control_layer. With stream: true, an SSE stream of chat.completion.chunk events released only after the response_out controls saw them; the last event is a chunk with usage and x_control_layer, or {error, trace_id} retracting the answer, then [DONE]", json!({"$ref": "#/components/schemas/ChatResponse"})),
                     "401": refusal("authentication_required"),
                     "403": refusal("model_not_allowed | blocked_by_control (with error.stage, error.hook and, on prompt_in, error.helper) | risk_blocked | delegation_refused"),
                     "429": refusal("budget_exceeded"),
@@ -189,6 +189,7 @@ pub fn document() -> Value {
                     "properties": {"violated_policy": {"type": "string"}, "suggestion": {"type": ["string", "null"]}}},
                 "ChatRequest": {"type": "object", "required": ["model", "messages"], "properties": {
                     "model": {"type": "string"},
+                    "stream": {"type": "boolean", "description": "Stream the answer as SSE; see the 200 response"},
                     "messages": {"type": "array", "items": {"type": "object", "properties": {
                         "role": {"type": "string"},
                         "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "object"}}]}}}}}},

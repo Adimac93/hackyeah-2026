@@ -34,6 +34,8 @@ export type AssistantProvider = (input: {
   policies: PolicySnippet[];
   /** who is asking; the gateway attributes audit events and budgets to it */
   principal?: string;
+  /** called with each piece of the reply as the model writes it; the resolved string is the final word */
+  onDelta?: (text: string) => void;
 }) => Promise<string>;
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };

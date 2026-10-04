@@ -102,12 +102,13 @@ pub struct Budgets {
 }
 
 /// Holds a request's in-flight slots; releases them when dropped.
-pub struct Inflight<'a> {
-    budgets: &'a Budgets,
+/// Owns its `Arc` so a streamed answer can hold the slots until its last chunk.
+pub struct Inflight {
+    budgets: Arc<Budgets>,
     keys: Vec<String>,
 }
 
-impl Drop for Inflight<'_> {
+impl Drop for Inflight {
     fn drop(&mut self) {
         if let Ok(mut inflight) = self.budgets.inflight.lock() {
             for key in &self.keys {
@@ -192,11 +193,11 @@ impl Budgets {
     /// request's in-flight slots. Keep the returned guard alive until the
     /// request is finished.
     pub async fn check(
-        &self,
+        self: &Arc<Self>,
         principal: &Principal,
         model: Option<&str>,
         evaluation: &mut Evaluation,
-    ) -> Inflight<'_> {
+    ) -> Inflight {
         let rows = self.rows().await;
         let applicable: Vec<&BudgetRow> = rows
             .iter()
@@ -239,7 +240,10 @@ impl Budgets {
             );
         }
 
-        Inflight { budgets: self, keys }
+        Inflight {
+            budgets: Arc::clone(self),
+            keys,
+        }
     }
 
     /// The budgets that bind this user whatever the model, with what has

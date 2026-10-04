@@ -5,6 +5,7 @@
 //! `prompt_in` on the way out and `response_out` on the way back. `tool_call`
 //! and `tool_result` are the same engine at the MCP boundary.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Json;
@@ -126,7 +127,7 @@ pub async fn chat_completions(
     // Model grants (§4.1), budgets (§4.3) and history (§4.4) gate the same
     // evaluation, so a refusal is audited like any control.
     gate_model(&policy, &principal, &model, &mut inbound);
-    let _inflight = state
+    let inflight = state
         .budgets
         .check(&principal, Some(&model), &mut inbound)
         .await;
@@ -195,6 +196,20 @@ pub async fn chat_completions(
         redact_messages(&policy, &mut upstream_body);
     }
 
+    let exchange = Exchange {
+        trace_id,
+        started,
+        policy,
+        principal,
+        model,
+        inbound,
+        event_id,
+    };
+    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        return stream::respond(state, exchange, upstream_body, inflight).await;
+    }
+    upstream_body["stream"] = json!(false);
+
     // --- upstream ---------------------------------------------------------
     let upstream_started = Instant::now();
     let (status, mut completion) = if state.upstream == mock::MOCK {
@@ -216,17 +231,58 @@ pub async fn chat_completions(
 
     // --- hook 2: response_out --------------------------------------------
     let answer = extract_answer(&completion);
-    let mut outbound = engine::evaluate(&policy, Hook::ResponseOut, &answer);
+    let outbound =
+        police_answer(&state, &exchange, answer, usage(&completion), upstream_us).await;
+    drop(inflight);
+
+    if let Some(blocker) = outbound.blocked_by() {
+        return refusal_for(trace_id, Hook::ResponseOut, blocker, None);
+    }
+    if outbound.verdict == Verdict::Redact {
+        replace_answer(&mut completion, &outbound.text);
+    }
+
+    // Make the layer's work visible to the caller rather than silently
+    // rewriting their data.
+    completion["x_control_layer"] = control_layer(&exchange, &outbound);
+
+    (StatusCode::OK, Json(completion)).into_response()
+}
+
+/// What a request carries past `prompt_in`, for policing its answer.
+pub(crate) struct Exchange {
+    pub trace_id: Uuid,
+    pub started: Instant,
+    pub policy: Arc<Policy>,
+    pub principal: Principal,
+    pub model: String,
+    pub inbound: Evaluation,
+    /// The `prompt_in` audit event, for usage when `response_out` was not recorded.
+    pub event_id: Option<i64>,
+}
+
+/// Hook 2, `response_out`, over a complete answer: both tiers, the audit
+/// record and the usage. Shared by the plain and the streamed response, so a
+/// streamed answer is judged and audited exactly like a buffered one.
+pub(crate) async fn police_answer(
+    state: &AppState,
+    exchange: &Exchange,
+    answer: String,
+    (prompt_tokens, completion_tokens): (i32, i32),
+    upstream_us: u64,
+) -> Evaluation {
+    let policy = &exchange.policy;
+    let mut outbound = engine::evaluate(policy, Hook::ResponseOut, &answer);
     state.telemetry.observe("deterministic", outbound.deterministic_us);
-    engine::escalate(&policy, Hook::ResponseOut, &mut outbound, &state.detectors).await;
+    engine::escalate(policy, Hook::ResponseOut, &mut outbound, &state.detectors).await;
     observe_semantic(&state.telemetry, &outbound);
 
     let mut outbound_record = audit::record_for(
-        trace_id,
+        exchange.trace_id,
         Hook::ResponseOut,
         &outbound,
-        Some(&model),
-        &principal,
+        Some(&exchange.model),
+        &exchange.principal,
         policy.version_id,
         &answer,
     );
@@ -239,54 +295,48 @@ pub async fn chat_completions(
     state.telemetry.verdict("response_out", verdict_name(outbound.verdict));
 
     // Usage is recorded even when the answer is blocked: the tokens were spent.
-    let (prompt_tokens, completion_tokens) = usage(&completion);
     state
         .auditor
         .record_usage(
-            outbound_event.or(event_id),
-            &principal,
-            &model,
+            outbound_event.or(exchange.event_id),
+            &exchange.principal,
+            &exchange.model,
             prompt_tokens,
             completion_tokens,
-            policy.cost_usd(&model, prompt_tokens, completion_tokens),
+            policy.cost_usd(&exchange.model, prompt_tokens, completion_tokens),
         )
         .await;
     state
         .telemetry
-        .observe("total", micros(started).saturating_sub(upstream_us));
+        .observe("total", micros(exchange.started).saturating_sub(upstream_us));
 
-    if let Some(blocker) = outbound.blocked_by() {
-        return refusal_for(trace_id, Hook::ResponseOut, blocker, None);
+    if outbound.blocked_by().is_none() {
+        background::analyse(
+            state,
+            &outbound,
+            Job {
+                policy: policy.clone(),
+                hook: Hook::ResponseOut,
+                channel: "llm",
+                text: answer,
+                trace_id: exchange.trace_id,
+                principal: exchange.principal.clone(),
+                model: Some(exchange.model.clone()),
+                tool: None,
+            },
+        );
     }
-    background::analyse(
-        &state,
-        &outbound,
-        Job {
-            policy: policy.clone(),
-            hook: Hook::ResponseOut,
-            channel: "llm",
-            text: answer,
-            trace_id,
-            principal: principal.clone(),
-            model: Some(model),
-            tool: None,
-        },
-    );
+    outbound
+}
 
-    if outbound.verdict == Verdict::Redact {
-        replace_answer(&mut completion, &outbound.text);
-    }
-
-    // Make the layer's work visible to the caller rather than silently
-    // rewriting their data.
-    completion["x_control_layer"] = json!({
-        "trace_id": trace_id,
-        "policy_version": policy.sha256,
-        "prompt_in": summarise(&inbound),
-        "response_out": summarise(&outbound),
-    });
-
-    (StatusCode::OK, Json(completion)).into_response()
+/// The `x_control_layer` block a successful answer carries.
+pub(crate) fn control_layer(exchange: &Exchange, outbound: &Evaluation) -> Value {
+    json!({
+        "trace_id": exchange.trace_id,
+        "policy_version": exchange.policy.sha256,
+        "prompt_in": summarise(&exchange.inbound),
+        "response_out": summarise(outbound),
+    })
 }
 
 /// Content controls get the prompt helper; refusals about who is asking (model
@@ -308,6 +358,13 @@ pub const fn stage_of(blocker: &Detection) -> &'static str {
 }
 
 fn refusal_for(trace_id: Uuid, hook: Hook, blocker: &Detection, help: Option<Help>) -> Response {
+    let (status, error) = refusal_body(hook, blocker, help);
+    refusal(trace_id, status, error)
+}
+
+/// The status and `error` object a refusal carries. A streamed answer sends
+/// the same object as its last event.
+pub(crate) fn refusal_body(hook: Hook, blocker: &Detection, help: Option<Help>) -> (StatusCode, Value) {
     let control = blocker.control_id.as_str();
     let reason = &blocker.evidence.excerpt;
     let (status, code, message, stage) = if control == MODEL_NOT_ALLOWED {
@@ -334,7 +391,7 @@ fn refusal_for(trace_id: Uuid, hook: Hook, blocker: &Detection, help: Option<Hel
     if let Some(help) = help {
         error["helper"] = json!(help);
     }
-    refusal(trace_id, status, error)
+    (status, error)
 }
 
 fn observe_semantic(telemetry: &Telemetry, evaluation: &Evaluation) {
@@ -343,7 +400,7 @@ fn observe_semantic(telemetry: &Telemetry, evaluation: &Evaluation) {
     }
 }
 
-fn micros(since: Instant) -> u64 {
+pub(crate) fn micros(since: Instant) -> u64 {
     u64::try_from(since.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
@@ -395,7 +452,7 @@ pub fn summarise(evaluation: &Evaluation) -> Value {
     })
 }
 
-fn refusal(trace_id: Uuid, status: StatusCode, error: Value) -> Response {
+pub(crate) fn refusal(trace_id: Uuid, status: StatusCode, error: Value) -> Response {
     tracing::info!(%trace_id, code = %error["type"], message = %error["message"], "refused");
     (status, Json(json!({ "error": error, "trace_id": trace_id }))).into_response()
 }
@@ -490,5 +547,6 @@ fn usage(completion: &Value) -> (i32, i32) {
     (field("prompt_tokens"), field("completion_tokens"))
 }
 
+mod stream;
 #[cfg(test)]
 mod tests;
