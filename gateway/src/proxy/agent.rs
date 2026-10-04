@@ -80,23 +80,10 @@ pub async fn complete(
         }
 
         let turn = completion.pointer("/choices/0/message").cloned().unwrap_or_default();
+        let (results, reported) = run_calls(state, policy, principal, &calls).await;
+        tool_calls.extend(reported);
         let mut replies = vec![turn];
-        for call in calls {
-            let params = json!({ "name": call.name, "arguments": call.arguments });
-            let outcome = mcp::call_tool(state, policy, principal, &params).await;
-            let content = match &outcome {
-                Ok(payload) => federation::result_text(payload),
-                Err((_, message)) => format!("refused: {message}"),
-            };
-            tool_calls.push(json!({
-                "tool": call.name,
-                "status": if outcome.is_ok() { "ok" } else { "refused" },
-                "trace_id": outcome.as_ref().ok().and_then(|p| p.pointer("/_meta/x-control-layer/trace_id")),
-                "result_id": serde_json::from_str::<Value>(&content).ok().and_then(|ack| ack.get("result_id").cloned()),
-                "content": content,
-            }));
-            replies.push(json!({ "role": "tool", "tool_call_id": call.id, "content": content }));
-        }
+        replies.extend(results);
         if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
             messages.extend(replies);
         }
@@ -110,6 +97,49 @@ pub async fn complete(
             "message": format!("the model did not answer within {MAX_TURNS} turns"),
         }),
     ))
+}
+
+/// Run the model's tool calls through the same gate an MCP client's
+/// `tools/call` goes through. Returns the `tool` messages to feed back to the
+/// model, and what each call did, for the caller.
+pub async fn run_calls(
+    state: &AppState,
+    policy: &Arc<Policy>,
+    principal: &Principal,
+    calls: &[ToolCall],
+) -> (Vec<Value>, Vec<Value>) {
+    let mut replies = Vec::with_capacity(calls.len());
+    let mut reported = Vec::with_capacity(calls.len());
+    for call in calls {
+        let params = json!({ "name": call.name, "arguments": call.arguments });
+        let outcome = mcp::call_tool(state, policy, principal, &params).await;
+        let content = match &outcome {
+            Ok(payload) => federation::result_text(payload),
+            Err((_, message)) => format!("refused: {message}"),
+        };
+        reported.push(json!({
+            "tool": call.name,
+            "status": if outcome.is_ok() { "ok" } else { "refused" },
+            "trace_id": outcome.as_ref().ok().and_then(|p| p.pointer("/_meta/x-control-layer/trace_id")),
+            "result_id": serde_json::from_str::<Value>(&content).ok().and_then(|ack| ack.get("result_id").cloned()),
+            "content": content,
+        }));
+        replies.push(json!({ "role": "tool", "tool_call_id": call.id, "content": content }));
+    }
+    (replies, reported)
+}
+
+/// A tool call's arguments. OpenAI sends them as a JSON string, Ollama at
+/// times as an object. Unparseable text is passed on as-is: the tool_call
+/// controls still scan it and the tool refuses it.
+pub fn parse_arguments(arguments: Option<&Value>) -> Value {
+    match arguments {
+        Some(Value::String(text)) => {
+            serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()))
+        }
+        Some(value) => value.clone(),
+        None => json!({}),
+    }
 }
 
 /// MCP tool definitions as OpenAI function tools.
@@ -143,16 +173,7 @@ pub fn requested_calls(completion: &Value) -> Vec<ToolCall> {
         .enumerate()
         .filter_map(|(index, call)| {
             let function = call.get("function")?;
-            // OpenAI sends the arguments as a JSON string, Ollama at times as
-            // an object. Unparseable text is passed on as-is: the tool_call
-            // controls still scan it and the tool refuses it.
-            let arguments = match function.get("arguments") {
-                Some(Value::String(text)) => {
-                    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()))
-                }
-                Some(value) => value.clone(),
-                None => json!({}),
-            };
+            let arguments = parse_arguments(function.get("arguments"));
             Some(ToolCall {
                 id: call
                     .get("id")
