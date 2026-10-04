@@ -146,3 +146,34 @@ pages in the sidebar:
    ```text
    Aggregate the number of customers in every country
    ```
+
+### Add a control
+
+A new control takes effect as soon as you save it, with no restart.
+
+1. Open **Controls and policies** and click **Add control**.
+2. Fill in the form:
+
+   | field | value |
+   |---|---|
+   | Type | Deterministic |
+   | Control id | `secret.stripe-key` |
+   | Enabled | on |
+   | Severity | medium |
+   | Action | block |
+   | Hooks | `prompt_in`, `response_out`, `tool_call`, `tool_result` |
+   | Pattern (regex) | `\bsk_live_[0-9a-zA-Z]{24}\b` |
+
+   Type the pattern exactly as shown. The console saves it as a TOML literal
+   string, so the backslashes need no escaping.
+3. Click **Add & activate**. The console adds the control after the last
+   deterministic control and activates the catalog as a new version.
+4. Open **Assistant** and send a message with a fake Stripe key. Type
+   `sk_live_` followed by any 24 letters or digits, with no space between them:
+
+   ```text
+   My Stripe key is sk_live_<any 24 letters or digits>
+   ```
+
+   The gateway blocks the prompt, and **Activity** shows `secret.stripe-key` as
+   the control that fired.
