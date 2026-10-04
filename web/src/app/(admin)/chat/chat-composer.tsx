@@ -24,6 +24,7 @@ import type { ChatAttachment, ChatFile } from "@/lib/chat-attachments";
 import { decodeChatEvents } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
 import type { ToolStep } from "@/lib/tool-steps";
+import { cutAt, resumeAt, revealStep } from "@/lib/typewriter";
 
 import { AttachmentChip, FileChip } from "./attachment-chip";
 import { ToolSteps } from "./tool-steps";
@@ -65,6 +66,29 @@ async function readBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
   return url.slice(url.indexOf(",") + 1);
+}
+
+/** `target`, revealed a few characters a frame, so text that arrives in bursts reads as typing. */
+function useTypewriter(target: string): string {
+  const [shown, setShown] = useState("");
+  useEffect(() => {
+    const at = resumeAt(shown, target);
+    if (at >= target.length) {
+      if (shown !== target) {
+        setShown(target);
+      }
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      setShown(
+        target.slice(0, cutAt(target, at + revealStep(target.length - at))),
+      );
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [shown, target]);
+  return shown;
 }
 
 /** Read `POST /api/chat`'s NDJSON reply, handing each event over as it arrives. */
@@ -137,6 +161,7 @@ export function ChatComposer({
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const typed = useTypewriter(reply);
   const pending = streaming || reloading;
 
   // open on the newest message, and follow the thread as it grows (a no-op
@@ -347,8 +372,8 @@ export function ChatComposer({
                 aria-live="polite"
               >
                 <div className="max-w-[85%] rounded-xl rounded-bl-sm border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
-                  {reply}
-                  {streaming ? (
+                  {typed}
+                  {streaming || typed.length < reply.length ? (
                     <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
                   ) : null}
                 </div>

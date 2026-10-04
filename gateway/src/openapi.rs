@@ -190,7 +190,7 @@ pub fn document() -> Value {
                 "ChatRequest": {"type": "object", "required": ["model", "messages"], "properties": {
                     "model": {"type": "string"},
                     "stream": {"type": "boolean", "description": "Stream the answer as SSE; see the 200 response"},
-                    "mcp": {"type": "boolean", "description": "Offer the model the caller's MCP tools and run its tool calls through the tools/call gate until it answers (at most 8 turns). Answered buffered, even with stream."},
+                    "mcp": {"type": "boolean", "description": "Offer the model the caller's MCP tools and run its tool calls through the tools/call gate until it answers (at most 8 turns). With stream, every turn streams and tool_calls arrives in the final chunk's x_control_layer."},
                     "messages": {"type": "array", "items": {"type": "object", "properties": {
                         "role": {"type": "string"},
                         "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "object"}}]}}}}}},
