@@ -15,7 +15,6 @@ use axum::{
     routing::get,
 };
 use serde_json::{Value, json};
-use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -57,11 +56,7 @@ async fn main() -> anyhow::Result<()> {
     // The policy, identities, grants and budgets all live in the database:
     // without it there is nothing to enforce, in any environment.
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
-    let db = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&url)
-        .await
-        .context("connecting to DATABASE_URL")?;
+    let db = gateway::db::connect(&url, 10).await?;
     tracing::info!("database connected");
 
     let loaded = store::load_or_seed(&db).await?;

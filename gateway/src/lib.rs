@@ -13,6 +13,7 @@ pub mod approvals;
 pub mod audit;
 pub mod background;
 pub mod budget;
+pub mod db;
 pub mod engine;
 pub mod helper;
 pub mod mcp;

@@ -84,6 +84,13 @@ async fn main() -> ExitCode {
         policy["semantic_controls"],
         policy["fail_mode"].as_str().unwrap_or("?"),
     );
+    let shipped = gateway::policy::Policy::builtin().map(|p| p.sha256).unwrap_or_default();
+    if policy["version"].as_str() == Some(shipped.as_str()) {
+        println!("  catalog         shipped (policy/control-catalog.toml + signatures.toml)");
+    } else {
+        println!("  catalog         WARNING: the active catalog differs from the one shipped in policy/;");
+        println!("                  cases expect the shipped controls — upload it to test them all");
+    }
     println!("  semantic judge  {}", index["semantic_judge"].as_str().unwrap_or("unknown"));
     println!("  chat upstream   {}", index["chat_upstream"].as_str().unwrap_or("unknown"));
 
@@ -266,7 +273,7 @@ fn tool_calls(run: &mut Run) -> Vec<Case> {
     ]);
     let search = Call::Tool { caller: run.fresh(), name: "docs__search".into(), arguments: json!({}), depth: None };
     cases.push(case("a tool the identity was not granted is refused", search, Block("mcp.tool-not-granted")));
-    let deep = Call::Tool { caller: run.fresh(), name: "docs__read".into(), arguments: json!({ "id": "q3-summary" }), depth: Some(9) };
+    let deep = Call::Tool { caller: run.fresh(), name: "docs__read".into(), arguments: json!({ "id": "deploy-notes" }), depth: Some(9) };
     cases.push(case("a runaway agent nested too deep is refused", deep, Block("mcp.runaway")));
     cases
 }
