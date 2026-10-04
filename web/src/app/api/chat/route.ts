@@ -1,6 +1,14 @@
 import { conversationTitle, parseChatMessage } from "@/lib/assistant";
 import type { ChatTurn, PolicySnippet } from "@/lib/assistant";
 import { requireChatUser } from "@/lib/auth";
+import {
+  ATTACHMENT_ONLY_MESSAGE,
+  composeMessage,
+  fileMarkers,
+  parseAttachments,
+  parseFiles,
+  unsupportedFiles,
+} from "@/lib/chat-attachments";
 import { encodeChatEvent } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
 import { loadModels } from "@/lib/llm/catalog";
@@ -16,8 +24,9 @@ function refuse(error: string, status: number): Response {
 
 /**
  * Send a chat message and stream the assistant's reply back as NDJSON (`lib/chat-stream.ts`).
- * Body: `{ conversationId: string | null, message: string, model: string }`; a null id starts
- * a new conversation. The reply is stored once complete, even if the browser has gone away.
+ * Body: `{ conversationId: string | null, message: string, model: string,
+ * attachments?: { name, content }[] }`; a null id starts a new conversation. Text-file
+ * attachments are folded into the stored message (`lib/chat-attachments.ts`). The reply is stored once complete, even if the browser has gone away.
  */
 export async function POST(request: Request) {
   const session = await requireChatUser();
@@ -29,13 +38,32 @@ export async function POST(request: Request) {
     conversationId?: unknown;
     message?: unknown;
     model?: unknown;
+    attachments?: unknown;
+    files?: unknown;
   } | null;
+  const attachments = parseAttachments(JSON.stringify(body?.attachments ?? []));
+  if (!attachments.ok) {
+    return refuse(attachments.error, 400);
+  }
+  const files = parseFiles(body?.files);
+  if (!files.ok) {
+    return refuse(files.error, 400);
+  }
+  const hasAttachments = attachments.value.length > 0 || files.value.length > 0;
+  const typed = typeof body?.message === "string" ? body.message.trim() : "";
   const parsed = parseChatMessage(
-    typeof body?.message === "string" ? body.message : "",
+    typed === "" && hasAttachments ? ATTACHMENT_ONLY_MESSAGE : typed,
   );
   if (!parsed.ok) {
     return refuse(parsed.error, 400);
   }
+  // images/PDFs reach the model this turn only; the stored message names them
+  const content = [
+    composeMessage(parsed.value, attachments.value),
+    fileMarkers(files.value),
+  ]
+    .filter((part) => part !== "")
+    .join("\n\n");
 
   const { supabase } = session;
   const model = findModel(
@@ -44,6 +72,10 @@ export async function POST(request: Request) {
   );
   if (model === null) {
     return refuse("Pick one of the available models.", 400);
+  }
+  const cannotRead = unsupportedFiles(model.provider, model.label, files.value);
+  if (cannotRead !== null) {
+    return refuse(cannotRead, 400);
   }
 
   let id =
@@ -65,7 +97,7 @@ export async function POST(request: Request) {
   const { error: insertError } = await supabase.from("chat_messages").insert({
     conversation_id: conversationId,
     role: "user",
-    content: parsed.value,
+    content,
   });
   if (insertError !== null) {
     return refuse(insertError.message, 403);
@@ -117,6 +149,7 @@ export async function POST(request: Request) {
           onDelta: (text) => {
             send({ type: "delta", text });
           },
+          files: files.value,
         });
       } catch (error) {
         send({

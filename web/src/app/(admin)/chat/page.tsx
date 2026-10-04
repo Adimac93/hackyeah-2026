@@ -7,12 +7,14 @@ import { ProviderIcon } from "@/components/provider-icon";
 import { Card, Field, PageHeader } from "@/components/ui";
 import type { ChatConversation, ChatMessage } from "@/lib/assistant";
 import { requireAnyMember } from "@/lib/auth";
+import { splitFileMarkers, splitMessage } from "@/lib/chat-attachments";
 import { canAccessConsole } from "@/lib/domain";
 import { fmtDateTime } from "@/lib/format";
 import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
 
 import { deleteAllConversations, deleteConversation } from "./actions";
+import { AttachmentChip, FileChip } from "./attachment-chip";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ModelSelect } from "./model-select";
@@ -22,6 +24,27 @@ const SUGGESTIONS = [
   "How should I store confidential customer data?",
   "What do I do if I committed an API key?",
 ];
+
+/** A user's message: their text, with attached files folded into chips. */
+function UserMessage({ content }: { content: string }) {
+  const { text: withoutFiles, files } = splitFileMarkers(content);
+  const { text, attachments } = splitMessage(withoutFiles);
+  return (
+    <>
+      {text}
+      {attachments.map((a, index) => (
+        <AttachmentChip key={`${a.name}-${String(index)}`} attachment={a} />
+      ))}
+      {files.map((f, index) => (
+        <FileChip
+          key={`${f.name}-${String(index)}`}
+          name={f.name}
+          kind={f.kind}
+        />
+      ))}
+    </>
+  );
+}
 
 export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
   const { supabase, member } = await requireAnyMember();
@@ -106,7 +129,11 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                       : "bg-zinc-800/80 text-zinc-200"
                   }`}
                 >
-                  {m.content}
+                  {m.role === "user" ? (
+                    <UserMessage content={m.content} />
+                  ) : (
+                    m.content
+                  )}
                   {m.model === null ? null : (
                     <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
                       <ProviderIcon

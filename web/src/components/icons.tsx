@@ -115,3 +115,12 @@ export function FolderIcon(p: IconProps) {
     />
   );
 }
+
+export function PaperclipIcon(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M21 12.5l-8.5 8.5a6 6 0 01-8.5-8.5l9-9a4 4 0 015.7 5.7l-9 9a2 2 0 01-2.8-2.8l8.3-8.3"
+    />
+  );
+}

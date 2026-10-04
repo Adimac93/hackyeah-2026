@@ -4,9 +4,22 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import type { KeyboardEvent, ReactNode, SubmitEvent } from "react";
 
-import { ArrowUpIcon } from "@/components/icons";
+import { ArrowUpIcon, PaperclipIcon } from "@/components/icons";
+import {
+  CHAT_FILE_ACCEPT,
+  MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_FILES_TOTAL_BYTES,
+  attachmentProblem,
+  base64Bytes,
+  fileProblem,
+  fileTypeOf,
+} from "@/lib/chat-attachments";
+import type { ChatAttachment, ChatFile } from "@/lib/chat-attachments";
 import { decodeChatEvents } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
+
+import { AttachmentChip, FileChip } from "./attachment-chip";
 
 /** Three bouncing dots in an assistant bubble while the reply is on its way. */
 function TypingBubble() {
@@ -27,6 +40,21 @@ function TypingBubble() {
       </div>
     </div>
   );
+}
+
+/** A file's bytes as base64 (no `data:` prefix). */
+async function readBase64(file: File): Promise<string> {
+  const url = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    });
+    reader.addEventListener("error", () => {
+      reject(new Error("read failed"));
+    });
+    reader.readAsDataURL(file);
+  });
+  return url.slice(url.indexOf(",") + 1);
 }
 
 /** Read `POST /api/chat`'s NDJSON reply, handing each event over as it arrives. */
@@ -59,6 +87,8 @@ async function readChatStream(
  * The conversation and its input. Sends to `/api/chat` and streams the reply into
  * an assistant bubble at the end of the thread as the model writes it, then reloads
  * the page's messages. Enter (or ⌘/Ctrl+Enter) sends; Shift+Enter starts a new line.
+ * Files can be attached (paperclip): text files are read here and folded into the
+ * message; images and PDFs go to the model as base64 for this turn only.
  * With `fill`, the thread scrolls and the input stays pinned to the bottom.
  */
 export function ChatComposer({
@@ -88,7 +118,12 @@ export function ChatComposer({
   const [sent, setSent] = useState("");
   const [reply, setReply] = useState("");
   const [hasText, setHasText] = useState(false);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [sentAttachments, setSentAttachments] = useState<ChatAttachment[]>([]);
+  const [files, setFiles] = useState<ChatFile[]>([]);
+  const [sentFiles, setSentFiles] = useState<ChatFile[]>([]);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pending = streaming || reloading;
 
@@ -101,6 +136,56 @@ export function ChatComposer({
     }
   }, [messageCount, pending, reply]);
 
+  const attachedCount = attachments.length + files.length;
+  const canSend = hasText || attachedCount > 0;
+
+  async function attach(picked: File[]) {
+    setError(null);
+    const next = [...attachments];
+    const nextFiles = [...files];
+    for (const file of picked) {
+      if (next.length + nextFiles.length >= MAX_ATTACHMENTS) {
+        setError(`Attach at most ${String(MAX_ATTACHMENTS)} files.`);
+        break;
+      }
+      const binary = fileTypeOf(file.name);
+      if (binary !== null) {
+        const used = nextFiles.reduce((sum, f) => sum + base64Bytes(f.data), 0);
+        const problem =
+          fileProblem(file.name, binary.kind, file.size) ??
+          (used + file.size > MAX_FILES_TOTAL_BYTES
+            ? `${file.name}: attached files would exceed ${String(MAX_FILES_TOTAL_BYTES / 1024 / 1024)} MB together.`
+            : null);
+        if (problem === null) {
+          nextFiles.push({
+            name: file.name,
+            mediaType: binary.mediaType,
+            data: await readBase64(file),
+          });
+        } else {
+          setError(problem);
+        }
+        continue;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setError(`${file.name}: the file is too large to attach.`);
+        continue;
+      }
+      const content = await file.text();
+      const problem = attachmentProblem(file.name, content);
+      if (problem === null) {
+        next.push({ name: file.name, content });
+      } else {
+        setError(problem);
+      }
+    }
+    setAttachments(next);
+    setFiles(nextFiles);
+    if (fileInput.current !== null) {
+      fileInput.current.value = "";
+    }
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // let an IME finish composing (Polish/CJK input) before Enter means "send"
     if (
@@ -111,7 +196,7 @@ export function ChatComposer({
       return;
     }
     event.preventDefault();
-    if (pending || event.currentTarget.value.trim() === "") {
+    if (pending || !canSend) {
       return;
     }
     event.currentTarget.form?.requestSubmit();
@@ -119,13 +204,19 @@ export function ChatComposer({
 
   async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) {
+    if (pending || !canSend) {
       return;
     }
     const form = new FormData(event.currentTarget);
+    const texts = attachments;
+    const binaries = files;
     const message = form.get("message");
     const model = form.get("model");
     setSent(typeof message === "string" ? message.trim() : "");
+    setSentAttachments(texts);
+    setAttachments([]);
+    setSentFiles(binaries);
+    setFiles([]);
     setReply("");
     setError(null);
     setStreaming(true);
@@ -139,7 +230,13 @@ export function ChatComposer({
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message, model }),
+        body: JSON.stringify({
+          conversationId,
+          message,
+          model,
+          attachments: texts,
+          files: binaries,
+        }),
       });
       if (response.ok) {
         await readChatStream(response, (chatEvent) => {
@@ -199,10 +296,22 @@ export function ChatComposer({
         {thread}
         {pending ? (
           <div className="space-y-4">
-            {sent === "" ? null : (
+            {sent === "" &&
+            sentAttachments.length === 0 &&
+            sentFiles.length === 0 ? null : (
               <div className="flex justify-end">
                 <div className="max-w-[85%] rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-emerald-50 ring-1 ring-emerald-500/30">
                   {sent}
+                  {sentAttachments.map((a) => (
+                    <AttachmentChip key={a.name} attachment={a} />
+                  ))}
+                  {sentFiles.map((f) => (
+                    <FileChip
+                      key={f.name}
+                      name={f.name}
+                      kind={f.mediaType === "application/pdf" ? "pdf" : "image"}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -230,12 +339,82 @@ export function ChatComposer({
         }}
         className="mt-6 shrink-0 space-y-3 border-t border-zinc-800 pt-5"
       >
-        <div className="flex items-end gap-2 rounded-[28px] border border-zinc-800 bg-zinc-800/60 py-2 pr-2 pl-6 transition-colors focus-within:border-zinc-600">
+        {attachedCount === 0 ? null : (
+          <ul className="flex flex-wrap gap-2">
+            {files.map((f, index) => (
+              <li
+                key={`file-${f.name}-${String(index)}`}
+                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/60 py-1 pr-1.5 pl-3 text-xs text-zinc-300"
+              >
+                <span aria-hidden>
+                  {f.mediaType === "application/pdf" ? "📄" : "🖼️"}
+                </span>
+                <span className="max-w-48 truncate">{f.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${f.name}`}
+                  onClick={() => {
+                    setFiles((list) =>
+                      list.filter((_, position) => position !== index),
+                    );
+                  }}
+                  className="flex h-5 w-5 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+            {attachments.map((a, index) => (
+              <li
+                key={`${a.name}-${String(index)}`}
+                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/60 py-1 pr-1.5 pl-3 text-xs text-zinc-300"
+              >
+                <span aria-hidden>📎</span>
+                <span className="max-w-48 truncate">{a.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${a.name}`}
+                  onClick={() => {
+                    setAttachments((list) =>
+                      list.filter((_, position) => position !== index),
+                    );
+                  }}
+                  className="flex h-5 w-5 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-700 hover:text-zinc-100"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-end gap-2 rounded-[28px] border border-zinc-800 bg-zinc-800/60 py-2 pr-2 pl-2 transition-colors focus-within:border-zinc-600">
+          <button
+            type="button"
+            title="Attach files (text, images, PDF)"
+            aria-label="Attach files"
+            disabled={pending || attachedCount >= MAX_ATTACHMENTS}
+            onClick={() => {
+              fileInput.current?.click();
+            }}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <PaperclipIcon className="h-5 w-5" />
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={CHAT_FILE_ACCEPT}
+            className="hidden"
+            onChange={(event) => {
+              void attach([...(event.target.files ?? [])]);
+            }}
+          />
           <textarea
             ref={textarea}
             name="message"
             rows={1}
-            required
+            required={attachedCount === 0}
             onKeyDown={onKeyDown}
             onChange={(event) => {
               setHasText(event.target.value.trim() !== "");
@@ -246,7 +425,7 @@ export function ChatComposer({
           />
           <button
             type="submit"
-            disabled={pending || !hasText}
+            disabled={pending || !canSend}
             title="Send (Enter)"
             aria-label={pending ? "Sending" : "Send"}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"

@@ -3,6 +3,8 @@ import OpenAI from "openai";
 
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
 import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
+import { kindOfMediaType } from "@/lib/chat-attachments";
+import type { ChatFile } from "@/lib/chat-attachments";
 import { gatewayRequest } from "@/lib/gateway-http";
 
 import {
@@ -69,12 +71,80 @@ function envCredentials(option: ModelOption): Credentials {
   };
 }
 
+/** The history for Claude, with images/PDFs as content blocks on the newest user turn. */
+function anthropicMessages(messages: ChatTurn[], files: ChatFile[]) {
+  return messages.map((turn, index) => {
+    if (files.length === 0 || index !== messages.length - 1) {
+      return turn;
+    }
+    return {
+      role: turn.role,
+      content: [
+        ...files.map((file) =>
+          kindOfMediaType(file.mediaType) === "pdf"
+            ? {
+                type: "document" as const,
+                title: file.name,
+                source: {
+                  type: "base64" as const,
+                  media_type: "application/pdf" as const,
+                  data: file.data,
+                },
+              }
+            : {
+                type: "image" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: file.mediaType as
+                    "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                  data: file.data,
+                },
+              },
+        ),
+        { type: "text" as const, text: turn.content },
+      ],
+    };
+  });
+}
+
+/** The history for OpenAI-style APIs, with images/PDFs as content parts on the newest user turn. */
+function openAIMessages(
+  messages: ChatTurn[],
+  files: ChatFile[],
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return messages.map((turn, index) => {
+    if (
+      files.length === 0 ||
+      index !== messages.length - 1 ||
+      turn.role !== "user"
+    ) {
+      return turn;
+    }
+    return {
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: turn.content },
+        ...files.map((file) => {
+          const url = `data:${file.mediaType};base64,${file.data}`;
+          return kindOfMediaType(file.mediaType) === "pdf"
+            ? {
+                type: "file" as const,
+                file: { filename: file.name, file_data: url },
+              }
+            : { type: "image_url" as const, image_url: { url } };
+        }),
+      ],
+    };
+  });
+}
+
 async function callAnthropic(
   credentials: Credentials,
   model: string,
   system: string,
   messages: ChatTurn[],
   onDelta: ((text: string) => void) | undefined,
+  files: ChatFile[],
 ): Promise<string> {
   const client = new Anthropic({
     apiKey: credentials.apiKey,
@@ -86,7 +156,7 @@ async function callAnthropic(
     model,
     max_tokens: MAX_TOKENS,
     system,
-    messages,
+    messages: anthropicMessages(messages, files),
     ...(fiveFamily
       ? {
           // chat answers don't need deep reasoning; keeps latency and cost down
@@ -115,10 +185,14 @@ async function callOpenAICompatible(
   system: string,
   messages: ChatTurn[],
   onDelta: ((text: string) => void) | undefined,
+  files: ChatFile[],
 ): Promise<string> {
   const stream = await client.chat.completions.create({
     model,
-    messages: [{ role: "system", content: system }, ...messages],
+    messages: [
+      { role: "system", content: system },
+      ...openAIMessages(messages, files),
+    ],
     stream: true,
   });
   let reply = "";
@@ -293,7 +367,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     return mockProvider;
   }
 
-  return async ({ history, policies, principal, onDelta }) => {
+  return async ({ history, policies, principal, onDelta, files = [] }) => {
     const system = buildSystemPrompt(policies);
     const messages = normalizeHistory(history);
     try {
@@ -319,6 +393,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
                 system,
                 messages,
                 onDelta,
+                files,
               )
             : await callOpenAICompatible(
                 openAIClient(credentials),
@@ -326,6 +401,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
                 system,
                 messages,
                 onDelta,
+                files,
               );
       }
       if (reply === "") {

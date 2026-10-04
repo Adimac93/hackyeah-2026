@@ -1,5 +1,6 @@
 // AI security assistant: pure logic shared by every model. No framework imports, so it's unit-testable.
 // Real model calls live in `lib/llm/providers.ts`; `mockProvider` is the offline fallback.
+import type { ChatFile } from "./chat-attachments.ts";
 
 export type ChatRole = "user" | "assistant";
 export interface ChatTurn {
@@ -36,6 +37,8 @@ export type AssistantProvider = (input: {
   principal?: string;
   /** called with each piece of the reply as the model writes it; the resolved string is the final word */
   onDelta?: (text: string) => void;
+  /** images/PDFs sent with the newest user message (not part of the stored history) */
+  files?: ChatFile[];
 }) => Promise<string>;
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
