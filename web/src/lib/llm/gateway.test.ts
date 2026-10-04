@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { interpretGatewayResponse } from "./gateway.ts";
+import {
+  decodeGatewaySse,
+  finishGatewayStream,
+  interpretGatewayResponse,
+} from "./gateway.ts";
 import type { GatewayOutcome } from "./gateway.ts";
 
 function replyOf(outcome: GatewayOutcome): string {
@@ -109,4 +113,78 @@ void test("a deterministic refusal says the prompt fails the deterministic requi
         "doesn't meet the deterministic security requirements",
       ),
   );
+});
+
+const sse = (...chunks: unknown[]) =>
+  chunks
+    .map((c) => `data: ${typeof c === "string" ? c : JSON.stringify(c)}\n\n`)
+    .join("");
+const delta = (content: string) => ({ choices: [{ delta: { content } }] });
+
+void test("decodeGatewaySse reads deltas, the final chunk and [DONE], across splits", () => {
+  const layer = {
+    trace_id: "abcdef1234",
+    response_out: { verdict: "allow", controls_fired: [] },
+  };
+  const wire = sse(
+    delta("Hel"),
+    delta("lo"),
+    { choices: [{ delta: {}, finish_reason: "stop" }], x_control_layer: layer },
+    "[DONE]",
+  );
+  const first = decodeGatewaySse(wire.slice(0, 25));
+  const second = decodeGatewaySse(first.rest + wire.slice(25));
+  assert.deepEqual(
+    [...first.events, ...second.events],
+    [
+      { type: "delta", text: "Hel" },
+      { type: "delta", text: "lo" },
+      { type: "final", layer },
+      { type: "done" },
+    ],
+  );
+  assert.equal(second.rest, "");
+});
+
+void test("decodeGatewaySse skips keep-alives and garbage", () => {
+  assert.deepEqual(decodeGatewaySse(":\n\ndata: nope\n\n").events, []);
+});
+
+void test("finishGatewayStream: clean, redacted, refused and broken-off endings", () => {
+  assert.deepEqual(
+    finishGatewayStream("hi", {
+      type: "final",
+      layer: { response_out: { verdict: "allow", controls_fired: [] } },
+    }),
+    { ok: true, reply: "hi" },
+  );
+  assert.match(
+    replyOf(
+      finishGatewayStream("mail [REDACTED:pii.email]", {
+        type: "final",
+        layer: {
+          trace_id: "abcdef1234",
+          response_out: { verdict: "redact", controls_fired: ["pii.email"] },
+        },
+      }),
+    ),
+    /redacted content \(pii\.email\) \(trace abcdef12\)/,
+  );
+  assert.match(
+    replyOf(
+      finishGatewayStream("partial text", {
+        type: "refusal",
+        body: {
+          error: {
+            type: "blocked_by_control",
+            message: "response blocked by secrets.private-key",
+            stage: "deterministic",
+          },
+          trace_id: "abcdef1234",
+        },
+      }),
+    ),
+    /^🛡 .*secrets\.private-key/,
+  );
+  assert.equal(finishGatewayStream("partial").ok, false);
 });
