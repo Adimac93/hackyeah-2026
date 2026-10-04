@@ -35,8 +35,9 @@ typecheck:
 lint:
     cd web && pnpm lint && pnpm format:check
 
+# --nocapture shows the self-test reports: every input, its verdict and risk score
 test:
-    cargo test --workspace --all-targets
+    cargo test --workspace --all-targets -- --nocapture
     cd web && pnpm test
 
 # gateway and web app together — what you want for the demo

@@ -544,6 +544,46 @@ fn every_shipped_control_has_red_and_green_cases() {
     );
 }
 
+/// The catalog cases as a report, one line per input: the verdict, the
+/// controls that fired and what the input adds to its user's risk score.
+/// Red must trip its control, green must leave it quiet. `just test` shows it.
+#[test]
+fn report_every_shipped_case() {
+    let p = shipped();
+    let mut lines = Vec::new();
+    let mut failed = Vec::new();
+    for c in shipped_cases() {
+        for (kind, texts) in [("red", &c.red), ("green", &c.green)] {
+            for text in texts {
+                let out = evaluate(&p, c.hook, text);
+                let ok = trips(&p, c.control, c.hook, text) == (kind == "red");
+                let fired: Vec<_> = out.detections.iter().map(|d| d.control_id.as_str()).collect();
+                let mut shown: String = text.chars().take(70).collect();
+                if shown.len() < text.len() {
+                    shown.push('…');
+                }
+                lines.push(format!(
+                    "[{}] {:<34} {:<12} {kind:<5} -> {:<6} risk {:.2} {fired:?}\n      in {shown:?}",
+                    if ok { "PASS" } else { "FAIL" },
+                    c.control,
+                    format!("{:?}", c.hook),
+                    format!("{:?}", out.verdict).to_lowercase(),
+                    crate::risk::of(&out),
+                ));
+                if !ok {
+                    failed.push(format!("{} {kind}: {text:?}", c.control));
+                }
+            }
+        }
+    }
+    println!(
+        "\n=== shipped catalog: red and green cases per control ({} inputs) ===\n{}\n",
+        lines.len(),
+        lines.join("\n")
+    );
+    assert!(failed.is_empty(), "cases that failed:\n{}", failed.join("\n"));
+}
+
 #[test]
 fn a_script_tag_is_redacted_and_the_rest_of_the_answer_survives() {
     let out = evaluate(
