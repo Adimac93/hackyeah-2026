@@ -103,6 +103,7 @@ export default async function ControlsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Control catalog"
         title="Controls & policies"
         subtitle="The control catalog the gateway enforces, who may reach which resources, and what each user may spend"
       />
@@ -156,7 +157,7 @@ export default async function ControlsPage() {
         </Card>
 
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-300">
+          <h2 className="font-serif text-2xl text-zinc-100">
             Active controls
             <span className="ml-2 text-xs font-normal text-zinc-500">
               {rows.length} in the catalog
@@ -182,7 +183,7 @@ export default async function ControlsPage() {
               <ControlsTable rows={rows} editing={editing} />
               {feed.length === 0 ? null : (
                 <div className="space-y-2 pt-2">
-                  <h3 className="text-xs font-semibold text-zinc-400">
+                  <h3 className="eyebrow text-zinc-400">
                     From the signature feed ({feed.length})
                     <span className="ml-2 font-normal text-zinc-500">
                       compiled from signatures.toml, uploaded with the catalog —

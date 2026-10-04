@@ -4,7 +4,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import type { KeyboardEvent, ReactNode, SubmitEvent } from "react";
 
-import { ArrowUpIcon, PaperclipIcon } from "@/components/icons";
+import {
+  ArrowUpIcon,
+  DocumentIcon,
+  ImageIcon,
+  PaperclipIcon,
+} from "@/components/icons";
 import {
   CHAT_FILE_ACCEPT,
   MAX_ATTACHMENTS,
@@ -31,7 +36,7 @@ function TypingBubble({ status }: { status: string }) {
       role="status"
       aria-label={status === "" ? "Assistant is typing" : status}
     >
-      <div className="flex items-center gap-1 rounded-xl bg-zinc-800/80 px-4 py-3.5">
+      <div className="flex items-center gap-1 rounded-xl rounded-bl-sm border border-zinc-800 bg-zinc-950 px-4 py-3.5">
         {[0, 150, 300].map((delay) => (
           <span
             key={delay}
@@ -317,7 +322,7 @@ export function ChatComposer({
             sentAttachments.length === 0 &&
             sentFiles.length === 0 ? null : (
               <div className="flex justify-end">
-                <div className="max-w-[85%] rounded-xl bg-emerald-500/15 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-emerald-50 ring-1 ring-emerald-500/30">
+                <div className="max-w-[85%] rounded-xl rounded-br-sm bg-emerald-500 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-950">
                   {sent}
                   {sentAttachments.map((a) => (
                     <AttachmentChip key={a.name} attachment={a} />
@@ -341,7 +346,7 @@ export function ChatComposer({
                 className="flex flex-col items-start gap-2"
                 aria-live="polite"
               >
-                <div className="max-w-[85%] rounded-xl bg-zinc-800/80 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
+                <div className="max-w-[85%] rounded-xl rounded-bl-sm border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
                   {reply}
                   {streaming ? (
                     <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
@@ -365,11 +370,13 @@ export function ChatComposer({
             {files.map((f, index) => (
               <li
                 key={`file-${f.name}-${String(index)}`}
-                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/60 py-1 pr-1.5 pl-3 text-xs text-zinc-300"
+                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-900 py-1 pr-1.5 pl-3 text-xs text-zinc-200"
               >
-                <span aria-hidden>
-                  {f.mediaType === "application/pdf" ? "📄" : "🖼️"}
-                </span>
+                {f.mediaType === "application/pdf" ? (
+                  <DocumentIcon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                ) : (
+                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                )}
                 <span className="max-w-48 truncate">{f.name}</span>
                 <button
                   type="button"
@@ -388,9 +395,9 @@ export function ChatComposer({
             {attachments.map((a, index) => (
               <li
                 key={`${a.name}-${String(index)}`}
-                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/60 py-1 pr-1.5 pl-3 text-xs text-zinc-300"
+                className="flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-900 py-1 pr-1.5 pl-3 text-xs text-zinc-200"
               >
-                <span aria-hidden>📎</span>
+                <PaperclipIcon className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
                 <span className="max-w-48 truncate">{a.name}</span>
                 <button
                   type="button"
@@ -408,7 +415,7 @@ export function ChatComposer({
             ))}
           </ul>
         )}
-        <div className="flex items-end gap-2 rounded-[28px] border border-zinc-800 bg-zinc-800/60 py-2 pr-2 pl-2 transition-colors focus-within:border-zinc-600">
+        <div className="flex items-end gap-2 rounded-3xl border border-zinc-700 bg-zinc-950 p-1 shadow-[0_8px_24px_rgb(16_44_66/0.06)] transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15">
           <button
             type="button"
             title="Attach files (text, images, PDF)"
@@ -417,9 +424,9 @@ export function ChatComposer({
             onClick={() => {
               fileInput.current?.click();
             }}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <PaperclipIcon className="h-5 w-5" />
+            <PaperclipIcon className="h-4 w-4" />
           </button>
           <input
             ref={fileInput}
@@ -441,7 +448,7 @@ export function ChatComposer({
               setHasText(event.target.value.trim() !== "");
             }}
             aria-keyshortcuts="Enter Control+Enter Meta+Enter"
-            className="field-sizing-content max-h-48 min-w-0 flex-1 resize-none bg-transparent py-2.5 text-base text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+            className="field-sizing-content max-h-48 min-w-0 flex-1 resize-none bg-transparent py-1 text-[15px] leading-6 text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
             placeholder={placeholder}
           />
           <button
@@ -449,9 +456,9 @@ export function ChatComposer({
             disabled={pending || !canSend}
             title="Send (Enter)"
             aria-label={pending ? "Sending" : "Send"}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:bg-zinc-800 disabled:text-zinc-500"
           >
-            <ArrowUpIcon className="h-5 w-5" />
+            <ArrowUpIcon className="h-3.5 w-3.5" />
           </button>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">

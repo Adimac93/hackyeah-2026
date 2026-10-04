@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useActionState } from "react";
 
-import { inputClass } from "@/components/ui";
+import { buttonClass, inputClass, secondaryButtonClass } from "@/components/ui";
 
 import { authenticate } from "./actions";
 
@@ -14,9 +14,7 @@ export function LoginForm({ next }: { next?: string }) {
     <form action={action} className="space-y-4">
       <input type="hidden" name="next" value={next ?? ""} />
       <label className="block space-y-1.5">
-        <span className="text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Work email
-        </span>
+        <span className="eyebrow text-zinc-400">Work email</span>
         <input
           name="email"
           type="email"
@@ -27,21 +25,20 @@ export function LoginForm({ next }: { next?: string }) {
         />
       </label>
       <label className="block space-y-1.5">
-        <span className="text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Password
-        </span>
+        <span className="eyebrow text-zinc-400">Password</span>
         <input
           name="password"
           type="password"
           autoComplete="current-password"
           required
+          placeholder="Enter your password"
           className={inputClass}
         />
       </label>
       <p className="-mt-2 text-right">
         <Link
           href="/login/forgot"
-          className="text-xs text-zinc-500 hover:text-emerald-400"
+          className="text-xs text-zinc-500 underline-offset-4 hover:text-emerald-400 hover:underline"
         >
           Forgot password?
         </Link>
@@ -50,7 +47,7 @@ export function LoginForm({ next }: { next?: string }) {
       {state.error === undefined ? null : (
         <p
           role="alert"
-          className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+          className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
         >
           {state.error}
         </p>
@@ -58,7 +55,7 @@ export function LoginForm({ next }: { next?: string }) {
       {state.ok === undefined ? null : (
         <p
           role="status"
-          className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300"
+          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300"
         >
           {state.ok}
         </p>
@@ -69,7 +66,7 @@ export function LoginForm({ next }: { next?: string }) {
           name="mode"
           value="signin"
           disabled={pending}
-          className="flex-1 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
+          className={`${buttonClass} flex-1`}
         >
           {pending ? "…" : "Sign in"}
         </button>
@@ -77,7 +74,7 @@ export function LoginForm({ next }: { next?: string }) {
           name="mode"
           value="signup"
           disabled={pending}
-          className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+          className={secondaryButtonClass}
         >
           Create account
         </button>

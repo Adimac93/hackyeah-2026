@@ -29,12 +29,19 @@ function StepLine({ step }: { step: ToolStep }) {
   return (
     <details className="group rounded-lg border border-zinc-800 bg-zinc-900/60 text-xs">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-zinc-300 select-none hover:text-zinc-100">
-        <span
-          aria-label={refused ? "refused" : "ok"}
-          className={refused ? "text-red-400" : "text-emerald-400"}
-        >
-          {refused ? "⛔" : "✓"}
-        </span>
+        {refused ? (
+          <span
+            aria-label="refused"
+            className="rounded-sm bg-red-500/10 px-1.5 py-0.5 text-[9px] leading-none font-semibold tracking-[0.1em] text-red-300 uppercase ring-1 ring-red-500/30 ring-inset"
+          >
+            Refused
+          </span>
+        ) : (
+          <span
+            aria-label="ok"
+            className="bg-cogut h-1.5 w-1.5 shrink-0 rounded-full"
+          />
+        )}
         <span className="font-mono text-zinc-500">{step.tool}</span>
         <span className="min-w-0 flex-1 truncate">{step.summary}</span>
         <span className="text-zinc-600 transition-transform group-open:rotate-90">
@@ -91,7 +98,7 @@ function ResultTable({ result }: { result: StepResult }) {
                           : "descending"
                         : "none"
                     }
-                    className="border-b border-zinc-800 px-3 py-2 font-medium whitespace-nowrap text-zinc-400"
+                    className="border-b border-zinc-800 px-3 py-2 font-mono font-semibold whitespace-nowrap text-zinc-500"
                   >
                     <button
                       type="button"
@@ -133,7 +140,7 @@ function ResultTable({ result }: { result: StepResult }) {
           </tbody>
         </table>
       </div>
-      <p className="border-t border-zinc-800 px-3 py-1.5 text-xs text-zinc-500">
+      <p className="border-t border-zinc-800 px-3 py-2 font-serif text-xs text-zinc-500 italic">
         {result.row_count} {result.row_count === 1 ? "row" : "rows"} · delivered
         to you by the AI Control Layer; the model saw only the row count
       </p>

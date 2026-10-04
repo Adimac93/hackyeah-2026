@@ -69,9 +69,7 @@ export function ProviderForm({
       pendingLabel="Saving…"
     >
       <fieldset>
-        <legend className="mb-2 text-xs font-medium tracking-wide text-zinc-400 uppercase">
-          Provider
-        </legend>
+        <legend className="eyebrow mb-2 text-zinc-400">Provider</legend>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5">
           {PRESET_IDS.map((id) => (
             <label

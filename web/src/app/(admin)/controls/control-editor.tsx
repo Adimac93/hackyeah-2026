@@ -15,7 +15,7 @@ import type { FormState } from "@/lib/domain";
 
 import { saveControl } from "./actions";
 
-const LABEL = "text-xs font-medium tracking-wide text-zinc-400 uppercase";
+const LABEL = "eyebrow text-zinc-400";
 
 function Form({
   id,
@@ -52,7 +52,7 @@ function Form({
         type="button"
         aria-label="Close editor"
         tabIndex={-1}
-        className="absolute inset-0 cursor-default bg-black/70"
+        className="absolute inset-0 cursor-default bg-[#102c42]/40 backdrop-blur-[2px]"
         onClick={onClose}
       />
       <form
@@ -60,10 +60,11 @@ function Form({
         role="dialog"
         aria-modal="true"
         aria-label={`Edit ${id}`}
-        className="relative w-full max-w-xl space-y-4 rounded-xl border border-zinc-800 bg-zinc-900 p-5 text-left shadow-2xl"
+        className="accent-rule animate-enter w-full max-w-xl space-y-4 rounded-xl border border-zinc-800 bg-zinc-900 p-6 pl-8 text-left shadow-[0_24px_60px_rgb(16_44_66/0.25)]"
       >
         <header>
-          <h2 className="font-mono text-sm text-zinc-100">{id}</h2>
+          <p className="eyebrow">Edit control</p>
+          <h2 className="mt-2 font-mono text-[15px] text-zinc-50">{id}</h2>
           <p className="text-xs text-zinc-500">
             {fields.kind} control · saving rewrites this control in the catalog
             and activates it as a new version
@@ -196,7 +197,7 @@ function Form({
           <button
             type="submit"
             disabled={pending || state.ok !== undefined}
-            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
           >
             {pending ? "Validating…" : "Save & activate"}
           </button>

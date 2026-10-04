@@ -1,18 +1,19 @@
+import { DocumentIcon, ImageIcon, PaperclipIcon } from "@/components/icons";
 import type { ChatAttachment, FileKind } from "@/lib/chat-attachments";
 
 /** An attached text file inside a message bubble: its name, expandable to its content. */
 export function AttachmentChip({ attachment }: { attachment: ChatAttachment }) {
   return (
-    <details className="group mt-2 rounded-lg border border-zinc-700/60 bg-zinc-950/40 text-xs">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1.5 text-zinc-300 hover:text-zinc-100">
-        <span aria-hidden>📎</span>
+    <details className="group mt-2 rounded-md border border-current/25 bg-black/10 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1.5 opacity-90 hover:opacity-100">
+        <PaperclipIcon className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">{attachment.name}</span>
-        <span className="ml-auto text-zinc-500 group-open:hidden">show</span>
-        <span className="ml-auto hidden text-zinc-500 group-open:inline">
+        <span className="ml-auto opacity-60 group-open:hidden">show</span>
+        <span className="ml-auto hidden opacity-60 group-open:inline">
           hide
         </span>
       </summary>
-      <pre className="scrollbar-subtle max-h-64 overflow-auto border-t border-zinc-700/60 px-2.5 py-2 whitespace-pre-wrap text-zinc-400">
+      <pre className="scrollbar-subtle max-h-64 overflow-auto border-t border-current/25 px-2.5 py-2 whitespace-pre-wrap opacity-80">
         {attachment.content}
       </pre>
     </details>
@@ -23,12 +24,16 @@ export function AttachmentChip({ attachment }: { attachment: ChatAttachment }) {
 export function FileChip({ name, kind }: { name: string; kind: FileKind }) {
   return (
     <span
-      className="mt-2 flex items-center gap-1.5 rounded-lg border border-zinc-700/60 bg-zinc-950/40 px-2.5 py-1.5 text-xs text-zinc-300"
+      className="mt-2 flex items-center gap-1.5 rounded-md border border-current/25 bg-black/10 px-2.5 py-1.5 text-xs opacity-90"
       title="Sent to the model with this message; not kept in the history"
     >
-      <span aria-hidden>{kind === "pdf" ? "📄" : "🖼️"}</span>
+      {kind === "pdf" ? (
+        <DocumentIcon className="h-3.5 w-3.5 shrink-0" />
+      ) : (
+        <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+      )}
       <span className="truncate">{name}</span>
-      <span className="ml-auto text-zinc-500">
+      <span className="ml-auto opacity-60">
         {kind === "pdf" ? "PDF" : "image"}
       </span>
     </span>

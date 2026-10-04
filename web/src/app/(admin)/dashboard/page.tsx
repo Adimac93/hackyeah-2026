@@ -89,12 +89,13 @@ export default async function DashboardPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Overview"
         title="Security overview"
         subtitle="Live posture across the AI gateway, its users and their requests"
       />
 
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-zinc-300">
+        <h2 className="font-serif text-2xl text-zinc-100">
           AI gateway · last 24h
         </h2>
         <Link
@@ -108,12 +109,12 @@ export default async function DashboardPage() {
         {gatewayTiles.map((t) => (
           <div
             key={t.label}
-            className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
+            className={`rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 ${t.label === "Blocked" ? "accent-rule pl-6" : ""}`}
           >
-            <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
-              {t.label}
-            </p>
-            <p className={`mt-2 text-3xl font-semibold tabular-nums ${t.tone}`}>
+            <p className="eyebrow text-zinc-500">{t.label}</p>
+            <p
+              className={`mt-3 font-serif text-[2.5rem] leading-none tracking-tight tabular-nums ${t.tone}`}
+            >
               {t.value}
             </p>
             {t.sub === undefined ? null : (
@@ -192,7 +193,7 @@ export default async function DashboardPage() {
         >
           {risk.ok && riskyUsers.length === 0 ? (
             <p className="text-sm text-zinc-500">
-              No user has recent violations. 🎉
+              No user has recent violations.
             </p>
           ) : risk.ok ? (
             <ul className="-my-2 divide-y divide-zinc-800">

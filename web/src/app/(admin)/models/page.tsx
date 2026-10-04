@@ -81,6 +81,7 @@ export default async function ModelsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="LLM connections"
         title="Models"
         subtitle="LLM connections available to the security assistant"
       />
@@ -140,7 +141,9 @@ export default async function ModelsPage() {
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold text-zinc-100">{c.name}</h2>
+                      <h2 className="font-serif text-lg text-zinc-50">
+                        {c.name}
+                      </h2>
                       <span
                         className={`rounded-md px-1.5 py-0.5 text-xs ring-1 ring-inset ${
                           c.enabled

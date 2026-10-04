@@ -167,6 +167,7 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
   return (
     <>
       <PageHeader
+        eyebrow="Tool calls"
         title="MCP"
         subtitle="Every tool call and tool result the gateway brokered, and every access request agents raised."
       />
@@ -177,10 +178,10 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
             key={t.label}
             className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
           >
-            <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
-              {t.label}
-            </p>
-            <p className={`mt-2 text-3xl font-semibold tabular-nums ${t.tone}`}>
+            <p className="eyebrow text-zinc-500">{t.label}</p>
+            <p
+              className={`mt-3 font-serif text-[2.5rem] leading-none tracking-tight tabular-nums ${t.tone}`}
+            >
               {t.value}
             </p>
             <p className="mt-1 text-xs text-zinc-500">{t.sub}</p>
@@ -323,7 +324,7 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
       </Card>
 
       <div className="mt-8 mb-3 flex items-baseline justify-between" id="calls">
-        <h2 className="text-sm font-semibold text-zinc-300">
+        <h2 className="font-serif text-2xl text-zinc-100">
           Tool calls and results
         </h2>
       </div>
@@ -356,7 +357,7 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
             </option>
           ))}
         </select>
-        <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
+        <button className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-3.5 py-2 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900">
           Filter
         </button>
         {verdict || hook || tool ? (

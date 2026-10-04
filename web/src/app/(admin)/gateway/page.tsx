@@ -71,10 +71,10 @@ function Tile({
 }) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
-        {label}
-      </p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${tone}`}>
+      <p className="eyebrow text-zinc-500">{label}</p>
+      <p
+        className={`mt-3 font-serif text-3xl leading-none tracking-tight tabular-nums ${tone}`}
+      >
         {value}
       </p>
       {sub === undefined ? null : (
@@ -112,6 +112,7 @@ export default async function GatewayPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Live gateway"
         title="Gateway"
         subtitle="Live state of the running AI Control Layer, read straight from the gateway"
         actions={
@@ -120,7 +121,7 @@ export default async function GatewayPage() {
               href={`${base}/admin/docs`}
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-3.5 py-2 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900"
             >
               API docs ↗
             </a>
@@ -169,7 +170,7 @@ export default async function GatewayPage() {
         />
       </div>
 
-      <h2 className="mt-8 mb-3 text-sm font-semibold text-zinc-300">
+      <h2 className="mt-10 mb-4 font-serif text-2xl text-zinc-100">
         Last 24h · from <code className="text-xs">GET /metrics</code>
       </h2>
       <LiveData live={metrics}>
@@ -376,7 +377,7 @@ export default async function GatewayPage() {
         )}
       </LiveData>
 
-      <h2 className="mt-8 mb-3 text-sm font-semibold text-zinc-300">
+      <h2 className="mt-10 mb-4 font-serif text-2xl text-zinc-100">
         Enforced policy · from <code className="text-xs">GET /policy</code>
       </h2>
       <LiveData live={policy}>
@@ -557,7 +558,7 @@ export default async function GatewayPage() {
                             </td>
                             <td className={`${tdClass} text-xs text-zinc-400`}>
                               {c.kind === "semantic"
-                                ? `${c.detector ?? "—"} ≥ ${String(c.threshold ?? "—")}`
+                                ? `${c.detector ?? "—"} ≥ ${c.threshold === undefined ? "—" : c.threshold.toFixed(2)}`
                                 : (c.feed ?? "built-in")}
                             </td>
                           </tr>

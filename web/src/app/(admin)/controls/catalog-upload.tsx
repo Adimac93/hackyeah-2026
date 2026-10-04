@@ -193,7 +193,7 @@ export function CatalogUpload({
               disabled={
                 pending || checked.problems.length > 0 || state.ok !== undefined
               }
-              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
             >
               {pending ? "Validating…" : "Replace all rules & activate"}
             </button>

@@ -95,16 +95,17 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
       }
       className={
         consoleView
-          ? "lg:col-span-3"
+          ? // fills the grid row on large screens; the thread scrolls inside
+            "flex min-h-[70dvh] flex-col lg:col-span-3 lg:min-h-0"
           : // full height below main's padding, so the input sits at the bottom
-            "flex min-h-[70dvh] flex-col md:h-[calc(100dvh-4rem)] md:min-h-0"
+            "flex min-h-[70dvh] flex-col md:h-[calc(100dvh-5rem)] md:min-h-0"
       }
-      bodyClassName={consoleView ? "p-5" : "flex min-h-0 flex-1 flex-col p-5"}
+      bodyClassName="flex min-h-0 flex-1 flex-col p-5"
     >
       <ChatComposer
         conversationId={active?.id ?? null}
         placeholder="Ask anything… (never paste real secrets)"
-        fill={!consoleView}
+        fill
         messageCount={messages.length}
         thread={
           <>
@@ -127,8 +128,8 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                   title={fmtDateTime(m.created_at)}
                   className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
                     m.role === "user"
-                      ? "bg-emerald-500/15 text-emerald-50 ring-1 ring-emerald-500/30"
-                      : "bg-zinc-800/80 text-zinc-200"
+                      ? "rounded-br-sm bg-emerald-500 text-zinc-950"
+                      : "rounded-bl-sm border border-zinc-800 bg-zinc-950 text-zinc-200"
                   }`}
                 >
                   {m.role === "user" ? (
@@ -177,14 +178,19 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
     return chatCard;
   }
 
+  // never taller than the window: header on top, the two cards share the rest
+  // and scroll inside (main pads 2.5rem top and bottom on md+)
   return (
-    <>
-      <PageHeader
-        title="Security assistant"
-        subtitle="Ask about secure coding and company security policy. Your chats are private to you."
-      />
+    <div className="flex flex-col lg:h-[calc(100dvh-5rem)]">
+      <div className="shrink-0">
+        <PageHeader
+          eyebrow="Assistant"
+          title="Security assistant"
+          subtitle="Ask about secure coding and company security policy. Your chats are private to you."
+        />
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-4">
+      <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-4 lg:grid-rows-[minmax(0,1fr)]">
         <Card
           title="Conversations"
           actions={
@@ -204,7 +210,8 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
               </Link>
             </div>
           }
-          className="h-fit"
+          className="flex min-h-0 flex-col"
+          bodyClassName="scrollbar-subtle min-h-0 max-h-72 flex-1 overflow-y-auto p-5 lg:max-h-none"
         >
           <div className="-mx-2">
             <Suspense>
@@ -215,6 +222,6 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
 
         {chatCard}
       </div>
-    </>
+    </div>
   );
 }

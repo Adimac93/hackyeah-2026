@@ -67,6 +67,7 @@ export default async function TeamPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Access"
         title="Security team"
         subtitle={
           isAdmin

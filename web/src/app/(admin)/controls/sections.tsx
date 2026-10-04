@@ -41,7 +41,7 @@ function ControlCells({ control }: { control: LiveControl }) {
         <p className="text-xs text-zinc-500">
           {control.kind}
           {control.kind === "semantic"
-            ? ` · ${control.detector ?? "judge"} ≥ ${String(control.threshold ?? "—")} · escalate ${control.escalate_when ?? "suspicious"}`
+            ? ` · ${control.detector ?? "judge"} ≥ ${control.threshold === undefined ? "—" : control.threshold.toFixed(2)} · escalate ${control.escalate_when ?? "suspicious"}`
             : ""}
           {typeof control.feed === "string" ? ` · feed ${control.feed}` : ""}
           {off ? (

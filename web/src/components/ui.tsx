@@ -43,7 +43,7 @@ function Pill({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium capitalize ring-1 ring-inset ${className}`}
+      className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] leading-4 font-semibold tracking-[0.1em] whitespace-nowrap uppercase ring-1 ring-inset ${className}`}
     >
       {children}
     </span>
@@ -119,9 +119,15 @@ export function Card({
       className={`rounded-xl border border-zinc-800 bg-zinc-900/60 ${className}`}
     >
       {title !== undefined || actions !== undefined ? (
-        <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-3">
-          <h2 className="text-sm font-semibold text-zinc-200">{title}</h2>
-          {actions}
+        <header className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-zinc-800 px-5 py-3">
+          <h2 className="eyebrow flex items-center gap-2 text-zinc-200">
+            {title}
+          </h2>
+          {actions === undefined ? null : (
+            <div className="flex shrink-0 items-center gap-3 text-xs whitespace-nowrap">
+              {actions}
+            </div>
+          )}
         </header>
       ) : null}
       <div className={bodyClassName}>{children}</div>
@@ -129,29 +135,48 @@ export function Card({
   );
 }
 
+/** The landing's section head: small-caps eyebrow, serif title, muted lede, hairline rule. */
 export function PageHeader({
   title,
   subtitle,
   actions,
+  eyebrow = "Cogut console",
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  eyebrow?: string;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-50">
+    <div className="animate-enter mb-8 flex flex-wrap items-end justify-between gap-x-10 gap-y-4 border-b border-zinc-800 pb-6">
+      <div className="min-w-0">
+        <p className="eyebrow flex items-center gap-2.5">
+          <span className="bg-cogut h-1.5 w-1.5 rounded-full" aria-hidden />
+          {eyebrow}
+        </p>
+        <h1 className="mt-3 text-4xl leading-[1.1] text-zinc-50 md:text-[2.75rem]">
           {title}
         </h1>
         {subtitle === undefined ? null : (
-          <p className="mt-1 text-sm text-zinc-400">{subtitle}</p>
+          <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-zinc-400">
+            {subtitle}
+          </p>
         )}
       </div>
-      {actions}
+      {actions === undefined ? null : (
+        <div className="flex shrink-0 items-center gap-3">{actions}</div>
+      )}
     </div>
   );
 }
+
+/** The landing's primary button: navy (blue in dark), lifts on hover. */
+export const buttonClass =
+  "inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50";
+
+/** The landing's secondary button: hairline outline, sand on hover. */
+export const secondaryButtonClass =
+  "inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900 disabled:pointer-events-none disabled:opacity-50";
 
 export function ButtonLink({
   href,
@@ -161,17 +186,14 @@ export function ButtonLink({
   children: ReactNode;
 }) {
   return (
-    <Link
-      href={href}
-      className="rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
-    >
+    <Link href={href} className={buttonClass}>
       {children}
     </Link>
   );
 }
 
 export const inputClass =
-  "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-60";
+  "w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15 disabled:opacity-60";
 
 export function Field({
   label,
@@ -184,9 +206,7 @@ export function Field({
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium tracking-wide text-zinc-400 uppercase">
-        {label}
-      </span>
+      <span className="eyebrow text-zinc-400">{label}</span>
       {children}
       {hint === undefined ? null : (
         <span className="block text-xs text-zinc-500">{hint}</span>
@@ -227,7 +247,7 @@ export function EmptyRow({
     <tr>
       <td
         colSpan={cols}
-        className="px-4 py-10 text-center text-sm text-zinc-500"
+        className="px-4 py-12 text-center font-serif text-[15px] text-zinc-500 italic"
       >
         {children}
       </td>
@@ -237,5 +257,5 @@ export function EmptyRow({
 
 export const tableClass = "w-full text-left text-sm";
 export const thClass =
-  "px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500";
+  "px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500";
 export const tdClass = "px-4 py-3 align-middle";

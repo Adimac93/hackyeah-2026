@@ -133,3 +133,34 @@ export function PencilIcon(p: IconProps) {
     />
   );
 }
+
+export function SunIcon(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4L7 17M17 7l1.4-1.4M12 8a4 4 0 100 8 4 4 0 000-8z"
+    />
+  );
+}
+
+export function MoonIcon(p: IconProps) {
+  return <Icon {...p} d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z" />;
+}
+
+export function MonitorIcon(p: IconProps) {
+  return <Icon {...p} d="M3 5h18v11H3zM8 20h8M12 16v4" />;
+}
+
+/** Cogut's mark: the landing's shield, drawn as an outline. */
+export function CogutMark(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M12 2.5l8 3.2v5.6c0 2.4-.9 4.4-2.5 6.1L12 21.5l-5.5-4.1C4.9 15.7 4 13.7 4 11.3V5.7l8-3.2zM8.5 12l2.3 2.3 4.7-4.8"
+    />
+  );
+}
+
+export function ImageIcon(p: IconProps) {
+  return <Icon {...p} d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9.5h.01" />;
+}

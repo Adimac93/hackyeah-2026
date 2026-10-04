@@ -138,14 +138,14 @@ function PreviewDialog({
         type="button"
         aria-label="Close preview"
         tabIndex={-1}
-        className="absolute inset-0 cursor-default bg-black/70"
+        className="absolute inset-0 cursor-default bg-[#102c42]/40 backdrop-blur-[2px]"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={`Preview of ${name}`}
-        className="relative w-full max-w-4xl rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
+        className="accent-rule animate-enter w-full max-w-4xl rounded-xl border border-zinc-800 bg-zinc-900 pl-1 shadow-[0_24px_60px_rgb(16_44_66/0.25)]"
       >
         <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-5 py-3">
           <div className="min-w-0">

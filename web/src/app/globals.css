@@ -1,15 +1,276 @@
 @import "tailwindcss";
 
+/*
+ * Cogut design system — the console wears the landing page's editorial look
+ * (paper, navy, sand; Georgia headings over Avenir text; hairline rules; small
+ * radii). Light and dark themes share one set of semantic ramps.
+ *
+ * The app's markup uses Tailwind's zinc/emerald/red/amber/… scales. Rather
+ * than touch every component, those scales are re-pointed at theme-aware CSS
+ * variables below. The markup was written dark-first (zinc-950 = page,
+ * zinc-50 = strongest text, accents read at 300/400 on 500/10 fills), so the
+ * light theme *flips* each ramp around 500: 950↔50, 900↔100, … 600↔400.
+ * Every class keeps its role in both themes — page, panel, rule, muted text,
+ * accent — and nothing in the markup knows which theme is on.
+ *
+ * The theme is a class on <html> (`dark`), set before first paint by the
+ * script in app/layout.tsx from the saved choice or the OS preference.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Avenir Next", Avenir, "Segoe UI", "Trebuchet MS", sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* landing: buttons and chips 3px, panels 5px */
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-md: 3px;
+  --radius-lg: 3px;
+  --radius-xl: 5px;
+  --radius-2xl: 6px;
+
+  /* neutral: page → panel → rule → text */
+  --color-zinc-50: var(--n-50);
+  --color-zinc-100: var(--n-100);
+  --color-zinc-200: var(--n-200);
+  --color-zinc-300: var(--n-300);
+  --color-zinc-400: var(--n-400);
+  --color-zinc-500: var(--n-500);
+  --color-zinc-600: var(--n-600);
+  --color-zinc-700: var(--n-700);
+  --color-zinc-800: var(--n-800);
+  --color-zinc-900: var(--n-900);
+  --color-zinc-950: var(--n-950);
+
+  /* brand: navy / Cogut blue (was the emerald accent) */
+  --color-emerald-50: var(--b-50);
+  --color-emerald-100: var(--b-100);
+  --color-emerald-200: var(--b-200);
+  --color-emerald-300: var(--b-300);
+  --color-emerald-400: var(--b-400);
+  --color-emerald-500: var(--b-500);
+  --color-emerald-600: var(--b-600);
+  --color-emerald-700: var(--b-700);
+
+  /* alert: the landing's brick red */
+  --color-red-200: var(--r-200);
+  --color-red-300: var(--r-300);
+  --color-red-400: var(--r-400);
+  --color-red-500: var(--r-500);
+
+  /* caution: ochre */
+  --color-amber-300: var(--a-300);
+  --color-amber-400: var(--a-400);
+  --color-amber-500: var(--a-500);
+
+  /* severity scale: terracotta, mustard, sky */
+  --color-orange-300: var(--o-300);
+  --color-orange-500: var(--o-500);
+  --color-yellow-200: var(--y-200);
+  --color-yellow-500: var(--y-500);
+  --color-sky-300: var(--s-300);
+  --color-sky-400: var(--s-400);
+  --color-sky-500: var(--s-500);
+
+  /* redaction: muted plum; roles: slate blue and heather */
+  --color-violet-300: var(--v-300);
+  --color-violet-500: var(--v-500);
+  --color-indigo-300: var(--i-300);
+  --color-indigo-500: var(--i-500);
+  --color-fuchsia-300: var(--f-300);
+  --color-fuchsia-500: var(--f-500);
+
+  /* semantic names for new markup */
+  --color-paper: var(--n-950);
+  --color-sand: var(--n-900);
+  --color-ink: var(--n-100);
+  --color-navy: var(--navy);
+  --color-cogut: var(--blue);
+  --color-sky-wash: var(--sky-wash);
 }
 
+/* ------------------------------------------------------------ light (default) */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+
+  --navy: #102c42;
+  --blue: #6e9fbd;
+  --sky-wash: #c8dce8;
+
+  /* page #fafaf7 · panel #f0eee7 (sand) · rules #cbd5d9 / #aabcc7 · ink #19384c */
+  --n-950: #fafaf7;
+  --n-900: #f0eee7;
+  --n-800: #dae2e5;
+  --n-700: #aabcc7;
+  --n-600: #8597a4;
+  --n-500: #637685;
+  --n-400: #526575;
+  --n-300: #2f4c60;
+  --n-200: #1f3f54;
+  --n-100: #19384c;
+  --n-50: #102c42;
+
+  /* 500 = primary fill (navy), 400 = hover / links, 300 = text on tints */
+  --b-50: #0b2133;
+  --b-100: #102c42;
+  --b-200: #173a54;
+  --b-300: #2b5673;
+  --b-400: #3f6a88;
+  --b-500: #102c42;
+  --b-600: #1b3d57;
+  --b-700: #c8dce8;
+
+  --r-200: #6e2c22;
+  --r-300: #8a3a2e;
+  --r-400: #9a4436;
+  --r-500: #a94d3f;
+
+  --a-300: #7a5418;
+  --a-400: #8d6220;
+  --a-500: #b8862f;
+
+  --o-300: #8a4a24;
+  --o-500: #c06a3a;
+  --y-200: #6f5c12;
+  --y-500: #b59a2c;
+  --s-300: #335f7c;
+  --s-400: #3f6a88;
+  --s-500: #6e9fbd;
+
+  --v-300: #574580;
+  --v-500: #7a64a8;
+  --i-300: #3d4f86;
+  --i-500: #5a6cb0;
+  --f-300: #7a3d63;
+  --f-500: #a0588a;
 }
 
-/* Thin, dark scrollbar that only shows its thumb while the area is hovered. */
+/* ------------------------------------------------------------ dark */
+.dark {
+  color-scheme: dark;
+
+  --navy: #0b1a26;
+  --blue: #6e9fbd;
+  --sky-wash: #1d3a4f;
+
+  /* deep navy page, ink panels, slate rules, paper text */
+  --n-950: #0b1620;
+  --n-900: #10212f;
+  --n-800: #1d3244;
+  --n-700: #2d4559;
+  --n-600: #4b6377;
+  --n-500: #7d91a1;
+  --n-400: #a1b2bf;
+  --n-300: #c3d0d9;
+  --n-200: #dbe3e9;
+  --n-100: #ebf0f3;
+  --n-50: #fafaf7;
+
+  --b-50: #eaf2f7;
+  --b-100: #dbe8f0;
+  --b-200: #c8dce8;
+  --b-300: #a8cada;
+  --b-400: #8fb6cf;
+  --b-500: #6e9fbd;
+  --b-600: #5a8bab;
+  --b-700: #1d3a4f;
+
+  --r-200: #f2cfc6;
+  --r-300: #e6a698;
+  --r-400: #d6806f;
+  --r-500: #c4614f;
+
+  --a-300: #e8c98f;
+  --a-400: #ddb06a;
+  --a-500: #d19a45;
+
+  --o-300: #ecbe9c;
+  --o-500: #d9844f;
+  --y-200: #eadc9c;
+  --y-500: #cdb54a;
+  --s-300: #a8cada;
+  --s-400: #8fb6cf;
+  --s-500: #6e9fbd;
+
+  --v-300: #c6b8e6;
+  --v-500: #9b86c7;
+  --i-300: #b6c0ec;
+  --i-500: #7d8ed4;
+  --f-300: #e6b6d6;
+  --f-500: #c27aac;
+}
+
+/* ------------------------------------------------------------ base */
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-family: var(--font-sans);
+  }
+
+  /* landing: serif display type, tight tracking */
+  h1 {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    letter-spacing: -0.03em;
+  }
+
+  ::selection {
+    background: var(--sky-wash);
+    color: var(--n-50);
+  }
+
+  :focus-visible {
+    outline: 2px solid #3575a0;
+    outline-offset: 3px;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--b-500);
+  }
+}
+
+/* ------------------------------------------------------------ utilities */
+
+/* Small caps label: the landing's eyebrows and panel heads. */
+@utility eyebrow {
+  font-size: 11px;
+  line-height: 1.6;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--b-400);
+}
+
+/* Panel with the landing's blue rule down its left edge. */
+@utility accent-rule {
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 4px;
+    background: var(--blue);
+  }
+}
+
+/* The landing's dotted grid behind the flow diagram. */
+@utility dot-grid {
+  background-image: radial-gradient(var(--n-800) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Thin scrollbar whose thumb only shows while the area is hovered. */
 @utility scrollbar-subtle {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -36,5 +297,29 @@
   }
   &::-webkit-scrollbar-thumb:hover {
     background: var(--color-zinc-600);
+  }
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility animate-enter {
+  animation: enter 0.45s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

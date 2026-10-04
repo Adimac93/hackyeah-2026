@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { ShieldIcon } from "@/components/icons";
+import { AuthShell } from "@/components/auth-shell";
 import { getSession } from "@/lib/auth";
 import { demoAdmin } from "@/lib/demo-login";
 
@@ -15,40 +15,30 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const { next, error } = await searchParams;
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center text-center">
-          <div className="mb-4 rounded-2xl bg-emerald-500/10 p-3 text-emerald-400 ring-1 ring-emerald-500/30">
-            <ShieldIcon className="h-8 w-8" />
-          </div>
-          <h1 className="text-xl font-semibold text-zinc-50">SecOps Console</h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Security team access only
-          </p>
-        </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-6">
-          {error === undefined ? null : (
-            <p className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-              Sign-in link was invalid or expired.
-            </p>
-          )}
-          <LoginForm next={typeof next === "string" ? next : undefined} />
-          {demoAdmin() === null ? null : (
-            <div className="mt-6 border-t border-zinc-800 pt-6">
-              <p className="mb-3 text-center text-xs text-zinc-500">
-                Demo access — no account needed
-              </p>
-              <DemoAdminButton
-                next={typeof next === "string" ? next : undefined}
-              />
-            </div>
-          )}
-        </div>
-        <p className="mt-6 text-center text-xs text-zinc-500">
-          New accounts have no access until an admin adds them to the security
-          team.
+    <AuthShell
+      panelTitle="Sign in to the console"
+      aside="New accounts have no access until an admin adds them to the security team."
+    >
+      <h2 className="font-serif text-[28px] leading-tight text-zinc-50">
+        Welcome back.
+      </h2>
+      <p className="mt-1.5 mb-5 text-sm leading-relaxed text-zinc-400">
+        Security team access only.
+      </p>
+      {error === undefined ? null : (
+        <p className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          Sign-in link was invalid or expired.
         </p>
-      </div>
-    </main>
+      )}
+      <LoginForm next={typeof next === "string" ? next : undefined} />
+      {demoAdmin() === null ? null : (
+        <div className="mt-5 border-t border-zinc-800 pt-5">
+          <p className="eyebrow mb-3 text-center text-zinc-500">
+            Demo access — no account needed
+          </p>
+          <DemoAdminButton next={typeof next === "string" ? next : undefined} />
+        </div>
+      )}
+    </AuthShell>
   );
 }

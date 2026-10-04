@@ -3,9 +3,10 @@ import { Suspense } from "react";
 
 import { ApprovalPopup } from "@/components/approval-popup";
 import { ConfirmButton } from "@/components/confirm-button";
-import { ShieldIcon } from "@/components/icons";
 import { Nav } from "@/components/nav";
-import { StatusBadge } from "@/components/ui";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { StatusBadge, buttonClass } from "@/components/ui";
+import { Wordmark } from "@/components/wordmark";
 import { requireAnyMember } from "@/lib/auth";
 import { canAccessConsole, canWrite } from "@/lib/domain";
 
@@ -30,21 +31,26 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <aside className="flex shrink-0 flex-col gap-6 border-b border-zinc-800 bg-zinc-950 p-4 md:sticky md:top-0 md:h-screen md:w-60 md:border-r md:border-b-0">
-        <div className="flex items-center gap-2.5 px-2">
-          <div className="rounded-lg bg-emerald-500/10 p-1.5 text-emerald-400 ring-1 ring-emerald-500/30">
-            <ShieldIcon className="h-5 w-5" />
-          </div>
-          <span className="font-semibold text-zinc-50">SecOps Console</span>
+      <aside className="flex shrink-0 flex-col gap-6 border-b border-zinc-800 bg-zinc-950 px-4 py-5 md:sticky md:top-0 md:h-screen md:w-64 md:border-r md:border-b-0 md:px-5 md:py-6">
+        <div className="flex items-center justify-between gap-3 md:block">
+          <Link href={hasConsole ? "/dashboard" : "/chat"} className="block">
+            <Wordmark />
+          </Link>
+          <p className="hidden items-center gap-2 pt-2 text-[11px] tracking-[0.06em] text-zinc-500 md:flex">
+            <span className="bg-cogut h-1.5 w-1.5 rounded-full" aria-hidden />
+            {hasConsole ? "Security console" : "Security assistant"}
+          </p>
         </div>
         {hasConsole ? (
-          <Nav consoleAccess />
+          <div className="space-y-2">
+            <p className="eyebrow hidden px-3 text-zinc-500 md:block">
+              Console
+            </p>
+            <Nav consoleAccess />
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-4">
-            <Link
-              href="/chat"
-              className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
-            >
+            <Link href="/chat" className={`${buttonClass} w-full`}>
               <span aria-hidden className="text-base leading-none">
                 +
               </span>
@@ -52,9 +58,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
             </Link>
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="mb-1 flex items-center justify-between px-2">
-                <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">
-                  History
-                </p>
+                <p className="eyebrow text-zinc-500">History</p>
                 {conversations.length > 0 && (
                   <form action={deleteAllConversations}>
                     <ConfirmButton confirmLabel="Delete all?">
@@ -71,32 +75,47 @@ export default async function AdminLayout({ children }: LayoutProps<"/">) {
             </div>
           </div>
         )}
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-2 pt-3 md:mt-auto md:block md:space-y-3 md:pt-4">
-          <div className="min-w-0">
-            <p className="truncate text-sm text-zinc-200">
-              {member.full_name ?? member.email}
-            </p>
-            <div className="mt-1">
-              <StatusBadge status={member.role} />
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4 md:mt-auto md:block md:space-y-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden
+              className="bg-sky-wash flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-serif text-sm text-zinc-50"
+            >
+              {(member.full_name ?? member.email).charAt(0).toUpperCase()}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-medium text-zinc-100">
+                {member.full_name ?? member.email}
+              </p>
+              <div className="mt-1">
+                <StatusBadge status={member.role} />
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 md:justify-between">
+          <div className="md:block">
+            <ThemeToggle />
+          </div>
+          <div className="flex items-center gap-4 text-[13px] md:justify-between">
             <Link
               href="/set-password"
-              className="text-sm text-zinc-400 hover:text-zinc-100"
+              className="text-zinc-400 transition-colors hover:text-zinc-100"
             >
               Change password
             </Link>
             <form action={signOut}>
-              <button className="text-sm text-zinc-400 hover:text-zinc-100">
+              <button className="text-zinc-400 transition-colors hover:text-zinc-100">
                 Sign out
               </button>
             </form>
           </div>
+          <p className="text-[11px] tracking-[0.06em] text-zinc-600">
+            Cogut · v{packageJson.version}
+          </p>
         </div>
-        <p className="px-2 text-xs text-zinc-600">v{packageJson.version}</p>
       </aside>
-      <main className="min-w-0 flex-1 px-4 py-8 md:px-10">{children}</main>
+      <main className="min-w-0 flex-1 px-4 py-8 md:px-10 md:py-10 xl:px-14">
+        <div className="mx-auto w-full max-w-[1280px]">{children}</div>
+      </main>
       {hasConsole ? <ApprovalPopup canDecide={canWrite(member.role)} /> : null}
     </div>
   );

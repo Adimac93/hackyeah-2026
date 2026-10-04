@@ -36,6 +36,7 @@ export default async function RiskPage({ searchParams }: PageProps<"/risk">) {
   return (
     <>
       <PageHeader
+        eyebrow="History-aware controls"
         title="User risk"
         subtitle={
           report.ok
@@ -53,7 +54,7 @@ export default async function RiskPage({ searchParams }: PageProps<"/risk">) {
           aria-label="Search users"
           className="w-full max-w-sm rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none"
         />
-        <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
+        <button className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-3.5 py-2 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900">
           Search
         </button>
         {q === "" ? null : (

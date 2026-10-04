@@ -4,6 +4,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { AuthShell } from "@/components/auth-shell";
 import { supabaseEnv } from "@/lib/supabase/env";
 
 /**
@@ -53,22 +54,23 @@ export default function AcceptInvitePage() {
   }, [router]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
-      <div className="max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
-        {error === null ? (
-          <p className="text-sm text-zinc-400">Signing you in…</p>
-        ) : (
-          <>
-            <p className="text-sm text-red-300">{error}</p>
-            <a
-              href="/login"
-              className="mt-4 inline-block text-sm text-emerald-400 hover:underline"
-            >
-              Go to sign in
-            </a>
-          </>
-        )}
-      </div>
-    </main>
+    <AuthShell panelTitle="Accepting your invitation">
+      {error === null ? (
+        <p className="flex items-center gap-3 font-serif text-xl text-zinc-200">
+          <span className="bg-cogut h-2 w-2 animate-pulse rounded-full" />
+          Signing you in…
+        </p>
+      ) : (
+        <>
+          <p className="text-sm text-red-300">{error}</p>
+          <a
+            href="/login"
+            className="mt-4 inline-block text-sm text-emerald-400 hover:underline"
+          >
+            Go to sign in →
+          </a>
+        </>
+      )}
+    </AuthShell>
   );
 }

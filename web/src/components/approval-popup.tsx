@@ -108,120 +108,135 @@ function RequestDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#102c42]/40 p-4 backdrop-blur-[2px]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="approval-title"
     >
-      <div className="w-full max-w-lg space-y-5 rounded-xl border border-amber-500/40 bg-zinc-900 p-6 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-medium tracking-wide text-amber-400 uppercase">
-              Agent access request
-            </p>
-            <h2
-              id="approval-title"
-              className="mt-1 text-lg font-semibold text-zinc-50"
-            >
-              <span className="font-mono">{request.principal}</span> wants{" "}
-              {target.kind === "table" ? "table " : null}
-              <span className="font-mono text-amber-300">{target.name}</span>
-            </h2>
-            {request.end_user === request.principal ? null : (
-              <p className="mt-1 text-sm text-zinc-400">
-                for{" "}
-                <span className="font-mono text-zinc-200">
-                  {request.end_user}
-                </span>{" "}
-                only
-              </p>
-            )}
+      <div className="animate-enter w-full max-w-lg overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-[0_24px_60px_rgb(16_44_66/0.25)]">
+        {/* the landing's navy "event" card */}
+        <div className="bg-navy p-5 text-[#fafaf7]">
+          <div className="flex items-center justify-between gap-3 text-[10px] font-semibold tracking-[0.12em] text-[#a8cada] uppercase">
+            <span>Agent access request</span>
+            <span className="flex items-center gap-2">
+              <span className="rounded-sm bg-[#a94d3f] px-2 py-1 text-[#fafaf7]">
+                Awaiting decision
+              </span>
+              <span
+                className={`rounded-sm px-2 py-1 font-mono text-[11px] tracking-normal tabular-nums ring-1 ${
+                  seconds <= 20
+                    ? "text-[#f2cfc6] ring-[#a94d3f]"
+                    : "text-[#e4ecf1] ring-[#2c5068]"
+                }`}
+                title="The agent stops waiting when this reaches zero"
+              >
+                {seconds}s
+              </span>
+            </span>
           </div>
-          <span
-            className={`shrink-0 rounded-md px-2 py-1 font-mono text-sm tabular-nums ring-1 ${
-              seconds <= 20
-                ? "text-red-300 ring-red-500/40"
-                : "text-zinc-300 ring-zinc-700"
-            }`}
-            title="The agent stops waiting when this reaches zero"
+          <h2
+            id="approval-title"
+            className="mt-5 font-mono text-[13px] leading-relaxed text-[#e4ecf1]"
           >
-            {seconds}s
-          </span>
+            <span className="rounded-sm bg-[#20455c] px-1.5 py-0.5">
+              {request.principal}
+            </span>{" "}
+            wants {target.kind === "table" ? "table " : null}
+            <span className="rounded-sm bg-[#20455c] px-1.5 py-0.5 text-[#f2cfc6]">
+              {target.name}
+            </span>
+          </h2>
+          <p className="mt-5 flex flex-wrap justify-between gap-x-3 gap-y-1 border-t border-[#2c5068] pt-3 text-[11px] text-[#c2d3de]">
+            <span>
+              <strong className="font-medium text-[#a8cada]">Policy</strong>{" "}
+              human approval required
+              {request.end_user === request.principal ? null : (
+                <>
+                  {" "}
+                  · for{" "}
+                  <span className="font-mono text-[#e4ecf1]">
+                    {request.end_user}
+                  </span>{" "}
+                  only
+                </>
+              )}
+            </span>
+            <span>{waiting > 0 ? `${String(waiting)} more waiting` : ""}</span>
+          </p>
         </div>
 
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium tracking-wide text-zinc-400 uppercase">
-            Reason given by the agent (untrusted, already scanned)
-          </p>
-          <p className="max-h-40 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm whitespace-pre-wrap text-zinc-200">
-            {request.reason}
-          </p>
-        </div>
-
-        {canDecide ? (
-          <div className="grid gap-4 sm:grid-cols-[8rem_1fr]">
-            <Field label="Grant for">
-              <Select
-                value={ttl}
-                onChange={(event) => {
-                  setTtl(event.target.value);
-                }}
-                options={TTL_CHOICES.map((m) => ({
-                  value: String(m),
-                  label: `${String(m)} min`,
-                }))}
-              />
-            </Field>
-            <Field label="Note (optional)">
-              <input
-                className={inputClass}
-                value={note}
-                maxLength={500}
-                onChange={(event) => {
-                  setNote(event.target.value);
-                }}
-                placeholder="Shown to the agent"
-              />
-            </Field>
+        <div className="space-y-5 p-6">
+          <div className="space-y-1.5">
+            <p className="eyebrow text-zinc-400">
+              Reason given by the agent (untrusted, already scanned)
+            </p>
+            <p className="max-h-40 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 p-3 text-sm whitespace-pre-wrap text-zinc-200">
+              {request.reason}
+            </p>
           </div>
-        ) : (
-          <p className="text-sm text-zinc-400">
-            Your role is read-only — an admin or analyst must decide.
-          </p>
-        )}
 
-        {error === null ? null : (
-          <p className="text-sm text-red-300">{error}</p>
-        )}
-
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs text-zinc-500">
-            {waiting > 0 ? `${String(waiting)} more waiting` : ""}
-          </span>
           {canDecide ? (
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  decide("deny");
-                }}
-                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
-              >
-                Deny
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  decide("approve");
-                }}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
-              >
-                Approve
-              </button>
+            <div className="grid gap-4 sm:grid-cols-[8rem_1fr]">
+              <Field label="Grant for">
+                <Select
+                  value={ttl}
+                  onChange={(event) => {
+                    setTtl(event.target.value);
+                  }}
+                  options={TTL_CHOICES.map((m) => ({
+                    value: String(m),
+                    label: `${String(m)} min`,
+                  }))}
+                />
+              </Field>
+              <Field label="Note (optional)">
+                <input
+                  className={inputClass}
+                  value={note}
+                  maxLength={500}
+                  onChange={(event) => {
+                    setNote(event.target.value);
+                  }}
+                  placeholder="Shown to the agent"
+                />
+              </Field>
             </div>
-          ) : null}
+          ) : (
+            <p className="text-sm text-zinc-400">
+              Your role is read-only — an admin or analyst must decide.
+            </p>
+          )}
+
+          {error === null ? null : (
+            <p className="text-sm text-red-300">{error}</p>
+          )}
+
+          <div className="flex items-center justify-end gap-3">
+            {canDecide ? (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    decide("deny");
+                  }}
+                  className="inline-flex items-center justify-center rounded-md border border-zinc-700 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:bg-zinc-900 disabled:opacity-60"
+                >
+                  Deny
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    decide("approve");
+                  }}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  Approve
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

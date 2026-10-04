@@ -34,6 +34,7 @@ export default async function ResourcesPage() {
   return (
     <>
       <PageHeader
+        eyebrow="Shared files"
         title="Resources"
         subtitle="Files the security team shares: runbooks, reports, evidence. Private, served through short-lived links."
       />

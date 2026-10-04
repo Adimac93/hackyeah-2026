@@ -85,13 +85,14 @@ export default async function ActivityPage({
   return (
     <>
       <PageHeader
+        eyebrow="Audit trail"
         title="Activity"
         subtitle="Every request the AI gateway intercepted, newest first and live. Append-only and hash-chained."
         actions={
           <a
             href={exportHref}
             download
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-3.5 py-2 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900"
             title="PDF of the events matching the current filters (up to 5000)"
           >
             Export PDF
@@ -145,7 +146,7 @@ export default async function ActivityPage({
             </option>
           ))}
         </select>
-        <button className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">
+        <button className="inline-flex items-center justify-center gap-2 rounded-md border border-zinc-700 px-3.5 py-2 text-[13px] font-semibold tracking-[0.02em] text-zinc-200 transition hover:-translate-y-px hover:bg-zinc-900">
           Filter
         </button>
         {hasActivityFilters(filters) ? (

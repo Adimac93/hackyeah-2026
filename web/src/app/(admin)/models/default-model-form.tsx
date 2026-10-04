@@ -27,7 +27,7 @@ export function DefaultModelForm({
         />
         <button
           disabled={pending}
-          className="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-emerald-500 px-4 py-2.5 text-[13px] font-semibold tracking-[0.02em] text-zinc-950 transition hover:-translate-y-px hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
         >
           {pending ? "Saving…" : "Save"}
         </button>

@@ -37,6 +37,7 @@ export default async function EditConnectionPage({
   return (
     <>
       <PageHeader
+        eyebrow="LLM connections"
         title={`Edit ${data.name}`}
         actions={
           <Link

@@ -71,6 +71,7 @@ export default async function ActivityEventPage({
   return (
     <>
       <PageHeader
+        eyebrow="Audit trail · event"
         title={`${event.tool ?? event.model ?? "Request"} · ${event.hook.replace("_", " ")}`}
         subtitle={`Event #${String(event.id)} · ${fmtDateTime(event.ts)}`}
         actions={
