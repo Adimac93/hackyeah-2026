@@ -24,3 +24,4 @@ pub mod risk;
 pub mod semantic;
 pub mod state;
 pub mod telemetry;
+pub mod upstream;

@@ -12,6 +12,7 @@ use crate::budget::Budgets;
 use crate::policy::PolicyHandle;
 use crate::semantic::Registry;
 use crate::telemetry::Telemetry;
+use crate::upstream::Upstreams;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,8 +21,10 @@ pub struct AppState {
     pub budgets: Arc<Budgets>,
     pub detectors: Arc<Registry>,
     pub http: reqwest::Client,
-    /// Where model traffic goes, or `mock`.
+    /// Where model traffic goes by default (`UPSTREAM_URL`), or `mock`.
     pub upstream: String,
+    /// Per-model routing to the console's LLM connections; falls back to `upstream`.
+    pub upstreams: Arc<Upstreams>,
     pub admins: Arc<AdminAuth>,
     /// The pool the MCP resource tools query through (each query runs as the
     /// read-only `resources_reader` role). `None` disables those tools.

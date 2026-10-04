@@ -140,6 +140,22 @@ agent's blocked call and the console's decision must land on the same instance.
 Cloud Run's request timeout (default 300 s) also closes the console's SSE stream
 periodically; the browser reconnects and the gateway replays what is pending.
 
+### Models from the console's LLM connections
+
+The gateway routes a model to the console's LLM connection that lists it
+(Models page, kind OpenAI or OpenAI-compatible, enabled), with that
+connection's key from Supabase Vault; every other model goes to `UPSTREAM_URL`.
+Nothing to deploy for it. To let the console chat use e.g. `gpt-5` through the
+gateway (policed, audited, with the MCP data tools):
+
+1. add the connection on the Models page (admins only) with its key;
+2. allow the model in the policy (`[models] allowed`) and price it (`[pricing."gpt-5"]`);
+3. grant it to the identity: `principals.allowed_models` of `console-chat`.
+
+With `GATEWAY_URL` set, the console then offers that connection's models only
+through the gateway. Anthropic connections stay direct: the gateway speaks the
+OpenAI chat API. A connection change reaches the gateway within 30 s.
+
 ## Troubleshooting
 
 **"container failed to start and listen on PORT"** — the gateway loads its

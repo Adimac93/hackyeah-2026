@@ -78,7 +78,9 @@ export function availableModels(
 
   // through the AI Control Layer gateway: every prompt and answer is policed and audited.
   // First, so the demo default is the protected path.
-  if (configured(env.GATEWAY_URL) && configured(env.GATEWAY_API_KEY)) {
+  const viaGateway =
+    configured(env.GATEWAY_URL) && configured(env.GATEWAY_API_KEY);
+  if (viaGateway) {
     for (const model of parseModelList(
       env.GATEWAY_MODELS,
       DEFAULT_GATEWAY_MODELS,
@@ -145,6 +147,22 @@ export function availableModels(
       continue;
     }
     for (const model of connection.models) {
+      // The gateway routes OpenAI-compatible connections itself (it reads them from the
+      // same table), so with a gateway they are offered only through it: policed, audited,
+      // and with the data tools. It speaks the OpenAI API, so Anthropic stays direct.
+      if (viaGateway && connection.kind !== "anthropic") {
+        const id = `gateway:${model}`;
+        if (!options.some((option) => option.id === id)) {
+          options.push({
+            id,
+            provider: "gateway",
+            model,
+            label: `${connection.name} ${model} (protected)`,
+            icon: isPresetId(connection.preset) ? connection.preset : "gateway",
+          });
+        }
+        continue;
+      }
       const anthropicLabel =
         connection.kind === "anthropic" && connection.name === "Anthropic"
           ? ANTHROPIC_LABELS[model]

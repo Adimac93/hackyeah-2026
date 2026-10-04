@@ -22,6 +22,7 @@ use crate::mcp::{self, federation};
 use crate::mock;
 use crate::policy::{Hook, Policy};
 use crate::state::AppState;
+use crate::upstream::Upstream;
 
 /// Model turns one request may take before the loop is cut off.
 pub const MAX_TURNS: usize = 8;
@@ -229,10 +230,13 @@ async fn upstream(
     trace_id: Uuid,
     body: &Value,
 ) -> Result<(StatusCode, Value), Response> {
-    if state.upstream == mock::MOCK {
+    let model = body.get("model").and_then(Value::as_str).unwrap_or_default();
+    let target = state.upstreams.resolve(model).await;
+    if target.mock {
         return Ok((StatusCode::OK, mock::completion(body)));
     }
-    let reply = forward(state, trace_id, body).await;
+    tracing::info!(%trace_id, upstream = %target.name, "forwarding");
+    let reply = forward(state, trace_id, &target, body).await;
     state.telemetry.dependency("upstream", reply.is_ok());
     reply
 }
@@ -240,12 +244,14 @@ async fn upstream(
 async fn forward(
     state: &AppState,
     trace_id: Uuid,
+    target: &Upstream,
     body: &Value,
 ) -> Result<(StatusCode, Value), Response> {
-    let upstream = state
-        .http
-        .post(format!("{}/v1/chat/completions", state.upstream))
-        .json(body)
+    let mut request = state.http.post(&target.endpoint).json(body);
+    if let Some(key) = &target.key {
+        request = request.bearer_auth(key);
+    }
+    let upstream = request
         .send()
         .await
         .map_err(|error| {

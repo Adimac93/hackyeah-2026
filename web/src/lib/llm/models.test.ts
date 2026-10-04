@@ -206,3 +206,55 @@ void test("defaultModel falls back to the organisation default, then the first",
   // a stale org default (provider removed) is skipped
   assert.equal(defaultModel(null, models, "openai:gpt-5").id, models[0].id);
 });
+
+void test("with a gateway, OpenAI-compatible connections are offered only through it", () => {
+  const openai = {
+    ...CONNECTION,
+    id: "openai-conn",
+    name: "OpenAI",
+    preset: "openai",
+    kind: "openai" as const,
+    base_url: "https://api.openai.com/v1",
+    models: ["gpt-5", "llama3.1:8b"],
+  };
+  const anthropic = {
+    ...CONNECTION,
+    id: "anthropic-conn",
+    name: "Anthropic-test",
+    preset: "anthropic",
+    kind: "anthropic" as const,
+    base_url: null,
+    models: ["claude-opus-5-5"],
+  };
+  const gateway = { GATEWAY_URL: "https://gw", GATEWAY_API_KEY: "k" };
+  const ids = availableModels(gateway, [openai, anthropic]).map((m) => m.id);
+
+  assert.ok(ids.includes("gateway:gpt-5"), "gpt-5 goes through the gateway");
+  assert.ok(
+    !ids.some((id) => id.startsWith("db:openai-conn")),
+    "no direct OpenAI option",
+  );
+  assert.equal(
+    ids.filter((id) => id === "gateway:llama3.1:8b").length,
+    1,
+    "a model the gateway already lists appears once",
+  );
+  assert.ok(
+    ids.includes("db:anthropic-conn:claude-opus-5-5"),
+    "Anthropic stays direct",
+  );
+
+  const gpt = availableModels(gateway, [openai]).find(
+    (m) => m.id === "gateway:gpt-5",
+  );
+  assert.ok(gpt !== undefined);
+  assert.equal(gpt.provider, "gateway");
+  assert.equal(gpt.label, "OpenAI gpt-5 (protected)");
+  assert.equal(gpt.icon, "openai");
+  assert.equal(gpt.connectionId, undefined);
+
+  // without a gateway nothing changes
+  assert.ok(
+    availableModels({}, [openai]).some((m) => m.id === "db:openai-conn:gpt-5"),
+  );
+});
