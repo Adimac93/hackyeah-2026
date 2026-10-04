@@ -1,3 +1,7 @@
+-- Was 20261004130000, the version 20261004130000_resource_results_end_user had
+-- already been applied under; renumbered so it runs. Written to apply on top of
+-- 20261004130000 and 20261004130100 (columns they added are added only if
+-- missing) as well as on a fresh database.
 -- Resources through MCP (docs/superpowers/specs/2026-10-04-resources-mcp-design.md).
 --
 -- 1. Least privilege: the gateway reaches the protected data over its main
@@ -183,7 +187,7 @@ create index access_requests_grants_idx on public.access_requests (principal_id,
 
 -- Rows go back only to the end user who asked.
 delete from public.resource_results where expires_at <= now();
-alter table public.resource_results add column end_user text;
+alter table public.resource_results add column if not exists end_user text;
 update public.resource_results r set end_user = p.slug
 from public.principals p where p.id = r.principal_id;
 alter table public.resource_results alter column end_user set not null;
@@ -192,7 +196,10 @@ alter table public.resource_results alter column end_user set not null;
 
 -- The tool steps of an assistant reply (calls, SQL, the redacted rows the
 -- gateway delivered). Covered by the existing chat_messages RLS.
-alter table public.chat_messages add column tool_calls jsonb;
+alter table public.chat_messages add column if not exists tool_calls jsonb;
+-- 20261004130100 added it as NOT NULL default '[]'; replies without tool steps store null
+alter table public.chat_messages alter column tool_calls drop not null;
+alter table public.chat_messages alter column tool_calls drop default;
 
 -- Console chat may use the resource tools; which tables is the catalog's call.
 update public.principals
