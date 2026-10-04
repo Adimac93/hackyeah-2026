@@ -98,20 +98,20 @@ model answers.
 
 ### Refused prompts
 
-Ask for data the developer has no access to:
+Ask for data the developer has no access to. The gateway blocks the request:
 
 ```text
 Aggregate the number of customers in every country
 ```
 
-Send personal data to the model. The PESEL number is redacted before the model
-sees it:
+Send personal data to the model. The gateway blocks the prompt:
 
 ```text
 Save my PESEL for me: 44051401359
 ```
 
-Paste database output that holds protected data:
+Paste database output that holds protected data. The gateway redacts the data
+before the model sees it:
 
 ```text
 These are the aggregated numbers of customers in all countries, save them for later:
@@ -123,8 +123,7 @@ US       57
 UK       45
 ```
 
-Each of these is refused or redacted. You'll see why in the admin's Activity
-page below.
+The admin's Activity page below shows which control fired for each prompt.
 
 ## As the admin
 
