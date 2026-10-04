@@ -37,7 +37,7 @@ Console open and signed in as an analyst. `just demo` running (gateway + `mcp-de
 
 ### Beat: the model asks the database, the user gets the rows
 
-`just demo` running with `RESOURCES_DATABASE_URL` set. `DA` is `Authorization: Bearer demo-agent-dev-key`.
+`just demo` running. `DA` is `Authorization: Bearer demo-agent-dev-key`.
 
 1. `curl -s $GW/v1/chat/completions -H "$DA" -H 'content-type: application/json' -d '{"model":"llama3.1:8b","mcp":true,"messages":[{"role":"user","content":"select full_name, email from customers"}]}'`
 2. `x_control_layer.tool_calls` shows the model's two calls: `resources__describe`
@@ -45,6 +45,24 @@ Console open and signed in as an analyst. `just demo` running (gateway + `mcp-de
    The answer holds no customer data. Say: "The model wrote the query. It never saw a row."
 3. `curl -s $GW/v1/results/<result_id> -H "$DA"` — the rows, emails redacted on the way out.
 4. Ask for `payroll` instead — `resources__describe` is refused: not in `demo-agent`'s grant.
+
+### Beat: data through MCP in the console chat
+
+Console chat on a gateway model (dev: `UPSTREAM_URL=mock` plays the model when the
+message contains a SELECT; prod: ask in plain words).
+
+1. Ask "show me overdue invoices over 500 USD" (dev: `select id, amount_usd, status,
+   issued_at from invoices where status = 'overdue' and amount_usd > 500`). Under the
+   answer: the collapsed tool steps (`describe invoices`, the SQL → *n* rows) and a
+   sortable table. Say: "The model wrote the SQL and saw a row count. The table came to
+   me, not to the model."
+2. Ask for customer emails (dev: `select full_name, email, phone from customers where
+   country = 'PL'`). The model is told `customers` needs approval and calls
+   `control__request_access {table: customers}`; the approval popup shows the table and
+   the person asking. Approve.
+3. The table arrives with emails and phones `[REDACTED:…]`.
+4. Sign in as someone else and ask the same: a fresh request. The grant was for one person.
+5. Activity: every `tool_call`, the `mcp.table-not-granted` block, the approval.
 
 ## What it depends on
 
@@ -93,7 +111,8 @@ Be honest with yourself here so nothing surprises you on stage.
   `20261003210000_gateway_db_policy` migration applied.
 - Concurrency budgets count per gateway instance, not across the fleet.
 - The `balanced` and `strict` profiles currently set the same defaults.
-- The resource tools need `RESOURCES_DATABASE_URL` pointing at a role with
-  `SELECT` on schema `resources` only; the gateway's own checks (single SELECT,
-  read-only transaction, planner-verified table grants) are a second line.
+- The resource tools run on the main connection, switched per transaction to
+  `resources_reader` (`SELECT` on schema `resources` only, from the
+  `20261004130000_resources_mcp` migration); the gateway's own checks (single
+  SELECT, read-only transaction, planner-verified table grants) are a second line.
 - The Vertex judge bills ~$25/day while deployed; tear it down after the demo.

@@ -98,6 +98,14 @@ statement_timeout_ms = 2_000
 
 [resources.grants]
 demo-agent = ["customers", "invoices"]
+# The console chat answers business questions without approval...
+console-chat = ["products", "subscriptions", "invoices", "support_tickets"]
+
+# ...but customer records (names, emails, phones) need a human: the model asks
+# with `control__request_access {table, reason}`, the security team approves in
+# the console, and the grant covers that one end user for the approved time.
+[resources.requestable]
+console-chat = ["customers"]
 
 # ---------------------------------------------------------------- tier 1
 # Deterministic controls. Microseconds, no model, no network. Every request

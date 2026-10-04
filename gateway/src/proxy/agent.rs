@@ -17,9 +17,10 @@ use uuid::Uuid;
 
 use super::refusal;
 use crate::audit::Principal;
+use crate::engine;
 use crate::mcp::{self, federation};
 use crate::mock;
-use crate::policy::Policy;
+use crate::policy::{Hook, Policy};
 use crate::state::AppState;
 
 /// Model turns one request may take before the loop is cut off.
@@ -61,11 +62,23 @@ pub async fn complete(
     for _ in 0..MAX_TURNS {
         let (status, mut completion) = upstream(state, trace_id, &body).await?;
         if !status.is_success() {
-            return Ok(Reply { status, completion, tool_calls });
+            return Ok(Reply {
+                status,
+                completion,
+                tool_calls,
+            });
         }
-        let calls = if with_tools { requested_calls(&completion) } else { Vec::new() };
+        let calls = if with_tools {
+            requested_calls(&completion)
+        } else {
+            Vec::new()
+        };
         if calls.is_empty() && tool_calls.is_empty() {
-            return Ok(Reply { status, completion, tool_calls });
+            return Ok(Reply {
+                status,
+                completion,
+                tool_calls,
+            });
         }
         let (prompt, answer) = super::usage(&completion);
         prompt_tokens += prompt;
@@ -76,10 +89,17 @@ pub async fn complete(
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
             });
-            return Ok(Reply { status, completion, tool_calls });
+            return Ok(Reply {
+                status,
+                completion,
+                tool_calls,
+            });
         }
 
-        let turn = completion.pointer("/choices/0/message").cloned().unwrap_or_default();
+        let turn = completion
+            .pointer("/choices/0/message")
+            .cloned()
+            .unwrap_or_default();
         let mut replies = vec![turn];
         for call in calls {
             let params = json!({ "name": call.name, "arguments": call.arguments });
@@ -90,9 +110,10 @@ pub async fn complete(
             };
             tool_calls.push(json!({
                 "tool": call.name,
+                "arguments": reported_arguments(policy, &call.arguments),
                 "status": if outcome.is_ok() { "ok" } else { "refused" },
                 "trace_id": outcome.as_ref().ok().and_then(|p| p.pointer("/_meta/x-control-layer/trace_id")),
-                "result_id": serde_json::from_str::<Value>(&content).ok().and_then(|ack| ack.get("result_id").cloned()),
+                "result_id": outcome.as_ref().ok().and_then(result_id),
                 "content": content,
             }));
             replies.push(json!({ "role": "tool", "tool_call_id": call.id, "content": content }));
@@ -128,6 +149,22 @@ pub fn openai_tools(tools: &[Value]) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+/// Where a `resources__query` call left its rows: the ack's structured copy,
+/// which the tool_result redactions do not touch.
+pub fn result_id(payload: &Value) -> Option<Value> {
+    payload
+        .pointer("/structuredContent/result_id")
+        .filter(|id| id.is_string())
+        .cloned()
+}
+
+/// A call's arguments as the caller is shown them (the SQL of a query, say):
+/// model-written, so through the `tool_call` redactions first.
+pub fn reported_arguments(policy: &Policy, arguments: &Value) -> Value {
+    let redacted = engine::redact(policy, Hook::ToolCall, &arguments.to_string());
+    serde_json::from_str(&redacted).unwrap_or(Value::String(redacted))
 }
 
 /// The tool calls in a completion's first choice.
@@ -214,6 +251,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_result_id_comes_from_the_structured_ack() {
+        let payload = json!({
+            "content": [{ "type": "text", "text": "{\"result_id\":\"7e9b[REDACTED:pii.phone]-a58c\"}" }],
+            "structuredContent": { "result_id": "7e9b1234-5678-4a58c-0dc98a1f86bc", "row_count": 5 },
+        });
+        assert_eq!(
+            result_id(&payload),
+            Some(json!("7e9b1234-5678-4a58c-0dc98a1f86bc"))
+        );
+        assert_eq!(result_id(&json!({ "content": [] })), None);
+    }
+
+    #[test]
+    fn reported_arguments_keep_their_shape_and_lose_their_pii() {
+        let policy = Policy::builtin().unwrap();
+        let sql = json!({ "sql": "select * from invoices where status = 'overdue'" });
+        assert_eq!(reported_arguments(&policy, &sql), sql);
+        let leaky =
+            json!({ "sql": "select * from customers where email = 'anna.nowak@example.com'" });
+        let shown = reported_arguments(&policy, &leaky);
+        let shown = shown["sql"].as_str().unwrap();
+        assert!(!shown.contains("anna.nowak@example.com"), "{shown}");
+        assert!(shown.contains("[REDACTED:pii.email]"), "{shown}");
+    }
+
+    #[test]
     fn mcp_tools_become_function_tools() {
         let tools = openai_tools(&[
             json!({
@@ -227,7 +290,10 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "resources__query");
-        assert_eq!(tools[0]["function"]["parameters"]["properties"]["sql"]["type"], "string");
+        assert_eq!(
+            tools[0]["function"]["parameters"]["properties"]["sql"]["type"],
+            "string"
+        );
         assert_eq!(tools[1]["function"]["parameters"]["type"], "object");
     }
 
@@ -242,20 +308,29 @@ mod tests {
         assert_eq!(
             requested_calls(&completion),
             [
-                ToolCall { id: "a".into(), name: "resources__query".into(), arguments: json!({ "sql": "select 1" }) },
+                ToolCall {
+                    id: "a".into(),
+                    name: "resources__query".into(),
+                    arguments: json!({ "sql": "select 1" })
+                },
                 ToolCall {
                     id: "call_1".into(),
                     name: "resources__describe".into(),
                     arguments: json!({ "tables": ["customers"] }),
                 },
-                ToolCall { id: "c".into(), name: "x".into(), arguments: json!("not json") },
+                ToolCall {
+                    id: "c".into(),
+                    name: "x".into(),
+                    arguments: json!("not json")
+                },
             ]
         );
     }
 
     #[test]
     fn a_plain_answer_has_no_tool_calls() {
-        let completion = json!({ "choices": [{ "message": { "role": "assistant", "content": "hi" } }] });
+        let completion =
+            json!({ "choices": [{ "message": { "role": "assistant", "content": "hi" } }] });
         assert!(requested_calls(&completion).is_empty());
     }
 }

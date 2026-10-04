@@ -107,20 +107,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("admin API disabled — set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY");
     }
 
-    // The protected resources sit behind their own, read-only connection.
-    let resources = match std::env::var("RESOURCES_DATABASE_URL") {
-        Ok(url) if !url.is_empty() => Some(
-            PgPoolOptions::new()
-                .max_connections(4)
-                .connect(&url)
-                .await
-                .context("connecting to RESOURCES_DATABASE_URL")?,
-        ),
-        _ => {
-            tracing::info!("resource tools disabled — RESOURCES_DATABASE_URL is unset");
-            None
-        }
-    };
+    // The resource tools share the main pool; each query switches to the
+    // read-only `resources_reader` role for its own transaction.
+    let resources = Some(db.clone());
 
     // Pending approvals live in this process: run one instance (docs/DEPLOY.md).
     let approvals = Arc::new(Approvals::new(Some(db.clone())));
@@ -136,7 +125,9 @@ async fn main() -> anyhow::Result<()> {
         admins,
         resources,
         telemetry: Arc::new(Telemetry::default()),
-        metrics_token: std::env::var("METRICS_TOKEN").ok().filter(|t| !t.is_empty()),
+        metrics_token: std::env::var("METRICS_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty()),
         approvals,
     };
 
@@ -342,7 +333,9 @@ async fn prometheus(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     let presented = admin::auth::bearer(&headers).unwrap_or_default();
     // Compare digests so the comparison time does not depend on the token.
-    if gateway::audit::sha256_hex(presented.as_bytes()) != gateway::audit::sha256_hex(expected.as_bytes()) {
+    if gateway::audit::sha256_hex(presented.as_bytes())
+        != gateway::audit::sha256_hex(expected.as_bytes())
+    {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     (

@@ -7,6 +7,7 @@ import {
   TTL_CHOICES,
   applyEvent,
   parseApprovalEvent,
+  requestTarget,
   secondsLeft,
 } from "@/lib/approvals";
 import type { AccessRequest } from "@/lib/approvals";
@@ -83,6 +84,7 @@ function RequestDialog({
   canDecide: boolean;
   onDone: () => void;
 }) {
+  const target = requestTarget(request);
   const [ttl, setTtl] = useState(String(request.ttl_minutes));
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -122,8 +124,18 @@ function RequestDialog({
               className="mt-1 text-lg font-semibold text-zinc-50"
             >
               <span className="font-mono">{request.principal}</span> wants{" "}
-              <span className="font-mono text-amber-300">{request.tool}</span>
+              {target.kind === "table" ? "table " : null}
+              <span className="font-mono text-amber-300">{target.name}</span>
             </h2>
+            {request.end_user === request.principal ? null : (
+              <p className="mt-1 text-sm text-zinc-400">
+                for{" "}
+                <span className="font-mono text-zinc-200">
+                  {request.end_user}
+                </span>{" "}
+                only
+              </p>
+            )}
           </div>
           <span
             className={`shrink-0 rounded-md px-2 py-1 font-mono text-sm tabular-nums ring-1 ${

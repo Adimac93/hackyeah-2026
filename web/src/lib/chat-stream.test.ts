@@ -33,3 +33,23 @@ void test("decodeChatEvents skips garbled and unknown lines", () => {
     { type: "error", error: "boom" },
   ]);
 });
+
+void test("status and tool_steps events round-trip; malformed steps are dropped", () => {
+  const steps = [
+    {
+      tool: "resources__query",
+      status: "ok" as const,
+      summary: "select 1 → 1 row",
+      arguments: { sql: "select 1" },
+    },
+  ];
+  const wire = [
+    encodeChatEvent({ type: "status", text: "Working…" }),
+    encodeChatEvent({ type: "tool_steps", steps }),
+    `${JSON.stringify({ type: "tool_steps", steps: [{ tool: 1 }] })}\n`,
+  ].join("");
+  assert.deepEqual(decodeChatEvents(wire).events, [
+    { type: "status", text: "Working…" },
+    { type: "tool_steps", steps },
+  ]);
+});

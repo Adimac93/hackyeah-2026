@@ -30,6 +30,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::approvals;
 use crate::audit::{self, Principal};
 use crate::background::{self, Job};
 use crate::engine::{self, Evaluation, Verdict};
@@ -38,8 +39,8 @@ use crate::proxy::{bearer_principal, summarise, verdict_name};
 use crate::risk;
 use crate::state::AppState;
 
-pub(crate) use listing::visible_tools;
 use federation::PROTOCOL_VERSION;
+pub(crate) use listing::visible_tools;
 
 /// Reserved by the spec for transport-level header/body disagreement.
 const HEADER_MISMATCH: i64 = -32020;
@@ -51,6 +52,7 @@ const PRINCIPAL_DENIED: i64 = -32001;
 const UPSTREAM_ERROR: i64 = -32002;
 
 const TOOL_NOT_GRANTED: &str = "mcp.tool-not-granted";
+const TABLE_NOT_GRANTED: &str = "mcp.table-not-granted";
 
 pub async fn endpoint(
     State(state): State<AppState>,
@@ -196,7 +198,9 @@ pub(crate) async fn call_tool(
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let rendered = arguments.to_string();
     let mut outbound = engine::evaluate(policy, Hook::ToolCall, &rendered);
-    state.telemetry.observe("deterministic", outbound.deterministic_us);
+    state
+        .telemetry
+        .observe("deterministic", outbound.deterministic_us);
 
     // Checked here, not only at list time: a client can call a tool it was
     // never shown. A live human-approved grant counts as permission. Every
@@ -207,15 +211,31 @@ pub(crate) async fn call_tool(
         evaluation.gate(control.to_owned(), Severity::High, Action::Block, reason);
     };
     if !principal.may_call_tool(qualified)
-        && !state.approvals.has_grant(principal.id, qualified)
+        && !state.approvals.has_grant(
+            principal.id,
+            &principal.user,
+            &approvals::Access::Tool(qualified.to_owned()),
+        )
     {
-        gate(&mut outbound, TOOL_NOT_GRANTED, format!("{} may not call {qualified}", principal.slug));
+        gate(
+            &mut outbound,
+            TOOL_NOT_GRANTED,
+            format!("{} may not call {qualified}", principal.slug),
+        );
     } else if !resource_tool && server.is_none() {
-        gate(&mut outbound, "mcp.unknown-server", format!("{qualified} is not served by an enabled server"));
+        gate(
+            &mut outbound,
+            "mcp.unknown-server",
+            format!("{qualified} is not served by an enabled server"),
+        );
     } else if let (Some(server), Some((_, tool))) = (server, federation::split(qualified))
         && !guard::callable(server, tool)
     {
-        gate(&mut outbound, "mcp.tool-unapproved", format!("{qualified} is not on the approved list"));
+        gate(
+            &mut outbound,
+            "mcp.tool-unapproved",
+            format!("{qualified} is not on the approved list"),
+        );
     }
     let digest = audit::sha256_hex(rendered.as_bytes());
     let (calls, identical) = runaway_counts(state, policy, principal, qualified, &digest).await;
@@ -241,7 +261,9 @@ pub(crate) async fn call_tool(
     outbound_record.channel = "mcp";
     outbound_record.tool = Some(qualified);
     state.auditor.record(outbound_record).await;
-    state.telemetry.verdict("tool_call", verdict_name(outbound.verdict));
+    state
+        .telemetry
+        .verdict("tool_call", verdict_name(outbound.verdict));
 
     if let Some(blocker) = outbound.blocked_by() {
         let code = if blocker.control_id == TOOL_NOT_GRANTED {
@@ -251,7 +273,18 @@ pub(crate) async fn call_tool(
         };
         return Err((code, format!("tool call blocked by {}", blocker.control_id)));
     }
-    background::analyse(state, &outbound, job(policy, Hook::ToolCall, &rendered, trace_id, principal, qualified));
+    background::analyse(
+        state,
+        &outbound,
+        job(
+            policy,
+            Hook::ToolCall,
+            &rendered,
+            trace_id,
+            principal,
+            qualified,
+        ),
+    );
 
     let forwarded = if outbound.verdict == Verdict::Redact {
         // Redaction rewrote a JSON document as text. If it no longer parses we
@@ -286,7 +319,9 @@ pub(crate) async fn call_tool(
             json!({ "name": tool, "arguments": forwarded }),
         )
         .await;
-        state.telemetry.dependency(&format!("mcp:{}", server.name), reply.is_ok());
+        state
+            .telemetry
+            .dependency(&format!("mcp:{}", server.name), reply.is_ok());
         reply
     };
     let upstream_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -323,7 +358,9 @@ pub(crate) async fn call_tool(
         "upstream_us": upstream_us,
     });
     state.auditor.record(inbound_record).await;
-    state.telemetry.verdict("tool_result", verdict_name(inbound.verdict));
+    state
+        .telemetry
+        .verdict("tool_result", verdict_name(inbound.verdict));
 
     if inbound.verdict == Verdict::Block {
         let control = inbound
@@ -332,7 +369,18 @@ pub(crate) async fn call_tool(
         tracing::warn!(tool = %qualified, control, "tool result blocked");
         return Err((POLICY_DENIED, format!("tool result blocked by {control}")));
     }
-    background::analyse(state, &inbound, job(policy, Hook::ToolResult, &text, trace_id, principal, qualified));
+    background::analyse(
+        state,
+        &inbound,
+        job(
+            policy,
+            Hook::ToolResult,
+            &text,
+            trace_id,
+            principal,
+            qualified,
+        ),
+    );
 
     if inbound.verdict == Verdict::Redact {
         federation::replace_result_text(&mut payload, &inbound.text);
@@ -386,7 +434,18 @@ async fn resource_call(
         .resources
         .as_ref()
         .ok_or("resource tools are not configured on this gateway")?;
-    let tables = policy.resources.tables_for(&principal.slug);
+    // The catalog's grant, plus requestable tables a human approved for this
+    // end user.
+    let mut granted = policy.resources.tables_for(&principal.slug).to_vec();
+    granted.extend(
+        state
+            .approvals
+            .granted_tables(principal.id, &principal.user),
+    );
+    let access = resources::Access {
+        granted: &granted,
+        requestable: policy.resources.requestable_for(&principal.slug),
+    };
 
     if tool == resources::DESCRIBE {
         let wanted = match arguments.get("tables") {
@@ -394,16 +453,26 @@ async fn resource_call(
             Some(value) => serde_json::from_value::<Vec<String>>(value.clone())
                 .map_err(|_| "resources__describe takes `tables` as a list of table names")?,
         };
-        return resources::describe(pool, tables, &wanted)
-            .await
-            .map(resources::as_tool_result);
+        let described = resources::describe(pool, &access, &wanted).await;
+        return refused_table(
+            state,
+            policy,
+            principal,
+            trace_id,
+            resources::DESCRIBE,
+            described,
+        )
+        .await
+        .map(resources::as_tool_result);
     }
 
     let sql = arguments
         .get("sql")
         .and_then(Value::as_str)
         .ok_or("resources__query requires a `sql` argument")?;
-    let mut result = resources::run(pool, policy, tables, sql).await?;
+    let ran = resources::run(pool, policy, &access, sql).await;
+    let mut result =
+        refused_table(state, policy, principal, trace_id, resources::QUERY, ran).await?;
 
     // The rows leave through the output guardrails and are audited as data
     // delivered to the user.
@@ -422,7 +491,58 @@ async fn resource_call(
     state.auditor.record(record).await;
 
     let ack = resources::deliver(state.db(), principal, trace_id, &result).await?;
-    Ok(resources::as_tool_result(ack.to_string()))
+    // The ack is ours and holds no values. As structured content it survives
+    // the tool_result redactions, which may mangle the text copy (digit runs
+    // in a UUID look like a phone number), so the result stays fetchable.
+    let mut payload = resources::as_tool_result(ack.to_string());
+    payload["structuredContent"] = ack;
+    Ok(payload)
+}
+
+/// A table outside the grant is a policy decision, not a failed call: it is
+/// audited as a block under the call's trace, so Activity shows it next to
+/// the `tool_call` that asked.
+async fn refused_table<T>(
+    state: &AppState,
+    policy: &Policy,
+    principal: &Principal,
+    trace_id: Uuid,
+    tool: &'static str,
+    outcome: Result<T, resources::ResourceError>,
+) -> Result<T, String> {
+    let error = match outcome {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    if let resources::ResourceError::NotGranted { table, .. } = &error {
+        let mut refusal = blank();
+        refusal.gate(
+            TABLE_NOT_GRANTED.to_owned(),
+            Severity::High,
+            Action::Block,
+            format!(
+                "{} for {} may not read {table}",
+                principal.slug, principal.user
+            ),
+        );
+        let mut record = audit::record_for(
+            trace_id,
+            Hook::ToolResult,
+            &refusal,
+            None,
+            principal,
+            policy.version_id,
+            &message,
+        );
+        record.channel = "mcp";
+        record.tool = Some(tool);
+        state.auditor.record(record).await;
+        state
+            .telemetry
+            .verdict("tool_result", verdict_name(refusal.verdict));
+    }
+    Err(message)
 }
 
 /// `Mcp-Method` and `Mcp-Name` mirror the body so intermediaries can route

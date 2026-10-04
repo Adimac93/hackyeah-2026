@@ -18,16 +18,18 @@ import {
 import type { ChatAttachment, ChatFile } from "@/lib/chat-attachments";
 import { decodeChatEvents } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
+import type { ToolStep } from "@/lib/tool-steps";
 
 import { AttachmentChip, FileChip } from "./attachment-chip";
+import { ToolSteps } from "./tool-steps";
 
 /** Three bouncing dots in an assistant bubble while the reply is on its way. */
-function TypingBubble() {
+function TypingBubble({ status }: { status: string }) {
   return (
     <div
       className="flex justify-start"
       role="status"
-      aria-label="Assistant is typing"
+      aria-label={status === "" ? "Assistant is typing" : status}
     >
       <div className="flex items-center gap-1 rounded-xl bg-zinc-800/80 px-4 py-3.5">
         {[0, 150, 300].map((delay) => (
@@ -37,6 +39,9 @@ function TypingBubble() {
             style={{ animationDelay: `${String(delay)}ms` }}
           />
         ))}
+        {status === "" ? null : (
+          <span className="ml-2 text-xs text-zinc-400">{status}</span>
+        )}
       </div>
     </div>
   );
@@ -117,6 +122,8 @@ export function ChatComposer({
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState("");
   const [reply, setReply] = useState("");
+  const [status, setStatus] = useState("");
+  const [steps, setSteps] = useState<ToolStep[]>([]);
   const [hasText, setHasText] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [sentAttachments, setSentAttachments] = useState<ChatAttachment[]>([]);
@@ -218,6 +225,8 @@ export function ChatComposer({
     setSentFiles(binaries);
     setFiles([]);
     setReply("");
+    setStatus("");
+    setSteps([]);
     setError(null);
     setStreaming(true);
     if (textarea.current !== null) {
@@ -247,6 +256,14 @@ export function ChatComposer({
             }
             case "delta": {
               setReply((text) => text + chatEvent.text);
+              break;
+            }
+            case "status": {
+              setStatus(chatEvent.text);
+              break;
+            }
+            case "tool_steps": {
+              setSteps(chatEvent.steps);
               break;
             }
             case "done": {
@@ -317,16 +334,20 @@ export function ChatComposer({
             )}
             {reply === "" ? (
               error === null ? (
-                <TypingBubble />
+                <TypingBubble status={status} />
               ) : null
             ) : (
-              <div className="flex justify-start" aria-live="polite">
+              <div
+                className="flex flex-col items-start gap-2"
+                aria-live="polite"
+              >
                 <div className="max-w-[85%] rounded-xl bg-zinc-800/80 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
                   {reply}
                   {streaming ? (
                     <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
                   ) : null}
                 </div>
+                <ToolSteps steps={steps} />
               </div>
             )}
           </div>

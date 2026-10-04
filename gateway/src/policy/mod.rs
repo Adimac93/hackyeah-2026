@@ -112,6 +112,8 @@ pub enum PolicyError {
     Profile { name: String },
     #[error("MCP server name {name:?} is reserved for the gateway's own tools")]
     ReservedServer { name: String },
+    #[error("resources: table {table:?} is both granted and requestable for {identity}")]
+    RequestableGranted { identity: String, table: String },
 }
 
 const SCHEMA_VERSION: u32 = 1;
@@ -351,6 +353,13 @@ impl Policy {
         if let Some(server) = raw.mcp.servers.iter().find(|s| s.name == "control") {
             return Err(PolicyError::ReservedServer {
                 name: server.name.clone(),
+            });
+        }
+
+        if let Some((identity, table)) = raw.resources.overlap() {
+            return Err(PolicyError::RequestableGranted {
+                identity: identity.to_owned(),
+                table: table.to_owned(),
             });
         }
 

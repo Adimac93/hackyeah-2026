@@ -71,6 +71,11 @@ pub struct Resources {
     /// identity slug -> table names in the `resources` schema
     #[serde(default)]
     pub grants: BTreeMap<String, Vec<String>>,
+    /// identity slug -> tables it may ask for through
+    /// `control__request_access {table}`: refused until a human approves, then
+    /// granted to that one end user for the approved time.
+    #[serde(default)]
+    pub requestable: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_max_rows")]
     pub max_rows: i64,
     #[serde(default = "default_statement_timeout")]
@@ -81,6 +86,7 @@ impl Default for Resources {
     fn default() -> Self {
         Self {
             grants: BTreeMap::new(),
+            requestable: BTreeMap::new(),
             max_rows: default_max_rows(),
             statement_timeout_ms: default_statement_timeout(),
         }
@@ -98,5 +104,21 @@ const fn default_statement_timeout() -> u64 {
 impl Resources {
     pub fn tables_for(&self, slug: &str) -> &[String] {
         self.grants.get(slug).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn requestable_for(&self, slug: &str) -> &[String] {
+        self.requestable.get(slug).map_or(&[], Vec::as_slice)
+    }
+
+    /// A table both granted and requestable for one identity is a catalog
+    /// mistake: it is unclear whether the author meant to require approval.
+    pub fn overlap(&self) -> Option<(&str, &str)> {
+        self.requestable.iter().find_map(|(slug, tables)| {
+            let granted = self.tables_for(slug);
+            tables
+                .iter()
+                .find(|table| granted.contains(table))
+                .map(|table| (slug.as_str(), table.as_str()))
+        })
     }
 }

@@ -10,7 +10,7 @@
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::approvals::{self, Outcome, Target};
+use crate::approvals::{self, Access, Outcome, Target};
 use crate::audit::{self, EventRecord, Principal};
 use crate::engine::{self, Verdict};
 use crate::policy::{Hook, Policy};
@@ -33,22 +33,26 @@ pub fn descriptors() -> Vec<Value> {
         json!({
             "name": MY_ACCESS,
             "description": "Show what you may use: allowed tools and models, budgets and \
-                            usage, active temporary grants, and tools you could request.",
+                            usage, active temporary grants, and the tools and tables you \
+                            could request.",
             "inputSchema": { "type": "object", "properties": {} },
         }),
         json!({
             "name": REQUEST_ACCESS,
             "description": "Ask the security team for temporary access to a tool you are \
-                            not allowed to call. Blocks for up to two minutes while a human \
-                            decides. Returns granted (with expiry), denied, or expired.",
+                            not allowed to call, or to a table resources__describe says needs \
+                            approval. Pass exactly one of `tool` and `table`. Blocks for up to \
+                            two minutes while a human decides. Returns granted (with expiry), \
+                            denied, or expired.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "tool": { "type": "string", "description": "Qualified tool name, e.g. docs__read" },
+                    "table": { "type": "string", "description": "Table name, e.g. customers" },
                     "reason": { "type": "string", "description": "Why you need it. Shown to the approver." },
                     "ttl_minutes": { "type": "integer", "minimum": 1, "maximum": approvals::MAX_TTL_MINUTES },
                 },
-                "required": ["tool", "reason"],
+                "required": ["reason"],
             },
         }),
     ]
@@ -121,7 +125,7 @@ async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> 
         .map(|(row, used)| json!({ "limit": row, "used": used }))
         .collect();
 
-    let grants = state.approvals.active_grants(principal.id);
+    let grants = state.approvals.active_grants(principal.id, &principal.user);
     let (tools, _) = listing::catalog(state, policy).await;
     let requestable: Vec<String> = tools
         .iter()
@@ -130,11 +134,29 @@ async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> 
             approvals::validate_target(
                 policy,
                 principal,
-                grants.iter().any(|g| g.tool == *name),
+                grants.iter().any(|g| g.access.tool() == Some(*name)),
                 name,
             ) == Target::Requestable
         })
         .map(str::to_owned)
+        .collect();
+    let temporary: Vec<Value> = grants
+        .iter()
+        .filter_map(|g| {
+            g.access
+                .table()
+                .map(|table| json!({ "table": table, "expires_at_ms": g.expires_at_ms }))
+        })
+        .collect();
+    let requestable_tables: Vec<&String> = policy
+        .resources
+        .requestable_for(&principal.slug)
+        .iter()
+        .filter(|table| {
+            !grants
+                .iter()
+                .any(|g| g.access.table() == Some(table.as_str()))
+        })
         .collect();
 
     json!({
@@ -144,6 +166,11 @@ async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> 
         "budgets": budgets,
         "grants": grants,
         "requestable_tools": requestable,
+        "tables": {
+            "granted": policy.resources.tables_for(&principal.slug),
+            "requestable": requestable_tables,
+            "temporary": temporary,
+        },
     })
 }
 
@@ -153,9 +180,7 @@ async fn request_access(
     principal: &Principal,
     arguments: &Value,
 ) -> Result<Outcome, String> {
-    let Some(tool) = arguments.get("tool").and_then(Value::as_str) else {
-        return Err("request_access requires a tool".to_owned());
-    };
+    let access = requested(arguments)?;
     let reason = arguments
         .get("reason")
         .and_then(Value::as_str)
@@ -171,12 +196,14 @@ async fn request_access(
             .map(|t| u32::try_from(t).unwrap_or(u32::MAX)),
     );
 
-    match approvals::validate_target(
-        policy,
-        principal,
-        state.approvals.has_grant(principal.id, tool),
-        tool,
-    ) {
+    let has_grant = state
+        .approvals
+        .has_grant(principal.id, &principal.user, &access);
+    let target = match &access {
+        Access::Tool(tool) => approvals::validate_target(policy, principal, has_grant, tool),
+        Access::Table(table) => approvals::validate_table(policy, principal, has_grant, table),
+    };
+    match target {
         Target::Requestable => {}
         Target::AlreadyPermitted => return Ok(Outcome::AlreadyPermitted),
         Target::Refused(message) => return Ok(Outcome::Refused { message }),
@@ -214,7 +241,7 @@ async fn request_access(
 
     let outcome = state
         .approvals
-        .request(principal, tool, &evaluation.text, ttl)
+        .request(principal, &access, &evaluation.text, ttl)
         .await;
 
     // The human's answer is a decision too; it goes in the chain.
@@ -242,6 +269,23 @@ async fn request_access(
         .await;
 
     Ok(outcome)
+}
+
+/// The one thing a request is for: a `tool` or a `table`, never both.
+pub(crate) fn requested(arguments: &Value) -> Result<Access, String> {
+    let field = |name: &str| {
+        arguments
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    match (field("tool"), field("table")) {
+        (Some(tool), None) => Ok(Access::Tool(tool)),
+        (None, Some(table)) => Ok(Access::Table(table)),
+        _ => Err("request_access takes exactly one of tool or table".to_owned()),
+    }
 }
 
 fn text(value: &Value) -> Value {

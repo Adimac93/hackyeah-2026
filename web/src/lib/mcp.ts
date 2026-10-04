@@ -9,11 +9,15 @@ export const ACCESS_STATUSES = [
 ] as const;
 export type AccessStatus = (typeof ACCESS_STATUSES)[number];
 
-/** A row of `access_requests`: an agent asking a human for a tool it lacks. */
+/** A row of `access_requests`: an agent asking a human for a tool or table it lacks. */
 export interface AccessRequestRow {
   id: string;
   principal_id: string;
-  tool: string;
+  /** exactly one of `tool` and `resource` (a table) is set */
+  tool: string | null;
+  resource: string | null;
+  /** the end user the grant covers */
+  end_user: string;
   reason: string;
   ttl_minutes: number;
   status: AccessStatus;

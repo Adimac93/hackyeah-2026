@@ -12,12 +12,14 @@ import { canAccessConsole } from "@/lib/domain";
 import { fmtDateTime } from "@/lib/format";
 import { loadDefaultModelId, loadModels } from "@/lib/llm/catalog";
 import { defaultModel, modelLabel } from "@/lib/llm/models";
+import { storedSteps } from "@/lib/tool-steps";
 
 import { deleteAllConversations, deleteConversation } from "./actions";
 import { AttachmentChip, FileChip } from "./attachment-chip";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ModelSelect } from "./model-select";
+import { ToolSteps } from "./tool-steps";
 
 const SUGGESTIONS = [
   "What are the password requirements for a new service?",
@@ -119,7 +121,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex flex-col gap-2 ${m.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
                   title={fmtDateTime(m.created_at)}
@@ -146,6 +148,9 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                     </p>
                   )}
                 </div>
+                {m.role === "assistant" ? (
+                  <ToolSteps steps={storedSteps(m.tool_calls)} />
+                ) : null}
               </div>
             ))}
           </>
