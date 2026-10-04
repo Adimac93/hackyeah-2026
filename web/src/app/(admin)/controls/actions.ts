@@ -14,9 +14,12 @@ import { gatewayFetch } from "@/lib/gateway-live-fetch";
 const UPLOAD_TIMEOUT_MS = 15_000;
 
 /**
- * Save the edited control catalog (TOML) through `POST /admin/policy`, as the
- * signed-in admin. The gateway validates it, stores it as a new policy version
- * and hot-swaps it; an invalid catalog is rejected and the active one keeps running.
+ * Replace the control catalog with an uploaded TOML file through
+ * `POST /admin/policy`, as the signed-in admin. Every rule is replaced. The
+ * gateway validates it, stores it as a new policy version and hot-swaps it; an
+ * invalid catalog is rejected and the active one keeps running. `base_sha` (the
+ * version the upload was compared against) guards against replacing a version
+ * someone saved in the meantime.
  */
 export async function savePolicy(
   _previous: FormState,
@@ -25,6 +28,21 @@ export async function savePolicy(
   const session = await getSession();
   if (session.user === null || session.member?.role !== "admin") {
     return { error: "Only admins can change the gateway policy." };
+  }
+
+  const baseSha = formData.get("base_sha");
+  if (typeof baseSha === "string" && baseSha !== "") {
+    const { data: active } = await session.supabase
+      .from("policy_versions")
+      .select("sha256")
+      .eq("active", true)
+      .maybeSingle<{ sha256: string }>();
+    if (active !== null && active.sha256 !== baseSha) {
+      return {
+        error:
+          "The catalog changed since this page loaded. Reload and upload again to compare against the current version.",
+      };
+    }
   }
 
   const text = formData.get("catalog");

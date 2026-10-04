@@ -368,3 +368,110 @@ export function editControl(
   );
   return { ok: true, value: result.join(eol) };
 }
+
+// ---------------------------------------------------------------- replacing
+//
+// Uploading a catalog file replaces every rule. Before it goes to the gateway
+// (which does the real validation), check the file's controls and show what
+// the swap does to the rules in force.
+
+/** Problems that make a catalog file unfit to upload; empty when it looks fine. */
+export function catalogFileProblems(toml: string): string[] {
+  const controls = parseCatalogControls(toml);
+  const problems: string[] = [];
+  if (controls.length === 0) {
+    problems.push("The file declares no controls.");
+  }
+  const seen = new Set<string>();
+  for (const control of controls) {
+    if (seen.has(control.id)) {
+      problems.push(`"${control.id}" is declared more than once.`);
+      continue;
+    }
+    seen.add(control.id);
+    const fields = readControlFields(toml, control.id);
+    const problem = fields === null ? null : controlFieldsProblem(fields);
+    if (problem !== null) {
+      problems.push(`${control.id}: ${problem}`);
+    }
+  }
+  return problems;
+}
+
+export interface CatalogDiff {
+  added: string[];
+  removed: string[];
+  changed: { id: string; changes: string[] }[];
+  unchanged: number;
+}
+
+function describeChanges(
+  before: ControlFields,
+  after: ControlFields,
+): string[] {
+  const changes: string[] = [];
+  if (before.kind !== after.kind) {
+    changes.push(`${before.kind} → ${after.kind}`);
+  }
+  if (before.enabled !== after.enabled) {
+    changes.push(after.enabled ? "enabled" : "disabled");
+  }
+  for (const key of ["severity", "action", "escalateWhen"] as const) {
+    if (before[key] !== after[key]) {
+      changes.push(`${key} ${before[key] ?? "—"} → ${after[key] ?? "—"}`);
+    }
+  }
+  if (before.hooks.join(",") !== after.hooks.join(",")) {
+    changes.push(`hooks ${after.hooks.join(", ") || "—"}`);
+  }
+  if (before.threshold !== after.threshold) {
+    changes.push(
+      `threshold ${String(before.threshold ?? "—")} → ${String(after.threshold ?? "—")}`,
+    );
+  }
+  if (before.pattern !== after.pattern) {
+    changes.push("pattern changed");
+  }
+  return changes;
+}
+
+/** What replacing `current` with `next` does to each rule, by control id. */
+export function diffCatalogs(current: string, next: string): CatalogDiff {
+  const before = new Map(
+    parseCatalogControls(current).map((c) => [
+      c.id,
+      readControlFields(current, c.id),
+    ]),
+  );
+  const diff: CatalogDiff = {
+    added: [],
+    removed: [],
+    changed: [],
+    unchanged: 0,
+  };
+  const nextIds = new Set<string>();
+  for (const control of parseCatalogControls(next)) {
+    if (nextIds.has(control.id)) {
+      continue;
+    }
+    nextIds.add(control.id);
+    const old = before.get(control.id);
+    const now = readControlFields(next, control.id);
+    if (old === undefined || old === null) {
+      diff.added.push(control.id);
+    } else if (now !== null) {
+      const changes = describeChanges(old, now);
+      if (changes.length === 0) {
+        diff.unchanged += 1;
+      } else {
+        diff.changed.push({ id: control.id, changes });
+      }
+    }
+  }
+  for (const id of before.keys()) {
+    if (!nextIds.has(id)) {
+      diff.removed.push(id);
+    }
+  }
+  return diff;
+}

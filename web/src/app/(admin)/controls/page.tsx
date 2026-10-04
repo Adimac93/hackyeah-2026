@@ -16,7 +16,7 @@ import type {
 import type { LivePolicy } from "@/lib/gateway-live";
 import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
-import { PolicyEditor } from "./policy-editor";
+import { CatalogUpload } from "./catalog-upload";
 import {
   Budgets,
   ControlsTable,
@@ -126,11 +126,27 @@ export default async function ControlsPage() {
           }
         >
           {typeof activeRow?.catalog_toml === "string" ? (
-            <PolicyEditor
-              key={activeRow.sha256}
-              active={activeRow.catalog_toml}
-              canEdit={member.role === "admin"}
-            />
+            <div className="space-y-4">
+              {member.role === "admin" ? (
+                <CatalogUpload
+                  key={activeRow.sha256}
+                  active={activeRow.catalog_toml}
+                  baseSha={activeRow.sha256}
+                />
+              ) : (
+                <p className="text-xs text-zinc-500">
+                  Only admins can replace the catalog.
+                </p>
+              )}
+              <details className="group rounded-lg border border-zinc-800">
+                <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-400 hover:text-zinc-100">
+                  View the active catalog (read-only)
+                </summary>
+                <pre className="scrollbar-subtle max-h-[28rem] overflow-auto border-t border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre text-zinc-300">
+                  {activeRow.catalog_toml}
+                </pre>
+              </details>
+            </div>
           ) : (
             <p className="text-sm text-zinc-500">
               The gateway hasn&apos;t stored a policy yet. It seeds the built-in

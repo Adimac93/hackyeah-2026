@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  catalogFileProblems,
   controlFieldsProblem,
+  diffCatalogs,
   editControl,
   parseCatalogControls,
   readControlFields,
@@ -198,4 +200,49 @@ void test("editControl refuses invalid settings and unknown controls", () => {
     }),
     "The threshold must be between 0 and 1.",
   );
+});
+
+const NEXT = [
+  "schema_version = 1",
+  "[[controls.deterministic]]",
+  'id = "pii.email"',
+  'hooks = ["prompt_in", "response_out"]',
+  'severity = "high"',
+  'action = "block"',
+  String.raw`pattern = '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'`,
+  "",
+  "[[controls.deterministic]]",
+  'id = "secret.new"',
+  'hooks = ["prompt_in"]',
+  'severity = "critical"',
+  'action = "block"',
+  "pattern = 'sk_live_[0-9a-z]{24}'",
+].join("\n");
+
+void test("diffCatalogs reports added, removed, changed and unchanged rules", () => {
+  assert.deepEqual(diffCatalogs(EDITABLE, NEXT), {
+    added: ["secret.new"],
+    removed: ["injection.prompt-guard"],
+    changed: [
+      {
+        id: "pii.email",
+        changes: ["severity medium → high", "action redact → block"],
+      },
+    ],
+    unchanged: 0,
+  });
+  assert.equal(diffCatalogs(NEXT, NEXT).unchanged, 2);
+});
+
+void test("catalogFileProblems catches empty catalogs, duplicates and bad fields", () => {
+  assert.deepEqual(catalogFileProblems(NEXT), []);
+  assert.deepEqual(catalogFileProblems("schema_version = 1\n"), [
+    "The file declares no controls.",
+  ]);
+  const duplicated = `${NEXT}\n\n[[controls.deterministic]]\nid = "secret.new"\nhooks = ["prompt_in"]\nseverity = "low"\naction = "flag"\npattern = 'x'`;
+  assert.deepEqual(catalogFileProblems(duplicated), [
+    '"secret.new" is declared more than once.',
+  ]);
+  const bad = NEXT.replace('action = "block"', 'action = "explode"');
+  assert.deepEqual(catalogFileProblems(bad), ["pii.email: Pick an action."]);
 });
