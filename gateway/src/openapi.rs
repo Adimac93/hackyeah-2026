@@ -62,11 +62,11 @@ pub fn document() -> Value {
                     "401": refusal("authentication_required"),
                     "403": refusal("model_not_allowed | blocked_by_control (with error.stage, error.hook and, on prompt_in, error.helper) | risk_blocked | delegation_refused"),
                     "429": refusal("budget_exceeded"),
-                    "502": refusal("upstream_unavailable | upstream_unreadable")
+                    "502": refusal("upstream_unavailable | upstream_unreadable | tool_loop_exceeded")
                 }}},
             "/mcp": {"post": {
                 "tags": ["integration"], "summary": "MCP 2026-07-28 JSON-RPC endpoint (server/discover, tools/list, tools/call), policed at tool_call and tool_result",
-                "description": "Policy outcomes are JSON-RPC errors: -32000 policy denied, -32001 principal denied (auth or tool grant), -32002 upstream error, -32020 header/body mismatch, -32601 method not served. The gateway's own tools resources__describe and resources__query return structure and an acknowledgement only; rows go to GET /v1/results/{id}. control__list_controls, control__my_access and control__request_access are always listed; request_access blocks up to 120 s while a human decides.",
+                "description": "Policy outcomes are JSON-RPC errors: -32000 policy denied, -32001 principal denied (auth or tool grant), -32002 upstream error, -32020 header/body mismatch, -32601 method not served. The gateway's own tools resources__describe (granted table names, or with `tables` their columns) and resources__query return structure and an acknowledgement only; rows go to GET /v1/results/{id}. control__list_controls, control__my_access and control__request_access are always listed; request_access blocks up to 120 s while a human decides.",
                 "security": key,
                 "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object"}}}},
                 "responses": {"200": ok("JSON-RPC result or error envelope", json!({"type": "object"}))}}},
@@ -190,6 +190,7 @@ pub fn document() -> Value {
                 "ChatRequest": {"type": "object", "required": ["model", "messages"], "properties": {
                     "model": {"type": "string"},
                     "stream": {"type": "boolean", "description": "Stream the answer as SSE; see the 200 response"},
+                    "mcp": {"type": "boolean", "description": "Offer the model the caller's MCP tools and run its tool calls through the tools/call gate until it answers (at most 8 turns). Answered buffered, even with stream."},
                     "messages": {"type": "array", "items": {"type": "object", "properties": {
                         "role": {"type": "string"},
                         "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "object"}}]}}}}}},
@@ -200,7 +201,8 @@ pub fn document() -> Value {
                         "trace_id": {"type": "string", "format": "uuid"},
                         "policy_version": {"type": "string"},
                         "prompt_in": {"$ref": "#/components/schemas/HookSummary"},
-                        "response_out": {"$ref": "#/components/schemas/HookSummary"}}}}},
+                        "response_out": {"$ref": "#/components/schemas/HookSummary"},
+                        "tool_calls": {"type": "array", "description": "Each MCP tool call the model made: tool, status (ok | refused), trace_id, content the model saw, and result_id of rows at GET /v1/results/{id}", "items": {"type": "object"}}}}}},
                 "HookSummary": {"type": "object", "properties": {
                     "verdict": {"type": "string", "enum": ["allow", "redact", "block"]},
                     "controls_fired": {"type": "array", "items": {"type": "string"}},

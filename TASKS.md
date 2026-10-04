@@ -14,7 +14,7 @@ Format: `- [ ] <name> — <what> (@who)`
 - [ ] migrate-end-users — `just migrate` for 20261004090000_end_users_activity_status, `just seed` (adds `console-chat`), then `supabase db advisors` (@)
 - [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)
 - [ ] web-helper — show `error.helper` (violated policy + suggestion) on a blocked chat prompt, resubmit only on click (@)
-- [ ] web-results — fetch `GET /v1/results/{id}` for `resources__query` acknowledgements and render the rows (@)
+- [ ] web-results — console chat sends `"mcp": true`, fetches `GET /v1/results/{id}` for each `x_control_layer.tool_calls[].result_id` and renders the rows (@)
 - [ ] budgets-scopes — team/org budget scopes and compute-time accounting (@)
 - [ ] apply-migration — `just migrate` for 20261003210000_gateway_db_policy, then `just seed` and `supabase db advisors` (@)
 - [ ] write the demo script in DEMO.md and put the deployed URL there (@)
@@ -28,6 +28,7 @@ Format: `- [ ] <name> — <what> (@who)`
 - [x] console-specs — per-user budgets/risk/activity (X-On-Behalf-Of), deterministic refusal notice, live activity with status filter, user risk tab, merged Controls & policies with TOML editor, incidents and company-policy pages dropped
 - [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API
 - [x] principal-models — enforce per-identity/role model allow list on top of the global one
+- [x] mcp-agent-loop — chat `"mcp": true` drives the model through the MCP tools (describe given tables → SELECT → rows to the user); mock upstream plays it in dev
 - [x] mcp-query-push — MCP query tool runs on resources, rows pushed to the user via resource engine, LLM gets only ref/structure/row count
 - [x] signature-mirror — upsert loaded feed into `attack_signatures` on every load
 - [x] policy-reload-audit — record rejected reloads and a diff for file reloads; uploads already store `diff_summary`

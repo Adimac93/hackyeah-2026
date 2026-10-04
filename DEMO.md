@@ -35,6 +35,17 @@ Console open and signed in as an analyst. `just demo` running (gateway + `mcp-de
    `tool_result`. Say: "Permission and inspection stack. A human can grant a tool; nobody
    can grant a poisoned document."
 
+### Beat: the model asks the database, the user gets the rows
+
+`just demo` running with `RESOURCES_DATABASE_URL` set. `DA` is `Authorization: Bearer demo-agent-dev-key`.
+
+1. `curl -s $GW/v1/chat/completions -H "$DA" -H 'content-type: application/json' -d '{"model":"llama3.1:8b","mcp":true,"messages":[{"role":"user","content":"select full_name, email from customers"}]}'`
+2. `x_control_layer.tool_calls` shows the model's two calls: `resources__describe`
+   (the columns of `customers`, nothing else) and `resources__query` (`row_count`, a `result_id`).
+   The answer holds no customer data. Say: "The model wrote the query. It never saw a row."
+3. `curl -s $GW/v1/results/<result_id> -H "$DA"` — the rows, emails redacted on the way out.
+4. Ask for `payroll` instead — `resources__describe` is refused: not in `demo-agent`'s grant.
+
 ## What it depends on
 
 - Seeded data: `just seed` — two gateway principals with public demo keys:
