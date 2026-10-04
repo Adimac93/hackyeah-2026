@@ -25,3 +25,10 @@ report/*.pdf
 report/data.json
 *.md
 !README.md
+
+# Submission docs; 5-implementation/ holds symlinks back to the code
+1-solution/
+2-architecture/
+3-reporting/
+4-testing/
+5-implementation/

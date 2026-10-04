@@ -13,6 +13,19 @@ Built at **HackYeah 2026** for the *AI Control Layer* challenge
 - **Landing page:** <https://cogut.jay-z.workers.dev>
 - **Gateway (Cloud Run):** <https://cogut-backend.cloud.run> — API docs at `/admin/docs`
 
+## For judges
+
+The submission follows the suggested layout; each folder's README is the entry
+point, and the code itself stays at the root (see `5-implementation`).
+
+| Folder | Contents |
+|---|---|
+| [`1-solution/`](1-solution) | overview, the list of controls, configuration and policy options |
+| [`2-architecture/`](2-architecture) | architecture diagram, performance metrics per tier |
+| [`3-reporting/`](3-reporting) | dashboard screenshots, the metrics we report |
+| [`4-testing/`](4-testing) | test cases — red/green per control, live scenarios |
+| [`5-implementation/`](5-implementation) | code map, implementation notes, integrating into existing agentic ecosystems |
+
 ---
 
 ## What it does
