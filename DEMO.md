@@ -85,6 +85,18 @@ message contains a SELECT; prod: ask in plain words).
     Prod chat also needs a real `UPSTREAM_URL` (TASKS.md `chat-upstream-prod`).
 - Anything manual: _(TBD — ideally nothing)_
 
+## Self-test
+
+`just test system` starts the gateway and `mcp-demo` (logs in
+`target/selftest-services.log`) and runs the self-test against them: prompts,
+answers, identity and model grants, MCP tool calls and results, and the
+attack-history block, each printed with its result and risk score. Needs
+`DATABASE_URL` and `just seed` (the `selftest` principal, key
+`selftest-dev-key`). To test a gateway that is already running, deployed or
+local: `SELFTEST_URL=https://… just test system` (it must have `mcp-demo`
+behind it as the `docs` server for the tool-result cases). The header says
+whether the semantic judge is the mock or a real model.
+
 ## Fallback
 
 Live demos fail on conference wifi. Before the final hour:

@@ -185,6 +185,9 @@ fn index_json(state: &AppState) -> Value {
             "semantic_controls": policy.semantic.len(),
             "fail_mode": policy.fail_mode,
         },
+        // Which models stand behind the gateway, without saying where they are.
+        "semantic_judge": if state.detectors.mocked() { "mock" } else { "llm_judge" },
+        "chat_upstream": if state.upstream == gateway::mock::MOCK { "mock" } else { "model" },
         "endpoints": {
             "GET  /health": "liveness, and whether the audit database is reachable",
             "GET  /admin/docs": "Swagger UI for the whole API",

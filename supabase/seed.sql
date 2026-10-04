@@ -34,6 +34,14 @@ values
    array['llama3.1:8b', 'qwen2.5:7b'], array['resources__describe', 'resources__query'],
    'a9f5584b7e7fb03131d7d2887d521492591b1ad4fd9c88db49ae00686d4ba164', 'member', true),
 
+  -- The self-test program (`just test system`). It names a fresh end user for
+  -- every case, so its own refusals never add up to a risk block on anyone
+  -- else, and holds one model and one tool so the grant refusals have
+  -- something to refuse.
+  ('selftest', 'Self-test harness', 'app',
+   array['llama3.1:8b'], array['docs__read'],
+   '91a0e47b3771253220cf8f6d9016d9ebd6c419d5e831df2be78445a2b14ae34d', 'member', true),
+
   -- The SecOps console's server-side identity (GATEWAY_ADMIN_KEY): streams and
   -- decides access requests. No models, no tools — it administers, never acts.
   ('secops-console', 'SecOps console', 'app', array[]::text[], array[]::text[],

@@ -22,6 +22,7 @@ pub mod openapi;
 pub mod policy;
 pub mod proxy;
 pub mod risk;
+pub mod selftest;
 pub mod semantic;
 pub mod state;
 pub mod telemetry;

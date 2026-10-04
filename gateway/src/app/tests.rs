@@ -7,8 +7,9 @@
 //! No database is needed: identities are held in memory, and audit, budget
 //! and history reads and writes fail fast and are skipped.
 //!
-//! Every case prints what went in, what came back and the risk score the
-//! gateway assigned to it. `just test` shows the report.
+//! The same cases against the full running system, with a database, a real
+//! MCP server and whichever judge the gateway is configured with, are the
+//! `selftest` binary's (`just test system`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +26,7 @@ use crate::approvals::Approvals;
 use crate::audit::{Auditor, Principal};
 use crate::budget::Budgets;
 use crate::policy::{BUILTIN_CATALOG, BUILTIN_SIGNATURES, Policy, PolicyHandle};
+use crate::selftest::{self, Call, Caller, Case, Expect, case};
 use crate::semantic::Registry;
 use crate::state::AppState;
 use crate::telemetry::Telemetry;
@@ -127,194 +129,32 @@ fn docs_server() -> Router {
 
 // ---------------------------------------------------------------- cases
 
-enum Call {
-    Chat {
-        key: Option<&'static str>,
-        on_behalf_of: Option<&'static str>,
-        model: &'static str,
-        prompt: &'static str,
-    },
-    Tool {
-        name: &'static str,
-        arguments: Value,
-        depth: Option<u64>,
-    },
+fn agent() -> Caller {
+    Caller { label: "agent".into(), key: Some(AGENT_KEY.into()), user: None }
 }
 
-fn chat(prompt: &'static str) -> Call {
-    Call::Chat { key: Some(AGENT_KEY), on_behalf_of: None, model: MODEL, prompt }
+fn chat_as(caller: Caller, model: &str, prompt: &str) -> Call {
+    Call::Chat { caller, model: model.into(), prompt: prompt.into() }
 }
 
-fn tool(name: &'static str, arguments: Value) -> Call {
-    Call::Tool { name, arguments, depth: None }
+fn chat(prompt: &str) -> Call {
+    chat_as(agent(), MODEL, prompt)
 }
 
-#[derive(Debug)]
-enum Expect {
-    /// Answered, nothing redacted or refused.
-    Allow,
-    /// Answered with this control's redaction marker in place of the match.
-    Redact(&'static str),
-    /// Refused, naming this control or error type.
-    Block(&'static str),
+fn tool(name: &str, arguments: Value) -> Call {
+    Call::Tool { caller: agent(), name: name.into(), arguments, depth: None }
 }
 
-struct Case {
-    name: &'static str,
-    call: Call,
-    expect: Expect,
-}
-
-fn case(name: &'static str, call: Call, expect: Expect) -> Case {
-    Case { name, call, expect }
-}
-
-/// What the gateway did with one call, as the caller sees it.
-struct Seen {
-    status: u16,
-    refused: bool,
-    /// The refusal, or the verdicts and controls that fired.
-    result: String,
-    /// The answer that reached the caller.
-    text: String,
-    risk: Option<f64>,
-}
-
-impl Gateway {
-    async fn send(&self, call: &Call) -> Seen {
-        match call {
-            Call::Chat { key, on_behalf_of, model, prompt } => {
-                let mut request = self.http.post(format!("{}/v1/chat/completions", self.base)).json(&json!({
-                    "model": model,
-                    "messages": [{ "role": "user", "content": prompt }],
-                }));
-                if let Some(key) = key {
-                    request = request.bearer_auth(key);
-                }
-                if let Some(user) = on_behalf_of {
-                    request = request.header("x-on-behalf-of", *user);
-                }
-                let response = request.send().await.unwrap();
-                let status = response.status().as_u16();
-                seen_chat(status, &response.json().await.unwrap())
-            }
-            Call::Tool { name, arguments, depth } => {
-                let mut params = json!({ "name": name, "arguments": arguments });
-                if let Some(depth) = depth {
-                    params["_meta"] = json!({ "depth": depth });
-                }
-                let response = self
-                    .http
-                    .post(format!("{}/mcp", self.base))
-                    .bearer_auth(AGENT_KEY)
-                    .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params }))
-                    .send()
-                    .await
-                    .unwrap();
-                let status = response.status().as_u16();
-                seen_tool(status, &response.json().await.unwrap())
-            }
-        }
-    }
-}
-
-fn hooks(layer: &Value, names: &[&str]) -> (String, Option<f64>) {
-    let mut parts = Vec::new();
-    let mut risk = 0.0;
-    for name in names {
-        let hook = &layer[name];
-        risk += hook["risk_score"].as_f64().unwrap_or_default();
-        parts.push(format!("{name}={} {}", hook["verdict"].as_str().unwrap_or("?"), hook["controls_fired"]));
-    }
-    (parts.join(", "), Some(risk))
-}
-
-fn seen_chat(status: u16, body: &Value) -> Seen {
-    if let Some(error) = body.get("error") {
-        let mut result = format!("{}: {}", error["type"].as_str().unwrap_or("?"), error["message"].as_str().unwrap_or("?"));
-        if let (Some(stage), Some(hook)) = (error["stage"].as_str(), error["hook"].as_str()) {
-            result.push_str(&format!(" ({stage}, {hook})"));
-        }
-        return Seen { status, refused: true, result, text: String::new(), risk: error["risk_score"].as_f64() };
-    }
-    let (result, risk) = hooks(&body["x_control_layer"], &["prompt_in", "response_out"]);
-    let text = body.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or_default();
-    Seen { status, refused: false, result, text: text.to_owned(), risk }
-}
-
-fn seen_tool(status: u16, body: &Value) -> Seen {
-    if let Some(error) = body.get("error") {
-        return Seen {
-            status,
-            refused: true,
-            result: format!("JSON-RPC {}: {}", error["code"], error["message"].as_str().unwrap_or("?")),
-            text: String::new(),
-            risk: error.pointer("/data/risk_score").and_then(Value::as_f64),
-        };
-    }
-    let result = &body["result"];
-    let (summary, risk) = hooks(&result["_meta"]["x-control-layer"], &["tool_call", "tool_result"]);
-    Seen { status, refused: false, result: summary, text: crate::mcp::federation::result_text(result), risk }
-}
-
-fn passed(expect: &Expect, seen: &Seen) -> bool {
-    let redacted = seen.text.contains("[REDACTED:");
-    match expect {
-        Expect::Allow => seen.status == 200 && !seen.refused && !redacted,
-        Expect::Redact(control) => {
-            seen.status == 200 && !seen.refused && seen.text.contains(&format!("[REDACTED:{control}]"))
-        }
-        Expect::Block(reason) => seen.refused && seen.result.contains(reason),
-    }
-}
-
-fn describe(call: &Call) -> String {
-    let shown = |text: &str| {
-        let line = text.replace('\n', "\\n");
-        if line.chars().count() > 90 { format!("{}…", line.chars().take(90).collect::<String>()) } else { line }
-    };
-    match call {
-        Call::Chat { key, on_behalf_of, model, prompt } => {
-            let mut who = match *key {
-                Some(AGENT_KEY) => "agent".to_owned(),
-                Some(CONSOLE_KEY) => "console".to_owned(),
-                Some(_) => "unknown key".to_owned(),
-                None => "no key".to_owned(),
-            };
-            if let Some(user) = on_behalf_of {
-                who.push_str(&format!(" for {user}"));
-            }
-            format!("POST /v1/chat/completions ({who}, {model}) {:?}", shown(prompt))
-        }
-        Call::Tool { name, arguments, depth } => {
-            let depth = depth.map(|d| format!(" depth={d}")).unwrap_or_default();
-            format!("POST /mcp tools/call {name}{depth} {}", shown(&arguments.to_string()))
-        }
-    }
-}
-
-/// Run every case, print the report, then fail with the cases that missed.
+/// Run every case and fail with the ones that missed. The report is printed
+/// only when something fails; `just test system` is the run to read.
 async fn run(title: &str, gateway: &Gateway, cases: Vec<Case>) {
-    let mut report = format!("\n=== {title} ({} cases) ===\n", cases.len());
+    let mut report = format!("\n=== {title} ===\n");
     let mut failed = Vec::new();
-    for case in cases {
-        let seen = gateway.send(&case.call).await;
-        let ok = passed(&case.expect, &seen);
-        let risk = seen.risk.map_or_else(|| "n/a".to_owned(), |risk| format!("{risk:.2}"));
-        report.push_str(&format!(
-            "[{}] {}\n      in     {}\n      want   {:?}\n      got    {} {}\n      risk   {risk}\n",
-            if ok { "PASS" } else { "FAIL" },
-            case.name,
-            describe(&case.call),
-            case.expect,
-            seen.status,
-            seen.result,
-        ));
-        if !seen.text.is_empty() {
-            report.push_str(&format!("      answer {:?}\n", seen.text));
-        }
-        if !ok {
-            failed.push(case.name);
+    for (number, case) in cases.iter().enumerate() {
+        let outcome = selftest::send(&gateway.http, &gateway.base, &case.call).await;
+        report.push_str(&selftest::render(number + 1, case, &outcome));
+        if !outcome.is_ok_and(|seen| seen.passed(case.expect)) {
+            failed.push(case.name.clone());
         }
     }
     println!("{report}");
@@ -401,32 +241,32 @@ async fn chat_traffic_is_policed_end_to_end() {
             // ---- access: identity, delegation and the model allow list
             case(
                 "a request without an API key is refused",
-                Call::Chat { key: None, on_behalf_of: None, model: MODEL, prompt: "hello" },
+                chat_as(Caller { label: "no key".into(), key: None, user: None }, MODEL, "hello"),
                 Block("authentication_required"),
             ),
             case(
                 "an unknown API key is refused",
-                Call::Chat { key: Some("not-a-key"), on_behalf_of: None, model: MODEL, prompt: "hello" },
+                chat_as(Caller { label: "unknown key".into(), key: Some("not-a-key".into()), user: None }, MODEL, "hello"),
                 Block("authentication_required"),
             ),
             case(
                 "a model outside the allow list is refused",
-                Call::Chat { key: Some(AGENT_KEY), on_behalf_of: None, model: "gpt-4o", prompt: "hello" },
+                chat_as(agent(), "gpt-4o", "hello"),
                 Block("model_not_allowed"),
             ),
             case(
                 "an allowed model not granted to the identity is refused",
-                Call::Chat { key: Some(AGENT_KEY), on_behalf_of: None, model: "qwen2.5:7b", prompt: "hello" },
+                chat_as(agent(), "qwen2.5:7b", "hello"),
                 Block("model_not_allowed"),
             ),
             case(
                 "an agent may not claim to act for a user",
-                Call::Chat { key: Some(AGENT_KEY), on_behalf_of: Some("anna@example.com"), model: MODEL, prompt: "hello" },
+                chat_as(Caller { user: Some("anna@example.com".into()), ..agent() }, MODEL, "hello"),
                 Block("delegation_refused"),
             ),
             case(
                 "a delegating application may act for a user",
-                Call::Chat { key: Some(CONSOLE_KEY), on_behalf_of: Some("anna"), model: MODEL, prompt: "hello" },
+                chat_as(Caller { label: "console".into(), key: Some(CONSOLE_KEY.into()), user: Some("anna".into()) }, MODEL, "hello"),
                 Allow,
             ),
         ],
@@ -482,7 +322,7 @@ async fn tool_traffic_is_policed_end_to_end() {
             ),
             case(
                 "a runaway agent nested too deep is refused",
-                Call::Tool { name: "docs__read_file", arguments: json!({ "path": "notes.txt" }), depth: Some(9) },
+                Call::Tool { caller: agent(), name: "docs__read_file".into(), arguments: json!({ "path": "notes.txt" }), depth: Some(9) },
                 Block("mcp.runaway"),
             ),
             // ---- tool_result: what comes back before it reaches the model
