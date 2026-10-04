@@ -17,6 +17,9 @@ hands you.
 | [Bifrost](https://github.com/maximhq/bifrost) — 8.5k★ | Go, Apache-2.0 | Best budget model of the four: hierarchical dollar budgets across four nesting levels (virtual key → team → customer), rate limits, MCP, Ollama provider, dashboard, plugin system | open-core — guardrails are the paid pitch. Caveat: most "best AI gateway 2026" listicles are published by Maxim, Bifrost's own vendor. Discount accordingly |
 | [LiteLLM](https://github.com/BerriAI/litellm) | Python, MIT | de-facto spend layer — internal cost DB for all supported models, real-time spend per virtual key / user / team / project | not a security layer at all |
 
+What to port from agentgateway without forking it, ranked by score impact:
+[`agentgateway-learnings.md`](agentgateway-learnings.md).
+
 Also seen but not evaluated in depth: Microsoft MCP Gateway (k8s reverse proxy, session-aware
 routing), MCPX (tool-level RBAC, immutable audit trails), Lasso mcp-gateway, Enkrypt AI.
 
