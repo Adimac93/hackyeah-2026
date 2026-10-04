@@ -98,6 +98,9 @@ statement_timeout_ms = 2_000
 
 [resources.grants]
 demo-agent = ["customers", "invoices"]
+# The console's assistant. It acts for each signed-in user (X-On-Behalf-Of), and
+# query rows go to that user only.
+console-chat = ["customers", "invoices"]
 
 # ---------------------------------------------------------------- tier 1
 # Deterministic controls. Microseconds, no model, no network. Every request

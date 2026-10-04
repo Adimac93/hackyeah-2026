@@ -141,6 +141,31 @@ agent's blocked call and the console's decision must land on the same instance.
 Cloud Run's request timeout (default 300 s) also closes the console's SSE stream
 periodically; the browser reconnects and the gateway replays what is pending.
 
+### Resource tools (MCP access to company data)
+
+The `resources__describe` / `resources__query` tools read schema `resources`
+over their own connection, `RESOURCES_DATABASE_URL`, as the read-only role
+`gateway_resources` (created by migration, without a login). Unset, the tools
+answer "not configured". To turn them on:
+
+```bash
+# 1. give the role a login (SQL editor or psql as postgres; generate the password)
+#    alter role gateway_resources with login password '<generated>';
+# 2. its Supavisor URL: user gateway_resources.<project-ref>, same host as DATABASE_URL
+printf '%s' 'postgresql://gateway_resources.<ref>:<password>@<pooler-host>:5432/postgres' \
+  | gcloud secrets create gateway-resources-url --data-file=-
+gcloud secrets add-iam-policy-binding gateway-resources-url \
+  --member="serviceAccount:<run-service-account>" --role=roles/secretmanager.secretAccessor
+gcloud run services update backend --region="$REGION" \
+  --update-secrets=RESOURCES_DATABASE_URL=gateway-resources-url:latest
+```
+
+Who may query what is two grants, both needed: the tool in
+`principals.allowed_tools`, and the tables in the policy's
+`[resources.grants]` (keyed by identity slug, e.g. `console-chat`, never by an
+end user's email). The console's assistant calls the gateway as `console-chat`
+on behalf of each user; query rows are stored for that user only.
+
 ## Troubleshooting
 
 **"container failed to start and listen on PORT"** — the gateway loads its

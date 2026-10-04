@@ -237,7 +237,8 @@ pub fn guard_rows(policy: &Policy, rows: &mut [Value]) -> Evaluation {
     evaluation
 }
 
-/// Store the rows for their owner and build the acknowledgement the model gets.
+/// Store the rows for their owner — the end user the identity acts for, not
+/// only the identity — and build the acknowledgement the model gets.
 pub async fn deliver(
     pool: &PgPool,
     principal: &Principal,
@@ -246,10 +247,11 @@ pub async fn deliver(
 ) -> Result<Value, String> {
     let row_count = i32::try_from(result.rows.len()).unwrap_or(i32::MAX);
     let id = sqlx::query_scalar::<_, Uuid>(
-        "insert into resource_results (principal_id, trace_id, tool, columns, row_count, rows)
-         values ($1, $2, $3, $4, $5, $6) returning id",
+        "insert into resource_results (principal_id, end_user, trace_id, tool, columns, row_count, rows)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id",
     )
     .bind(principal.id)
+    .bind(&principal.user)
     .bind(trace_id)
     .bind(QUERY)
     .bind(&result.columns)
@@ -269,7 +271,8 @@ pub async fn deliver(
     }))
 }
 
-/// `GET /v1/results/{id}`: the rows of a query, to the identity that ran it.
+/// `GET /v1/results/{id}`: the rows of a query, to the identity that ran it,
+/// acting for the same end user (`X-On-Behalf-Of`).
 pub async fn result(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -283,10 +286,11 @@ pub async fn result(
         "select columns, row_count, rows,
                 to_char(created_at at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
          from resource_results
-         where id = $1 and principal_id = $2 and expires_at > now()",
+         where id = $1 and principal_id = $2 and end_user = $3 and expires_at > now()",
     )
     .bind(id)
     .bind(principal.id)
+    .bind(&principal.user)
     .fetch_optional(state.db())
     .await;
     match row {
