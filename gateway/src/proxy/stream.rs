@@ -305,18 +305,20 @@ impl NoTurn {
 
 /// Start one model turn.
 async fn open_turn(state: &AppState, body: &Value) -> Result<Turn, NoTurn> {
-    if state.upstream == mock::MOCK {
+    let model = body.get("model").and_then(Value::as_str).unwrap_or_default();
+    let target = state.upstreams.resolve(model).await;
+    if target.mock {
         return Ok(mock_turn(body));
     }
+    tracing::info!(upstream = %target.name, "streaming a turn");
     let mut body = body.clone();
     body["stream"] = json!(true);
     body["stream_options"] = json!({ "include_usage": true });
-    let sent = state
-        .http
-        .post(format!("{}/v1/chat/completions", state.upstream))
-        .json(&body)
-        .send()
-        .await;
+    let mut request = state.http.post(&target.endpoint).json(&body);
+    if let Some(key) = &target.key {
+        request = request.bearer_auth(key);
+    }
+    let sent = request.send().await;
     state.telemetry.dependency("upstream", sent.is_ok());
     let upstream = sent.map_err(|error| {
         tracing::error!(%error, "upstream request failed");

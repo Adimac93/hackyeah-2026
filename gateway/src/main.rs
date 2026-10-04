@@ -111,6 +111,9 @@ async fn main() -> anyhow::Result<()> {
     // read-only `resources_reader` role for its own transaction.
     let resources = Some(db.clone());
 
+    // Models an admin connected on the console's Models page go to that connection.
+    let upstreams = Arc::new(gateway::upstream::Upstreams::new(&upstream, db.clone()));
+
     // Pending approvals live in this process: run one instance (docs/DEPLOY.md).
     let approvals = Arc::new(Approvals::new(Some(db.clone())));
     approvals.boot().await;
@@ -122,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         detectors,
         http,
         upstream,
+        upstreams,
         admins,
         resources,
         telemetry: Arc::new(Telemetry::default()),

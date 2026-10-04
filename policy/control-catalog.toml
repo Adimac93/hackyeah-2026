@@ -46,7 +46,8 @@ fail_mode = "closed"
 [models]
 # Deny wins over allow. Empty allowed list means "any model not denied". Each
 # identity's `allowed_models` then narrows this further.
-allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b"]
+# gpt-* go to the console's OpenAI connection (Models page), not UPSTREAM_URL.
+allowed = ["llama3.1:8b", "qwen2.5:7b", "mistral:7b", "gpt-5", "gpt-5-mini"]
 denied = []
 
 # ---------------------------------------------------------------- pricing
@@ -65,6 +66,15 @@ output_per_mtok = 0.20
 [pricing."mistral:7b"]
 input_per_mtok = 0.20
 output_per_mtok = 0.20
+
+# OpenAI list prices at launch; check the current price list before relying on cost reports.
+[pricing."gpt-5"]
+input_per_mtok = 1.25
+output_per_mtok = 10.00
+
+[pricing."gpt-5-mini"]
+input_per_mtok = 0.25
+output_per_mtok = 2.00
 
 # ---------------------------------------------------------------- history
 # §4.4. The risk score is the sum of recent blocked/flagged detections for an

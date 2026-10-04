@@ -31,7 +31,8 @@ values
   -- user. Its tools are the resource tools; which tables, and which may be
   -- requested, is the catalog's `[resources]` call.
   ('console-chat', 'SecOps console chat', 'app',
-   array['llama3.1:8b', 'qwen2.5:7b'], array['resources__describe', 'resources__query'],
+   -- gpt-* are routed by the gateway to the console's OpenAI connection
+   array['llama3.1:8b', 'qwen2.5:7b', 'gpt-5', 'gpt-5-mini'], array['resources__describe', 'resources__query'],
    'a9f5584b7e7fb03131d7d2887d521492591b1ad4fd9c88db49ae00686d4ba164', 'member', true),
 
   -- The SecOps console's server-side identity (GATEWAY_ADMIN_KEY): streams and
