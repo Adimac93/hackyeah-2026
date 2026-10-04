@@ -92,3 +92,11 @@ void test("buildSystemPrompt embeds every active policy", () => {
   }
   assert.match(buildSystemPrompt([]), /none published yet/);
 });
+
+void test("buildSystemPrompt adds the data-tools rules only when asked", () => {
+  assert.ok(!buildSystemPrompt(POLICIES).includes("resources__query"));
+  const prompt = buildSystemPrompt(POLICIES, { tools: true });
+  assert.ok(prompt.includes("resources__query"));
+  assert.ok(prompt.includes("control__request_access"));
+  assert.ok(prompt.includes("Never invent data"));
+});

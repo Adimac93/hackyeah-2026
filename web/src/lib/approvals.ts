@@ -3,11 +3,15 @@
 
 export const TTL_CHOICES = [5, 15, 30, 60] as const;
 
+/** A request is for exactly one tool or one table (`resource`), for one end user. */
 export interface AccessRequest {
   id: string;
   principal_id: string;
   principal: string;
-  tool: string;
+  /** who the grant would cover: the delegated end user, or the principal itself */
+  end_user: string;
+  tool: string | null;
+  resource: string | null;
   reason: string;
   ttl_minutes: number;
   requested_at_ms: number;
@@ -24,6 +28,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const isString = (v: unknown): v is string => typeof v === "string";
+const optionalString = (v: unknown): string | null =>
+  typeof v === "string" && v !== "" ? v : null;
+
+/** What a request asks for, for display: a tool name or a table. */
+export function requestTarget(
+  request: Pick<AccessRequest, "tool" | "resource">,
+): { kind: "tool" | "table"; name: string } {
+  return request.resource === null
+    ? { kind: "tool", name: request.tool ?? "" }
+    : { kind: "table", name: request.resource };
+}
+
 const isNumber = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v);
 
@@ -40,12 +56,16 @@ export function parseApprovalEvent(data: string): ApprovalEvent | null {
   }
   switch (value.type) {
     case "request": {
-      const { principal_id, principal, tool, reason } = value;
+      const { principal_id, principal, reason } = value;
       const { ttl_minutes, requested_at_ms, deadline_ms } = value;
+      const tool = optionalString(value.tool);
+      const resource = optionalString(value.resource);
+      // a gateway from before per-user grants sends no end_user: the principal itself
+      const endUser = optionalString(value.end_user);
       if (
         isString(principal_id) &&
         isString(principal) &&
-        isString(tool) &&
+        (tool === null) !== (resource === null) &&
         isString(reason) &&
         isNumber(ttl_minutes) &&
         isNumber(requested_at_ms) &&
@@ -56,7 +76,9 @@ export function parseApprovalEvent(data: string): ApprovalEvent | null {
           id: value.id,
           principal_id,
           principal,
+          end_user: endUser ?? principal,
           tool,
+          resource,
           reason,
           ttl_minutes,
           requested_at_ms,

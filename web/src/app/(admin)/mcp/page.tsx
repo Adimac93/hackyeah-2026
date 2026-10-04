@@ -262,7 +262,9 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
             </thead>
             <tbody className="divide-y divide-zinc-800">
               {requests.length === 0 && (
-                <EmptyRow cols={4}>No agent has asked for a tool yet.</EmptyRow>
+                <EmptyRow cols={4}>
+                  No agent has asked for a tool or table yet.
+                </EmptyRow>
               )}
               {requests.map((r) => (
                 <tr key={r.id} className="align-top hover:bg-zinc-800/40">
@@ -270,10 +272,19 @@ export default async function McpPage({ searchParams }: PageProps<"/mcp">) {
                     <AccessBadge status={r.shown} />
                   </td>
                   <td className={tdClass}>
-                    <ToolName tool={r.tool} />
+                    {r.resource === null ? (
+                      <ToolName tool={r.tool ?? ""} />
+                    ) : (
+                      <span className="font-mono text-sm text-zinc-200">
+                        table {r.resource}
+                      </span>
+                    )}
                     <span className="ml-2 text-xs text-zinc-500">
-                      for {r.principals?.display_name ?? "unknown principal"} ·{" "}
-                      {r.ttl_minutes} min
+                      for {r.principals?.display_name ?? "unknown principal"}
+                      {r.end_user === r.principals?.slug
+                        ? ""
+                        : ` (${r.end_user})`}{" "}
+                      · {r.ttl_minutes} min
                     </span>
                     <p className="mt-1 max-w-xl text-xs break-words text-zinc-400">
                       {r.reason}

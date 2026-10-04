@@ -14,6 +14,7 @@ import type { ChatStreamEvent } from "@/lib/chat-stream";
 import { loadModels } from "@/lib/llm/catalog";
 import { findModel } from "@/lib/llm/models";
 import { ProviderError, getAssistant } from "@/lib/llm/providers";
+import type { ToolStep } from "@/lib/tool-steps";
 
 /** Longest stored message; matches the chat_messages check constraint. */
 const MAX_STORED_LENGTH = 32_000;
@@ -140,6 +141,17 @@ export async function POST(request: Request) {
 
       send({ type: "conversation", id: conversationId });
 
+      // gateway models answer through the control layer's data tools: not streamed, and
+      // possibly waiting on a human to approve an access request
+      const withTools = model.provider === "gateway";
+      let steps: ToolStep[] = [];
+      if (withTools) {
+        send({
+          type: "status",
+          text: "Working… (may be waiting for security approval)",
+        });
+      }
+
       let reply: string;
       try {
         reply = await getAssistant(model)({
@@ -149,6 +161,13 @@ export async function POST(request: Request) {
           onDelta: (text) => {
             send({ type: "delta", text });
           },
+          ...(withTools
+            ? {
+                onSteps: (taken: ToolStep[]) => {
+                  steps = taken;
+                },
+              }
+            : {}),
           files: files.value,
         });
       } catch (error) {
@@ -170,12 +189,16 @@ export async function POST(request: Request) {
           role: "assistant",
           content: reply.slice(0, MAX_STORED_LENGTH),
           model: model.id,
+          tool_calls: steps.length === 0 ? null : steps,
         });
       if (replyError === null) {
         await supabase
           .from("chat_conversations")
           .update({ updated_at: new Date().toISOString(), model: model.id })
           .eq("id", conversationId);
+        if (steps.length > 0) {
+          send({ type: "tool_steps", steps });
+        }
         send({ type: "done", reply });
       } else {
         send({ type: "error", error: replyError.message });

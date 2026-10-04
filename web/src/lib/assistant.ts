@@ -1,6 +1,7 @@
 // AI security assistant: pure logic shared by every model. No framework imports, so it's unit-testable.
 // Real model calls live in `lib/llm/providers.ts`; `mockProvider` is the offline fallback.
 import type { ChatFile } from "./chat-attachments.ts";
+import type { ToolStep } from "./tool-steps.ts";
 
 export type ChatRole = "user" | "assistant";
 export interface ChatTurn {
@@ -28,6 +29,8 @@ export type ChatMessage = ChatTurn & {
   created_at: string;
   /** which model wrote an assistant reply; null for the user's messages */
   model: string | null;
+  /** the data-tool steps of a gateway reply (`lib/tool-steps.ts`); null otherwise */
+  tool_calls?: unknown;
 };
 
 export type AssistantProvider = (input: {
@@ -37,6 +40,12 @@ export type AssistantProvider = (input: {
   principal?: string;
   /** called with each piece of the reply as the model writes it; the resolved string is the final word */
   onDelta?: (text: string) => void;
+  /**
+   * Set to let a gateway model use the gateway's MCP data tools; called once with the steps
+   * it took (and the rows they delivered) before the reply resolves. Such a reply is not
+   * streamed: the gateway answers once the model is done with its tools.
+   */
+  onSteps?: (steps: ToolStep[]) => void;
   /** images/PDFs sent with the newest user message (not part of the stored history) */
   files?: ChatFile[];
 }) => Promise<string>;
@@ -157,8 +166,19 @@ export function relevantPolicies<T extends PolicySnippet>(
     .map((x) => x.p);
 }
 
+/** How a model with the gateway's data tools should use them. */
+export const DATA_TOOLS_PROMPT = [
+  "You can query the company's business data (customers, invoices, products, subscriptions, support tickets) with the resources tools.",
+  "For any question about that data, call resources__describe for the tables you need, then resources__query with one read-only SELECT. Never invent data.",
+  "You will not see the rows: they appear to the user in a table under your answer. Say what the query returns and how many rows it found.",
+  "If a table needs approval, call control__request_access with that table and a one-sentence reason, then retry. If access is denied, say so.",
+].join("\n");
+
 /** The system prompt a real LLM provider would receive. */
-export function buildSystemPrompt(policies: PolicySnippet[]): string {
+export function buildSystemPrompt(
+  policies: PolicySnippet[],
+  { tools = false }: { tools?: boolean } = {},
+): string {
   const rules = policies
     .map((p) => `### ${p.title} (${p.category})\n${p.summary}\n${p.body}`)
     .join("\n\n");
@@ -167,6 +187,7 @@ export function buildSystemPrompt(policies: PolicySnippet[]): string {
     "Help with secure coding, threat modelling and code review. Be concise and concrete.",
     "When a question touches a company policy, cite the policy by title and follow it strictly.",
     "If the user pastes a secret, tell them to rotate it and never repeat it back.",
+    ...(tools ? ["", DATA_TOOLS_PROMPT] : []),
     "",
     "Active company policies:",
     rules || "(none published yet)",

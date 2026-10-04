@@ -6,6 +6,8 @@ import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
 import { kindOfMediaType } from "@/lib/chat-attachments";
 import type { ChatFile } from "@/lib/chat-attachments";
 import { gatewayRequest } from "@/lib/gateway-http";
+import { mergeResults, parseResult, toSteps } from "@/lib/tool-steps";
+import type { StepResult, ToolStep } from "@/lib/tool-steps";
 
 import {
   decodeGatewaySse,
@@ -18,6 +20,10 @@ import type { ModelOption } from "./models";
 import { loadConnectionSecret } from "./secrets";
 
 const TIMEOUT_MS = 60_000;
+/** A tool-using gateway answer is buffered, and may wait up to two minutes for a human
+ * to approve an access request, so it gets a total limit instead of an idle one. */
+const TOOLS_TIMEOUT_MS = 180_000;
+const RESULT_TIMEOUT_MS = 10_000;
 const MAX_TOKENS = 16_000;
 
 /** Claude models that take server-side refusal fallbacks and `output_config.effort`. */
@@ -266,10 +272,7 @@ async function callGateway(
         headers: {
           "content-type": "application/json",
           accept: "text/event-stream",
-          // the gateway resolves the calling principal from this key; no key, no call
-          authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
-          // the console-chat principal delegates: budgets, risk and activity are per user
-          ...(principal === undefined ? {} : { "x-on-behalf-of": principal }),
+          ...gatewayHeaders(principal),
         },
         body: JSON.stringify({
           model,
@@ -334,6 +337,106 @@ async function callGateway(
   }
 }
 
+function gatewayHeaders(principal: string | undefined): Record<string, string> {
+  return {
+    // the gateway resolves the calling principal from this key; no key, no call
+    authorization: `Bearer ${(process.env.GATEWAY_API_KEY ?? "").trim()}`,
+    // the console-chat principal delegates: budgets, risk, grants and results are per user
+    ...(principal === undefined ? {} : { "x-on-behalf-of": principal }),
+  };
+}
+
+/**
+ * Through the gateway with its MCP tools (`"mcp": true`): the gateway runs the model's tool
+ * calls through its gate and answers once the model is done, so this is buffered. The rows
+ * of each `resources__query` never reached the model; they are fetched here, as the same
+ * end user, and returned with the steps.
+ */
+async function callGatewayWithTools(
+  model: string,
+  system: string,
+  messages: ChatTurn[],
+  principal: string | undefined,
+): Promise<{ reply: string; steps: ToolStep[] }> {
+  const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
+  const signal = AbortSignal.timeout(TOOLS_TIMEOUT_MS);
+  let response: Response;
+  let body: unknown;
+  try {
+    response = await gatewayRequest(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...gatewayHeaders(principal),
+      },
+      body: JSON.stringify({
+        model,
+        mcp: true,
+        messages: [{ role: "system", content: system }, ...messages],
+      }),
+      signal,
+    });
+    body = await response.json().catch(() => null);
+  } catch (error) {
+    if (signal.aborted) {
+      console.error("[assistant] gateway tool loop timed out");
+      throw new ProviderError(
+        `The gateway did not answer within ${String(TOOLS_TIMEOUT_MS / 1000)} s. An access request may still be waiting for the security team; try again once it is decided.`,
+      );
+    }
+    throw timeoutError(error, false);
+  }
+
+  const reply = gatewayReply(
+    interpretGatewayResponse(response.status, body),
+    response.status,
+  );
+  const layer = (body as { x_control_layer?: { tool_calls?: unknown } } | null)
+    ?.x_control_layer;
+  const steps = toSteps(layer?.tool_calls);
+  const ids = [
+    ...new Set(
+      steps.flatMap((s) => (s.resultId === undefined ? [] : [s.resultId])),
+    ),
+  ];
+  const fetched = new Map<string, StepResult | null>(
+    await Promise.all(
+      ids.map(
+        async (id) => [id, await fetchResult(base, id, principal)] as const,
+      ),
+    ),
+  );
+  return { reply, steps: mergeResults(steps, fetched) };
+}
+
+/** One `GET /v1/results/{id}`; null when it cannot be had (gone, not ours, gateway down). */
+async function fetchResult(
+  base: string,
+  id: string,
+  principal: string | undefined,
+): Promise<StepResult | null> {
+  try {
+    const response = await gatewayRequest(
+      `${base}/v1/results/${encodeURIComponent(id)}`,
+      {
+        headers: gatewayHeaders(principal),
+        signal: AbortSignal.timeout(RESULT_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      console.error("[assistant] result fetch failed", response.status);
+      return null;
+    }
+    return parseResult(await response.json());
+  } catch (error) {
+    console.error(
+      "[assistant] result fetch failed",
+      error instanceof Error ? error.name : "unknown",
+    );
+    return null;
+  }
+}
+
 function gatewayReply(outcome: GatewayOutcome, status: number): string {
   if (!outcome.ok) {
     console.error("[assistant] gateway failed", status);
@@ -367,12 +470,30 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     return mockProvider;
   }
 
-  return async ({ history, policies, principal, onDelta, files = [] }) => {
-    const system = buildSystemPrompt(policies);
+  return async ({
+    history,
+    policies,
+    principal,
+    onDelta,
+    onSteps,
+    files = [],
+  }) => {
+    // only gateway models get the data tools: a direct provider bypasses the control layer
+    const tools = option.provider === "gateway" && onSteps !== undefined;
+    const system = buildSystemPrompt(policies, { tools });
     const messages = normalizeHistory(history);
     try {
       let reply: string;
-      if (option.provider === "gateway") {
+      if (tools) {
+        const answer = await callGatewayWithTools(
+          option.model,
+          system,
+          messages,
+          principal,
+        );
+        reply = answer.reply;
+        onSteps(answer.steps);
+      } else if (option.provider === "gateway") {
         reply = await callGateway(
           option.model,
           system,

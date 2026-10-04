@@ -1,11 +1,16 @@
 // Wire format of `POST /api/chat`: one JSON event per line (NDJSON). Pure, so both ends and
 // the tests share it. The route writes `conversation` first, then `delta`s as the model
-// writes, then exactly one `done` (the stored reply, which may differ from the deltas:
-// gateway notes, refusals) or `error`.
+// writes (or a `status` while a gateway model works through its tools), then the reply's
+// `tool_steps` if it used any, then exactly one `done` (the stored reply, which may differ
+// from the deltas: gateway notes, refusals) or `error`.
+import { storedSteps } from "./tool-steps.ts";
+import type { ToolStep } from "./tool-steps.ts";
 
 export type ChatStreamEvent =
   | { type: "conversation"; id: string }
   | { type: "delta"; text: string }
+  | { type: "status"; text: string }
+  | { type: "tool_steps"; steps: ToolStep[] }
   | { type: "done"; reply: string }
   | { type: "error"; error: string };
 
@@ -22,8 +27,15 @@ function isChatEvent(value: unknown): value is ChatStreamEvent {
     case "conversation": {
       return typeof event.id === "string";
     }
-    case "delta": {
+    case "delta":
+    case "status": {
       return typeof event.text === "string";
+    }
+    case "tool_steps": {
+      return (
+        Array.isArray(event.steps) &&
+        storedSteps(event.steps).length === event.steps.length
+      );
     }
     case "done": {
       return typeof event.reply === "string";
