@@ -149,31 +149,34 @@ pages in the sidebar:
 
 ### Add a control
 
-A new control takes effect as soon as you save it, with no restart.
+This scenario adds a rule that keeps a confidential project codename, Project
+Falcon, out of every prompt and answer. The rule takes effect as soon as you
+save it, with no restart.
 
-1. Open **Controls and policies** and click **Add control**.
-2. Fill in the form:
+1. Open **Assistant** and send this prompt. The model answers it, because no
+   control covers the codename yet:
+
+   ```text
+   Write a short press release announcing Project Falcon
+   ```
+
+2. Open **Controls and policies** and click **Add control**.
+3. Fill in the form:
 
    | field | value |
    |---|---|
    | Type | Deterministic |
-   | Control id | `secret.stripe-key` |
+   | Control id | `confidential.project-falcon` |
    | Enabled | on |
-   | Severity | medium |
+   | Severity | high |
    | Action | block |
-   | Hooks | `prompt_in`, `response_out`, `tool_call`, `tool_result` |
-   | Pattern (regex) | `\bsk_live_[0-9a-zA-Z]{24}\b` |
+   | Hooks | `prompt_in`, `response_out` |
+   | Pattern (regex) | `(?i)\bproject[\s_-]*falcon\b` |
 
-   Type the pattern exactly as shown. The console saves it as a TOML literal
-   string, so the backslashes need no escaping.
-3. Click **Add & activate**. The console adds the control after the last
-   deterministic control and activates the catalog as a new version.
-4. Open **Assistant** and send a message with a fake Stripe key. Type
-   `sk_live_` followed by any 24 letters or digits, with no space between them:
-
-   ```text
-   My Stripe key is sk_live_<any 24 letters or digits>
-   ```
-
-   The gateway blocks the prompt, and **Activity** shows `secret.stripe-key` as
-   the control that fired.
+   Type the pattern exactly as shown. `(?i)` makes it ignore case, so it also
+   catches `PROJECT FALCON` and `project-falcon`.
+4. Click **Add & activate**. The console adds the control to the catalog and
+   activates it as a new policy version.
+5. Go back to **Assistant** and send the same prompt again. This time the gateway
+   blocks it, and **Activity** shows `confidential.project-falcon` as the control
+   that fired.
