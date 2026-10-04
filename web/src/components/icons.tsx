@@ -106,3 +106,12 @@ export function ToolIcon(p: IconProps) {
 export function ArrowUpIcon(p: IconProps) {
   return <Icon {...p} d="M12 19V5M5 12l7-7 7 7" />;
 }
+
+export function FolderIcon(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+    />
+  );
+}
