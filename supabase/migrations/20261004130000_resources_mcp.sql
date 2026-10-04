@@ -27,14 +27,14 @@ grant resources_reader to postgres;
 -- ---------------------------------------------------------------- tables
 
 create table resources.products (
-  id        bigserial primary key,
+  id        bigint generated always as identity primary key,
   name      text not null unique,
   tier      text not null check (tier in ('starter', 'team', 'enterprise')),
   price_usd numeric(10, 2) not null
 );
 
 create table resources.subscriptions (
-  id           bigserial primary key,
+  id           bigint generated always as identity primary key,
   customer_id  bigint not null references resources.customers (id) on delete cascade,
   product_id   bigint not null references resources.products (id),
   status       text not null check (status in ('active', 'cancelled', 'trial')),
@@ -44,7 +44,7 @@ create table resources.subscriptions (
 );
 
 create table resources.support_tickets (
-  id          bigserial primary key,
+  id          bigint generated always as identity primary key,
   customer_id bigint not null references resources.customers (id) on delete cascade,
   subject     text not null,
   priority    text not null check (priority in ('low', 'medium', 'high', 'urgent')),

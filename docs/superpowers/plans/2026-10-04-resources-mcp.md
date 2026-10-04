@@ -386,3 +386,25 @@ Rollout, in order:
 3. PR C merged after B is live.
 4. Smoke test on prod; paste the result in PR C.
 5. `TASKS.md`: move `web-results` to Done, mention the per-user grants.
+
+## As built (2026-10-04)
+
+Implemented on `claude/stoic-feynman-kll44u` as three commits (schema, gateway, web) rather
+than three PRs. Differences from the plan above:
+
+- **Task 13/15:** the provider input gained an `onSteps` callback instead of a new return
+  type, so no other caller changed. The route sets it for gateway models only.
+- **Found while smoke-testing, fixed in the gateway commit:**
+  - `pii.phone` matched digit runs inside the result UUID, so about half of all
+    `result_id`s reached the client corrupted. The ack is now also returned as MCP
+    `structuredContent`, which the text redaction does not touch, and the tool loop reads
+    `result_id` from there.
+  - `pii.phone` also redacted every ISO date in result rows. A value that is wholly a
+    date or timestamp now passes `guard_rows` untouched; anything else is redacted as
+    before.
+  - `columns` came back alphabetical (serde_json sorts keys); they now follow the query,
+    from Postgres' statement description.
+- New tables use `bigint generated always as identity` (Supabase Postgres best practice).
+- Not run here: `supabase db advisors` (no access to the hosted project from this
+  session). The migration and seed were applied to a local Postgres 16 with a Supabase
+  shim, and the gateway half of the smoke test (Task 18 steps 1–5) passed against it.

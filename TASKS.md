@@ -14,7 +14,7 @@ Format: `- [ ] <name> — <what> (@who)`
 - [ ] migrate-end-users — `just migrate` for 20261004090000_end_users_activity_status, `just seed` (adds `console-chat`), then `supabase db advisors` (@)
 - [ ] web-budgets — budgets editor on `PUT`/`DELETE /admin/budgets` (admin role) (@)
 - [ ] web-helper — show `error.helper` (violated policy + suggestion) on a blocked chat prompt, resubmit only on click (@)
-- [ ] web-results — console chat sends `"mcp": true`, fetches `GET /v1/results/{id}` for each `x_control_layer.tool_calls[].result_id` and renders the rows (@)
+- [ ] resources-mcp-rollout — `just migrate` for 20261004130000_resources_mcp, `just seed`, `supabase db advisors`; upload the catalog (adds `[resources.requestable]`); unset `RESOURCES_DATABASE_URL` on Cloud Run; smoke test per DEMO.md "data through MCP" (@)
 - [ ] budgets-scopes — team/org budget scopes and compute-time accounting (@)
 - [ ] apply-migration — `just migrate` for 20261003210000_gateway_db_policy, then `just seed` and `supabase db advisors` (@)
 - [ ] write the demo script in DEMO.md and put the deployed URL there (@)
@@ -25,6 +25,7 @@ Format: `- [ ] <name> — <what> (@who)`
 
 ## Done
 
+- [x] web-results / resources-mcp — console chat uses the MCP data tools on gateway models, renders tool steps and the delivered rows; table access requests with per-user grants; results bound to the end user (docs/superpowers/plans/2026-10-04-resources-mcp.md)
 - [x] console-specs — per-user budgets/risk/activity (X-On-Behalf-Of), deterministic refusal notice, live activity with status filter, user risk tab, merged Controls & policies with TOML editor, incidents and company-policy pages dropped
 - [x] backend-spec-fixes — policy only in the DB (upload is the only change path), Supabase-JWT admin API, deny-by-default grants, budgets in the DB via the admin API
 - [x] principal-models — enforce per-identity/role model allow list on top of the global one
