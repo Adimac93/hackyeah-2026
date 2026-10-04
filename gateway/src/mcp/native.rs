@@ -16,7 +16,7 @@ use crate::engine::{self, Verdict};
 use crate::policy::{Hook, Policy};
 use crate::state::AppState;
 
-use super::listing;
+use super::{listing, resources};
 
 pub const LIST_CONTROLS: &str = "control__list_controls";
 pub const MY_ACCESS: &str = "control__my_access";
@@ -126,6 +126,12 @@ async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> 
         .collect();
 
     let grants = state.approvals.active_grants(principal.id, &principal.user);
+    let mut granted_tables = policy.resources.tables_for(&principal.slug).to_vec();
+    for table in resources::role_tables(state.db(), policy, principal).await {
+        if !granted_tables.contains(&table) {
+            granted_tables.push(table);
+        }
+    }
     let (tools, _) = listing::catalog(state, policy).await;
     let requestable: Vec<String> = tools
         .iter()
@@ -167,7 +173,7 @@ async fn my_access(state: &AppState, policy: &Policy, principal: &Principal) -> 
         "grants": grants,
         "requestable_tools": requestable,
         "tables": {
-            "granted": policy.resources.tables_for(&principal.slug),
+            "granted": granted_tables,
             "requestable": requestable_tables,
             "temporary": temporary,
         },
@@ -196,9 +202,17 @@ async fn request_access(
             .map(|t| u32::try_from(t).unwrap_or(u32::MAX)),
     );
 
-    let has_grant = state
-        .approvals
-        .has_grant(principal.id, &principal.user, &access);
+    // a table the end user's team role already grants needs no approval
+    let by_role = match &access {
+        Access::Table(table) => resources::role_tables(state.db(), policy, principal)
+            .await
+            .contains(table),
+        Access::Tool(_) => false,
+    };
+    let has_grant = by_role
+        || state
+            .approvals
+            .has_grant(principal.id, &principal.user, &access);
     let target = match &access {
         Access::Tool(tool) => approvals::validate_target(policy, principal, has_grant, tool),
         Access::Table(table) => approvals::validate_table(policy, principal, has_grant, table),
