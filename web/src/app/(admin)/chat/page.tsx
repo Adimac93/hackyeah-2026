@@ -23,9 +23,9 @@ import { ModelSelect } from "./model-select";
 import { ToolSteps } from "./tool-steps";
 
 const SUGGESTIONS = [
-  "What are the password requirements for a new service?",
-  "How should I store confidential customer data?",
-  "What do I do if I committed an API key?",
+  "Show the top 5 customers by MRR",
+  "Email jan.kowalski@example.com about invoice 904",
+  "My AWS key is AKIAIOSFODNN7EXAMPLE, store it",
 ];
 
 /** A user's message: their text, with attached files folded into chips. */
