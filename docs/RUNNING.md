@@ -152,6 +152,10 @@ docker build -t cogut-web web && docker run --rm -p 3000:8080 --env-file web/.en
 
 Then open http://localhost:3000. To run without Docker, use `just dev`.
 
+## 4. Self-test
+
+Go to the self-test page **as an admin**. Run the self-test. The logs should appear on the page.
+
 ## Known gaps
 
 - `web/Dockerfile` doesn't pass the `NEXT_PUBLIC_*` values in at build time. So
