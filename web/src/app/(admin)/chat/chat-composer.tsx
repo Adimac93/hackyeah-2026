@@ -8,6 +8,7 @@ import { ArrowUpIcon } from "@/components/icons";
 import type { ToolCallSummary } from "@/lib/assistant";
 import { decodeChatEvents } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
+import { cutAt, resumeAt, revealStep } from "@/lib/typewriter";
 
 import { ToolCalls } from "./tool-calls";
 
@@ -30,6 +31,29 @@ function TypingBubble() {
       </div>
     </div>
   );
+}
+
+/** `target`, revealed a few characters a frame, so text that arrives in bursts reads as typing. */
+function useTypewriter(target: string): string {
+  const [shown, setShown] = useState("");
+  useEffect(() => {
+    const at = resumeAt(shown, target);
+    if (at >= target.length) {
+      if (shown !== target) {
+        setShown(target);
+      }
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      setShown(
+        target.slice(0, cutAt(target, at + revealStep(target.length - at))),
+      );
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [shown, target]);
+  return shown;
 }
 
 /** Read `POST /api/chat`'s NDJSON reply, handing each event over as it arrives. */
@@ -94,6 +118,7 @@ export function ChatComposer({
   const [hasText, setHasText] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const typed = useTypewriter(reply);
   const pending = streaming || reloading;
 
   // open on the newest message, and follow the thread as it grows (a no-op
@@ -222,8 +247,8 @@ export function ChatComposer({
             ) : (
               <div className="flex justify-start" aria-live="polite">
                 <div className="max-w-[85%] rounded-xl bg-zinc-800/80 px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap text-zinc-200">
-                  {reply}
-                  {streaming ? (
+                  {typed}
+                  {streaming || typed.length < reply.length ? (
                     <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
                   ) : null}
                   <ToolCalls calls={toolCalls} />

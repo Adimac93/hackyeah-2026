@@ -279,7 +279,16 @@ async function callGateway(
       throw timeoutError(error, idle.signal.aborted);
     }
     handle(decodeGatewaySse(`${buffer}\n`).events);
-    return gatewayReply(finishGatewayStream(text, ending), response.status);
+    const reply = gatewayReply(
+      finishGatewayStream(text, ending),
+      response.status,
+    );
+    if (ending?.type === "final") {
+      for (const call of gatewayToolCalls({ x_control_layer: ending.layer })) {
+        onToolCall?.(call);
+      }
+    }
+    return reply;
   } finally {
     idle.stop();
   }
