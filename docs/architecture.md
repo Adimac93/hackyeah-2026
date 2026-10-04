@@ -48,8 +48,8 @@ flowchart LR
 ```
 
 An interactive version with every component and request path is
-[`docs/architecture.html`](../docs/architecture.html) (open it in a browser). The
-full backend specification is [`docs/BACKEND.md`](../docs/BACKEND.md).
+[`architecture.html`](architecture.html) (open it in a browser). The
+full backend specification is [`BACKEND.md`](BACKEND.md).
 
 ### Request path
 

@@ -15,11 +15,18 @@ Built at **HackYeah 2026** for the *AI Control Layer* challenge
 
 ## For judges
 
-The submission follows the suggested layout; each folder's README is the entry
-point, and the code itself stays at the root (see `5-implementation`).
+The submission follows the suggested layout. Each folder holds symlinks to where
+the material actually lives in the repo; the code itself stays at the root.
 
-| Folder | Contents |
+| Folder | Links to |
 |---|---|
+| [`1-solution/`](1-solution) | [overview and controls](docs/solution.md), [control catalog](policy/control-catalog.toml), [signature feed](policy/signatures.toml), [challenge brief](docs/task.md) |
+| [`2-architecture/`](2-architecture) | [diagram and performance](docs/architecture.md), [architecture explorer](docs/architecture.html), [backend spec](docs/BACKEND.md), [prior art](docs/prior-art.md), [telemetry](gateway/src/telemetry.rs) |
+| [`3-reporting/`](3-reporting) | [dashboard and metrics](docs/reporting.md), [console](web), [metrics queries](gateway/src/metrics.rs), [audit export](gateway/src/admin/export.rs), [PDF report](report/report.typ) |
+| [`4-testing/`](4-testing) | [test cases](docs/testing.md), [per-control red/green cases](gateway/src/engine/tests.rs), [demo script](DEMO.md), [CI](.github/workflows/ci.yml) |
+| [`5-implementation/`](5-implementation) | [implementation and integration](docs/implementation.md), [deployment](docs/DEPLOY.md), [`gateway/`](gateway), [`web/`](web), [`policy/`](policy), [`supabase/`](supabase), [`mcp-demo/`](mcp-demo), [`report/`](report), [Dockerfile](Dockerfile), [cloudbuild.yaml](cloudbuild.yaml) |
+
+---|---|
 | [`1-solution/`](1-solution) | overview, the list of controls, configuration and policy options |
 | [`2-architecture/`](2-architecture) | architecture diagram, performance metrics per tier |
 | [`3-reporting/`](3-reporting) | dashboard screenshots, the metrics we report |

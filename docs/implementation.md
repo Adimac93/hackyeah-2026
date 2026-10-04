@@ -3,8 +3,7 @@
 ## Code
 
 The code stays at the repository root, where the Cargo workspace, the Dockerfiles,
-Cloud Build and CI expect it. This folder holds symlinks to it — `gateway/`, `web/`,
-`policy/`, `supabase/`, `mcp-demo/`, `report/` — so it can be browsed from here:
+Cloud Build and CI expect it; `5-implementation/` holds symlinks to it. The map:
 
 | Path | Language | What |
 |---|---|---|
@@ -22,8 +21,8 @@ Cloud Build and CI expect it. This folder holds symlinks to it — `gateway/`, `
 | [`report/`](../report) | Typst | PDF security report template |
 | [`justfile`](../justfile) | just | Every command: `setup`, `check`, `dev`, `demo`, `seed`, `report`, `verify-audit`, `deploy` |
 
-Full backend specification: [`docs/BACKEND.md`](../docs/BACKEND.md). Prior art and
-component choices: [`docs/prior-art.md`](../docs/prior-art.md).
+Full backend specification: [`BACKEND.md`](BACKEND.md). Prior art and
+component choices: [`prior-art.md`](prior-art.md).
 
 ## Implementation considerations
 
@@ -65,6 +64,6 @@ code change.
 | Where | How |
 |---|---|
 | Local | `just setup && just migrate && just seed && just dev` — gateway on `:8080`, console on `:3000`; mocks for the model and judge, no GPU needed. See the root [`README.md`](../README.md). |
-| Cloud Run | `just deploy` — `cargo-chef` [`Dockerfile`](../Dockerfile) + [`cloudbuild.yaml`](../cloudbuild.yaml); console from [`web/Dockerfile`](../web/Dockerfile). One-time setup: [`docs/DEPLOY.md`](../docs/DEPLOY.md). |
+| Cloud Run | `just deploy` — `cargo-chef` [`Dockerfile`](../Dockerfile) + [`cloudbuild.yaml`](../cloudbuild.yaml); console from [`web/Dockerfile`](../web/Dockerfile). One-time setup: [`DEPLOY.md`](DEPLOY.md). |
 | Kubernetes / any container platform | The same image; configuration is environment only (`DATABASE_URL`, `UPSTREAM_URL`, `OLLAMA_URL`, see [`.env.example`](../.env.example)). Stateless — scale horizontally; policy and audit live in Postgres. |
 | Production model | `OLLAMA_URL` → a reachable Ollama for the semantic judge; `prod` refuses to start with a mock, and without a reachable judge semantic controls fail closed. |

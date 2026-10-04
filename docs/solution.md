@@ -18,7 +18,7 @@ At each hook the gateway runs a **hybrid** pipeline driven by one central
 
 1. **Deterministic tier** — regexes, Luhn checks, attack signatures, identity and
    model grants, budgets, runaway-agent limits. Runs on every request in
-   microseconds (see [`../2-architecture`](../2-architecture)).
+   microseconds (see [architecture](architecture.md)).
 2. **Semantic tier** — an LLM judge (local Ollama model) that runs **only** when the
    deterministic tier flags the traffic (`escalate_when = "suspicious"`), so clean
    traffic pays nothing for AI.
@@ -26,7 +26,7 @@ At each hook the gateway runs a **hybrid** pipeline driven by one central
    fail-closed default when a detector is unavailable.
 4. **Audit** — every decision, with the control and the policy version behind it,
    is written to a SHA-256 hash-chained log in Postgres (Supabase). The SecOps
-   console ([`../3-reporting`](../3-reporting)) reads it.
+   console ([reporting](reporting.md)) reads it.
 
 The catalog is versioned in the database and **hot-reloaded**: an upload is
 validated, diffed, stored and live on every instance within 5 s, without a restart.
@@ -42,7 +42,7 @@ more access (approve/deny popup in the console).
 All controls live in [`policy/control-catalog.toml`](../policy/control-catalog.toml)
 and [`policy/signatures.toml`](../policy/signatures.toml). Every deterministic
 control and signature has red (must trip) and green (must stay quiet) test cases —
-see [`../4-testing`](../4-testing).
+see [testing](testing.md).
 
 ### Deterministic — secrets (OWASP LLM02)
 
