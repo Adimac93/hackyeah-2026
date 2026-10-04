@@ -129,7 +129,6 @@ Never set `ingress=all` on `ollama` while `allUsers` can invoke it.
 | `PORT` | injected by Cloud Run. A malformed value aborts startup rather than binding something else |
 | `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | how the admin API verifies console users' access tokens. Unset, every admin route answers 503; enforcement is unaffected |
 | `METRICS_TOKEN` | Bearer token for `GET /metrics/prometheus`. Unset disables it. Put it in Secret Manager |
-| `RESOURCES_DATABASE_URL` | read-only connection for the `resources__query` MCP tool (a role with `SELECT` on schema `resources` only). Unset disables the resource tools |
 | `UPSTREAM_URL` | where chat traffic goes: any OpenAI-compatible server (e.g. Ollama's `/v1`). Defaults to `mock`, which prod refuses |
 | `OLLAMA_URL` | the semantic judge (Ollama). Defaults to `mock`, which prod refuses |
 | `SEMANTIC_MODEL` | the judge's model name, default `llama3.1:8b` |

@@ -186,3 +186,25 @@ fn an_injected_access_reason_is_flagged_on_tool_call() {
     );
     assert!(out.suspicious, "a flag must escalate to the semantic tier");
 }
+
+#[test]
+fn an_access_request_names_exactly_one_tool_or_table() {
+    use super::native::requested;
+    use crate::approvals::Access;
+
+    assert_eq!(
+        requested(&json!({ "tool": "docs__read", "reason": "x" })),
+        Ok(Access::Tool("docs__read".to_owned()))
+    );
+    assert_eq!(
+        requested(&json!({ "table": "customers", "reason": "x" })),
+        Ok(Access::Table("customers".to_owned()))
+    );
+    for wrong in [
+        json!({ "reason": "x" }),
+        json!({ "tool": "docs__read", "table": "customers", "reason": "x" }),
+        json!({ "table": "  ", "reason": "x" }),
+    ] {
+        assert!(requested(&wrong).is_err(), "{wrong}");
+    }
+}

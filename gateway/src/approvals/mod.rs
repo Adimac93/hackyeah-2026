@@ -1,10 +1,12 @@
 //! Human-approved access requests.
 //!
-//! An agent missing a tool can ask for it through `control__request_access`.
-//! The call blocks while the request is pushed to the SecOps console; a member
-//! of the security team approves or denies it there, and the agent gets the
-//! answer in the same tool call. An approval is a time-boxed grant that the
-//! `tools/call` gate honours next to the principal's static `allowed_tools`.
+//! An agent missing a tool, or a table of the protected resources, can ask for
+//! it through `control__request_access`. The call blocks while the request is
+//! pushed to the SecOps console; a member of the security team approves or
+//! denies it there, and the agent gets the answer in the same tool call. An
+//! approval is a time-boxed grant for one end user: the `tools/call` gate
+//! honours it next to the principal's static `allowed_tools`, the resource
+//! tools next to the catalog's `[resources.grants]`.
 //!
 //! Pending requests live in memory — the blocked call and the decision must
 //! meet in the same process — so the gateway runs as a single instance.
@@ -36,13 +38,54 @@ pub const MAX_TTL_MINUTES: u32 = 60;
 /// must not be able to bury the approvers in popups.
 pub const MAX_PENDING_PER_PRINCIPAL: usize = 5;
 
-/// What the console is shown. Times are unix milliseconds.
+/// What a request or a grant is for: a qualified tool, or a table of schema
+/// `resources`. Serialised flat, as `{"tool": …}` or `{"table": …}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    Tool(String),
+    Table(String),
+}
+
+impl Access {
+    pub fn tool(&self) -> Option<&str> {
+        match self {
+            Self::Tool(tool) => Some(tool),
+            Self::Table(_) => None,
+        }
+    }
+
+    pub fn table(&self) -> Option<&str> {
+        match self {
+            Self::Table(table) => Some(table),
+            Self::Tool(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Access {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tool(tool) => write!(f, "{tool}"),
+            Self::Table(table) => write!(f, "table {table}"),
+        }
+    }
+}
+
+/// What the console is shown. Times are unix milliseconds. Exactly one of
+/// `tool` and `resource` is set.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccessRequest {
     pub id: Uuid,
     pub principal_id: Uuid,
     pub principal: String,
-    pub tool: String,
+    /// Who the grant would be for: the delegated end user, or the principal.
+    pub end_user: String,
+    #[serde(skip)]
+    pub access: Access,
+    pub tool: Option<String>,
+    /// A table of schema `resources`.
+    pub resource: Option<String>,
     /// The reason after the `tool_call` controls ran — possibly redacted.
     pub reason: String,
     pub ttl_minutes: u32,
@@ -100,7 +143,10 @@ pub enum DecideError {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Grant {
-    pub tool: String,
+    #[serde(flatten)]
+    pub access: Access,
+    /// The one end user this grant covers.
+    pub end_user: String,
     pub expires_at_ms: u64,
 }
 
@@ -140,8 +186,9 @@ impl Approvals {
         {
             tracing::error!(%error, "could not expire stale access requests");
         }
-        let rows = sqlx::query_as::<_, (Uuid, String, i64)>(
-            "select principal_id, tool, (extract(epoch from expires_at) * 1000)::bigint
+        let rows = sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, String, i64)>(
+            "select principal_id, tool, resource, end_user,
+                    (extract(epoch from expires_at) * 1000)::bigint
              from access_requests
              where status = 'approved' and expires_at > now()",
         )
@@ -150,9 +197,15 @@ impl Approvals {
         match rows {
             Ok(rows) => {
                 let mut grants = self.grants.lock().expect("grants lock");
-                for (principal_id, tool, expires_at_ms) in rows {
+                for (principal_id, tool, resource, end_user, expires_at_ms) in rows {
+                    let access = match (tool, resource) {
+                        (Some(tool), _) => Access::Tool(tool),
+                        (None, Some(table)) => Access::Table(table),
+                        (None, None) => continue,
+                    };
                     grants.entry(principal_id).or_default().push(Grant {
-                        tool,
+                        access,
+                        end_user,
                         expires_at_ms: u64::try_from(expires_at_ms).unwrap_or(0),
                     });
                 }
@@ -173,18 +226,31 @@ impl Approvals {
         list
     }
 
-    pub fn active_grants(&self, principal_id: Uuid) -> Vec<Grant> {
+    /// Live grants of this principal for this end user. A delegating
+    /// principal's grant for one person is not a grant for the next.
+    pub fn active_grants(&self, principal_id: Uuid, end_user: &str) -> Vec<Grant> {
         let now = now_ms();
         let mut grants = self.grants.lock().expect("grants lock");
         let list = grants.entry(principal_id).or_default();
         list.retain(|g| g.expires_at_ms > now);
-        list.clone()
+        list.iter()
+            .filter(|g| g.end_user == end_user)
+            .cloned()
+            .collect()
     }
 
-    pub fn has_grant(&self, principal_id: Uuid, tool: &str) -> bool {
-        self.active_grants(principal_id)
+    pub fn has_grant(&self, principal_id: Uuid, end_user: &str, access: &Access) -> bool {
+        self.active_grants(principal_id, end_user)
             .iter()
-            .any(|g| g.tool == tool)
+            .any(|g| g.access == *access)
+    }
+
+    /// Tables temporarily granted to this end user, for the resource tools.
+    pub fn granted_tables(&self, principal_id: Uuid, end_user: &str) -> Vec<String> {
+        self.active_grants(principal_id, end_user)
+            .into_iter()
+            .filter_map(|g| g.access.table().map(str::to_owned))
+            .collect()
     }
 
     /// Block until a human decides, the wait runs out, or the caller goes
@@ -192,7 +258,7 @@ impl Approvals {
     pub async fn request(
         &self,
         principal: &Principal,
-        tool: &str,
+        access: &Access,
         reason: &str,
         ttl_minutes: u32,
     ) -> Outcome {
@@ -201,7 +267,10 @@ impl Approvals {
             id: Uuid::new_v4(),
             principal_id: principal.id,
             principal: principal.slug.clone(),
-            tool: tool.to_owned(),
+            end_user: principal.user.clone(),
+            access: access.clone(),
+            tool: access.tool().map(str::to_owned),
+            resource: access.table().map(str::to_owned),
             reason: reason.to_owned(),
             ttl_minutes,
             requested_at_ms: now,
@@ -211,10 +280,14 @@ impl Approvals {
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().expect("pending lock");
-            let open = pending
-                .values()
-                .map(|p| (p.request.principal_id, p.request.tool.as_str()));
-            if let Err(message) = admit(open, principal.id, tool) {
+            let open = pending.values().map(|p| {
+                (
+                    p.request.principal_id,
+                    p.request.end_user.clone(),
+                    p.request.access.clone(),
+                )
+            });
+            if let Err(message) = admit(open, principal.id, &principal.user, access) {
                 return Outcome::Refused { message };
             }
             pending.insert(
@@ -233,12 +306,15 @@ impl Approvals {
 
         if let Some(pool) = &self.db {
             let inserted = sqlx::query(
-                "insert into access_requests (id, principal_id, tool, reason, ttl_minutes)
-                 values ($1, $2, $3, $4, $5)",
+                "insert into access_requests
+                   (id, principal_id, tool, resource, end_user, reason, ttl_minutes)
+                 values ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(request.id)
             .bind(request.principal_id)
             .bind(&request.tool)
+            .bind(&request.resource)
+            .bind(&request.end_user)
             .bind(&request.reason)
             .bind(i32::try_from(ttl_minutes).unwrap_or(DEFAULT_TTL_MINUTES as i32))
             .execute(pool)
@@ -325,7 +401,8 @@ impl Approvals {
                 .entry(entry.request.principal_id)
                 .or_default()
                 .push(Grant {
-                    tool: entry.request.tool.clone(),
+                    access: entry.request.access.clone(),
+                    end_user: entry.request.end_user.clone(),
                     expires_at_ms: now_ms() + u64::from(ttl) * 60_000,
                 });
         }
@@ -391,19 +468,21 @@ pub fn clamp_ttl(requested: Option<u32>) -> u32 {
         .clamp(1, MAX_TTL_MINUTES)
 }
 
-/// Rate limit over the currently open `(principal, tool)` pairs.
-pub fn admit<'a>(
-    open: impl Iterator<Item = (Uuid, &'a str)>,
+/// Rate limit over the currently open `(principal, end user, access)`
+/// requests: one per end user and target, a handful per principal.
+pub fn admit(
+    open: impl Iterator<Item = (Uuid, String, Access)>,
     principal_id: Uuid,
-    tool: &str,
+    end_user: &str,
+    access: &Access,
 ) -> Result<(), String> {
     let mut mine = 0;
-    for (owner, open_tool) in open {
+    for (owner, open_user, open_access) in open {
         if owner != principal_id {
             continue;
         }
-        if open_tool == tool {
-            return Err(format!("a request for {tool} is already waiting"));
+        if open_user == end_user && open_access == *access {
+            return Err(format!("a request for {access} is already waiting"));
         }
         mine += 1;
     }
@@ -437,6 +516,34 @@ pub fn validate_target(
         return Target::AlreadyPermitted;
     }
     Target::Requestable
+}
+
+/// Is `table` something this principal can meaningfully ask for? Only a
+/// table the catalog lists as requestable for it; a table outside both lists
+/// is refused without saying whether it exists.
+pub fn validate_table(
+    policy: &Policy,
+    principal: &Principal,
+    has_grant: bool,
+    table: &str,
+) -> Target {
+    let resources = &policy.resources;
+    if has_grant
+        || resources
+            .tables_for(&principal.slug)
+            .iter()
+            .any(|t| t == table)
+    {
+        return Target::AlreadyPermitted;
+    }
+    if resources
+        .requestable_for(&principal.slug)
+        .iter()
+        .any(|t| t == table)
+    {
+        return Target::Requestable;
+    }
+    Target::Refused(format!("table {table} cannot be requested"))
 }
 
 pub fn now_ms() -> u64 {

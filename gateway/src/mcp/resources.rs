@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use sqlx::PgPool;
+use sqlx::{Column as _, Executor as _, PgPool};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -34,8 +34,9 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": DESCRIBE,
             "description": "Structure of the protected SQL database, never data. With no arguments, \
-                            lists the tables you may query. With `tables`, returns their columns \
-                            from information_schema.columns. Call it before resources__query.",
+                            lists the tables you may query and those you may ask the security \
+                            team for. With `tables`, returns their columns from \
+                            information_schema.columns. Call it before resources__query.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "tables": { "type": "array", "items": { "type": "string" } } },
@@ -55,19 +56,93 @@ pub fn tools() -> Vec<Value> {
     ]
 }
 
-/// The tables this identity may query, or the columns of the ones it asked
-/// for. Asking for a table outside the grant is refused, whether or not it
-/// exists.
-pub async fn describe(pool: &PgPool, granted: &[String], wanted: &[String]) -> Result<String, String> {
+/// Why a resource tool refused or failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceError {
+    /// The table is outside this identity's grant. `requestable` says the
+    /// catalog lets it ask for the table; the message then says how.
+    NotGranted {
+        table: String,
+        requestable: bool,
+    },
+    Failed(String),
+}
+
+impl std::fmt::Display for ResourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotGranted {
+                table,
+                requestable: true,
+            } => write!(
+                f,
+                "table {table} needs approval: call control__request_access with \
+                 {{\"table\": \"{table}\", \"reason\": \"<why the user needs it>\"}}, \
+                 then retry"
+            ),
+            Self::NotGranted { table, .. } => {
+                write!(f, "table {table} is not granted to this identity")
+            }
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for ResourceError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+/// The tables this identity may see right now: its catalog grant and the
+/// requestable tables a human approved for this end user.
+pub struct Access<'a> {
+    pub granted: &'a [String],
+    pub requestable: &'a [String],
+}
+
+impl Access<'_> {
+    fn check(&self, table: &str) -> Result<(), ResourceError> {
+        if self.granted.iter().any(|t| t == table) {
+            return Ok(());
+        }
+        Err(ResourceError::NotGranted {
+            table: table.to_owned(),
+            requestable: self.requestable.iter().any(|t| t == table),
+        })
+    }
+}
+
+/// The tables this identity may query (and may ask for), or the columns of
+/// the ones it asked for. Asking for a table outside the grant is refused,
+/// whether or not it exists.
+pub async fn describe(
+    pool: &PgPool,
+    access: &Access<'_>,
+    wanted: &[String],
+) -> Result<String, ResourceError> {
     if wanted.is_empty() {
-        return Ok(if granted.is_empty() {
+        let mut out = if access.granted.is_empty() {
             "no tables are available to this identity\n".to_owned()
         } else {
-            format!("tables: {}\n", granted.join(", "))
-        });
+            format!("tables: {}\n", access.granted.join(", "))
+        };
+        let askable: Vec<&str> = access
+            .requestable
+            .iter()
+            .filter(|t| !access.granted.contains(t))
+            .map(String::as_str)
+            .collect();
+        if !askable.is_empty() {
+            out.push_str(&format!(
+                "needs approval (ask with control__request_access {{table, reason}}): {}\n",
+                askable.join(", ")
+            ));
+        }
+        return Ok(out);
     }
-    if let Some(table) = wanted.iter().find(|table| !granted.contains(table)) {
-        return Err(format!("table {table} is not granted to this identity"));
+    for table in wanted {
+        access.check(table)?;
     }
     let columns = sqlx::query_as::<_, (String, String, String)>(
         "select table_name::text, column_name::text, data_type::text
@@ -128,7 +203,10 @@ pub fn validate_sql(sql: &str) -> Result<String, String> {
         return Err("only SELECT queries are allowed".into());
     }
     if let Some(word) = FORBIDDEN.find(sql) {
-        return Err(format!("{:?} is not allowed in a resource query", word.as_str()));
+        return Err(format!(
+            "{:?} is not allowed in a resource query",
+            word.as_str()
+        ));
     }
     Ok(sql.to_owned())
 }
@@ -138,7 +216,10 @@ pub fn relations(plan: &Value, out: &mut Vec<(String, String)>) {
     match plan {
         Value::Object(map) => {
             if let Some(name) = map.get("Relation Name").and_then(Value::as_str) {
-                let schema = map.get("Schema").and_then(Value::as_str).unwrap_or_default();
+                let schema = map
+                    .get("Schema")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 out.push((schema.to_owned(), name.to_owned()));
             }
             map.values().for_each(|v| relations(v, out));
@@ -158,15 +239,22 @@ pub struct QueryResult {
 pub async fn run(
     pool: &PgPool,
     policy: &Policy,
-    tables: &[String],
+    access: &Access<'_>,
     sql: &str,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult, ResourceError> {
     let sql = validate_sql(sql)?;
     let limits = &policy.resources;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     for statement in [
         "set transaction read only".to_owned(),
-        format!("set local statement_timeout = {}", limits.statement_timeout_ms),
+        // Least privilege: for this transaction only, a role that can read
+        // schema `resources` and nothing else. The plan check below stays as
+        // the second wall.
+        "set local role resources_reader".to_owned(),
+        format!(
+            "set local statement_timeout = {}",
+            limits.statement_timeout_ms
+        ),
         "set local search_path = resources".to_owned(),
     ] {
         sqlx::query(&statement)
@@ -185,10 +273,24 @@ pub async fn run(
     let mut touched = Vec::new();
     relations(&plan, &mut touched);
     for (schema, table) in &touched {
-        if schema != "resources" || !tables.contains(table) {
-            return Err(format!("table {schema}.{table} is not granted to this identity"));
+        if schema != "resources" {
+            return Err(ResourceError::NotGranted {
+                table: format!("{schema}.{table}"),
+                requestable: false,
+            });
         }
+        access.check(table)?;
     }
+
+    // Column order as the query wrote it; the JSON rows below sort their keys.
+    let columns: Vec<String> = (&mut *tx)
+        .describe(&sql)
+        .await
+        .map_err(|e| format!("the query does not plan: {e}"))?
+        .columns()
+        .iter()
+        .map(|column| column.name().to_owned())
+        .collect();
 
     let wrapped = format!(
         "select coalesce(json_agg(q), '[]'::json) from (select * from ({sql}) inner_q limit {}) q",
@@ -207,11 +309,6 @@ pub async fn run(
     };
     let truncated = rows.len() > usize::try_from(limits.max_rows).unwrap_or(usize::MAX);
     rows.truncate(usize::try_from(limits.max_rows).unwrap_or(usize::MAX));
-    let columns = rows
-        .first()
-        .and_then(Value::as_object)
-        .map(|row| row.keys().cloned().collect())
-        .unwrap_or_default();
     Ok(QueryResult {
         columns,
         rows,
@@ -219,16 +316,29 @@ pub async fn run(
     })
 }
 
+/// A value that is wholly a date or timestamp, as Postgres renders one in
+/// JSON. Digit-run PII patterns (phone numbers above all) match these, and a
+/// date column is not personal data.
+static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$",
+    )
+    .expect("static regex")
+});
+
 /// Output guardrails before the rows reach anyone (§ resource engine): the
 /// whole result is evaluated for the audit log, then every string value is
-/// redacted on its own so the rows keep their shape.
+/// redacted on its own so the rows keep their shape. Plain dates and
+/// timestamps pass untouched.
 pub fn guard_rows(policy: &Policy, rows: &mut [Value]) -> Evaluation {
     let text = Value::Array(rows.to_vec()).to_string();
     let evaluation = engine::evaluate(policy, Hook::ResponseOut, &text);
     for row in rows.iter_mut() {
         if let Value::Object(fields) = row {
             for value in fields.values_mut() {
-                if let Value::String(inner) = value {
+                if let Value::String(inner) = value
+                    && !TIMESTAMP.is_match(inner)
+                {
                     *inner = engine::redact(policy, Hook::ResponseOut, inner);
                 }
             }
@@ -246,10 +356,11 @@ pub async fn deliver(
 ) -> Result<Value, String> {
     let row_count = i32::try_from(result.rows.len()).unwrap_or(i32::MAX);
     let id = sqlx::query_scalar::<_, Uuid>(
-        "insert into resource_results (principal_id, trace_id, tool, columns, row_count, rows)
-         values ($1, $2, $3, $4, $5, $6) returning id",
+        "insert into resource_results (principal_id, end_user, trace_id, tool, columns, row_count, rows)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id",
     )
     .bind(principal.id)
+    .bind(&principal.user)
     .bind(trace_id)
     .bind(QUERY)
     .bind(&result.columns)
@@ -269,7 +380,8 @@ pub async fn deliver(
     }))
 }
 
-/// `GET /v1/results/{id}`: the rows of a query, to the identity that ran it.
+/// `GET /v1/results/{id}`: the rows of a query, to the identity that ran it
+/// and the end user it ran for (`X-On-Behalf-Of` for a delegating principal).
 pub async fn result(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -283,10 +395,11 @@ pub async fn result(
         "select columns, row_count, rows,
                 to_char(created_at at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
          from resource_results
-         where id = $1 and principal_id = $2 and expires_at > now()",
+         where id = $1 and principal_id = $2 and end_user = $3 and expires_at > now()",
     )
     .bind(id)
     .bind(principal.id)
+    .bind(&principal.user)
     .fetch_optional(state.db())
     .await;
     match row {
@@ -302,7 +415,11 @@ pub async fn result(
         Ok(None) => refusal(StatusCode::NOT_FOUND, "not_found", "no such result"),
         Err(error) => {
             tracing::error!(%error, "result lookup failed");
-            refusal(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "results are unavailable")
+            refusal(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "results are unavailable",
+            )
         }
     }
 }
@@ -310,10 +427,7 @@ pub async fn result(
 /// The text the tool-result hook sees for a gateway-native result.
 pub fn as_tool_result(text: String) -> Value {
     let mut result = Map::new();
-    result.insert(
-        "content".into(),
-        json!([{ "type": "text", "text": text }]),
-    );
+    result.insert("content".into(), json!([{ "type": "text", "text": text }]));
     Value::Object(result)
 }
 
@@ -339,18 +453,84 @@ mod tests {
         // Neither answer needs the database, so the pool never connects.
         let pool = PgPool::connect_lazy("postgres://localhost/unused").unwrap();
         let granted = vec!["customers".to_owned(), "invoices".to_owned()];
+        let plain = Access {
+            granted: &granted,
+            requestable: &[],
+        };
         assert_eq!(
-            describe(&pool, &granted, &[]).await.unwrap(),
+            describe(&pool, &plain, &[]).await.unwrap(),
             "tables: customers, invoices\n"
         );
+        let nothing = Access {
+            granted: &[],
+            requestable: &[],
+        };
         assert_eq!(
-            describe(&pool, &[], &[]).await.unwrap(),
+            describe(&pool, &nothing, &[]).await.unwrap(),
             "no tables are available to this identity\n"
         );
-        let refused = describe(&pool, &granted, &["customers".to_owned(), "payroll".to_owned()])
+        let refused = describe(
+            &pool,
+            &plain,
+            &["customers".to_owned(), "payroll".to_owned()],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "table payroll is not granted to this identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn describe_tells_the_model_which_tables_it_may_ask_for() {
+        let pool = PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+        let granted = vec!["invoices".to_owned()];
+        let requestable = vec!["customers".to_owned()];
+        let access = Access {
+            granted: &granted,
+            requestable: &requestable,
+        };
+
+        let listing = describe(&pool, &access, &[]).await.unwrap();
+        assert!(listing.starts_with("tables: invoices\n"), "{listing}");
+        assert!(listing.contains("control__request_access"), "{listing}");
+        assert!(listing.trim_end().ends_with(": customers"), "{listing}");
+
+        // A requestable table says how to get it...
+        let refused = describe(&pool, &access, &["customers".to_owned()])
             .await
             .unwrap_err();
-        assert_eq!(refused, "table payroll is not granted to this identity");
+        assert_eq!(
+            refused,
+            ResourceError::NotGranted {
+                table: "customers".to_owned(),
+                requestable: true
+            }
+        );
+        assert!(
+            refused
+                .to_string()
+                .contains(r#"control__request_access with {"table": "customers""#)
+        );
+        // ...anything else gets the plain refusal, so existence does not leak.
+        let unknown = describe(&pool, &access, &["payroll".to_owned()])
+            .await
+            .unwrap_err();
+        assert!(!unknown.to_string().contains("control__request_access"));
+
+        // Once a human approved it, the table is simply granted.
+        let approved = vec!["invoices".to_owned(), "customers".to_owned()];
+        let after = Access {
+            granted: &approved,
+            requestable: &requestable,
+        };
+        assert!(
+            !describe(&pool, &after, &[])
+                .await
+                .unwrap()
+                .contains("needs approval")
+        );
     }
 
     #[test]
@@ -395,5 +575,24 @@ pattern = '\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
         assert_eq!(evaluation.detections[0].control_id, "pii.email");
         assert_eq!(rows[0]["email"], "[REDACTED:pii.email]");
         assert_eq!(rows[0]["mrr_usd"], 4200.0);
+    }
+
+    #[test]
+    fn dates_survive_the_phone_pattern_and_phones_do_not() {
+        let policy = Policy::builtin().unwrap();
+        let mut rows = vec![json!({
+            "issued_at": "2025-07-14T20:00:00+00:00",
+            "opened_at": "2025-07-14 20:00:00.123+02",
+            "day": "2025-07-14",
+            "phone": "+48 601 234 567",
+            "note": "call 2025-07-14 at +48 601 234 567",
+        })];
+        guard_rows(&policy, &mut rows);
+        assert_eq!(rows[0]["issued_at"], "2025-07-14T20:00:00+00:00");
+        assert_eq!(rows[0]["opened_at"], "2025-07-14 20:00:00.123+02");
+        assert_eq!(rows[0]["day"], "2025-07-14");
+        assert_eq!(rows[0]["phone"], "[REDACTED:pii.phone]");
+        // Only a value that is wholly a timestamp is exempt.
+        assert!(!rows[0]["note"].as_str().unwrap().contains("601 234 567"));
     }
 }

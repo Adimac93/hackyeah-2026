@@ -23,8 +23,8 @@ pub struct AppState {
     /// Where model traffic goes, or `mock`.
     pub upstream: String,
     pub admins: Arc<AdminAuth>,
-    /// Read-only connection to the protected resources the MCP resource tools
-    /// query. `None` disables those tools.
+    /// The pool the MCP resource tools query through (each query runs as the
+    /// read-only `resources_reader` role). `None` disables those tools.
     pub resources: Option<PgPool>,
     pub telemetry: Arc<Telemetry>,
     /// Bearer token for the Prometheus endpoint. `None` disables it.

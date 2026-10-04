@@ -250,13 +250,20 @@ fn removing_a_control_disables_it_and_the_diff_says_so() {
     assert_eq!(diff(&before, &after), ["- control a (removed or disabled)"]);
 
     let disabled = parse(&MINIMAL.replace(r#"id = "a""#, "id = \"a\"\nenabled = false")).unwrap();
-    assert_eq!(diff(&before, &disabled), ["- control a (removed or disabled)"]);
+    assert_eq!(
+        diff(&before, &disabled),
+        ["- control a (removed or disabled)"]
+    );
 }
 
 #[test]
 fn the_diff_names_each_changed_field() {
     let before = parse(MINIMAL).unwrap();
-    let after = parse(&MINIMAL.replace("severity = \"high\"", "severity = \"low\"\naction = \"redact\"")).unwrap();
+    let after = parse(&MINIMAL.replace(
+        "severity = \"high\"",
+        "severity = \"low\"\naction = \"redact\"",
+    ))
+    .unwrap();
     assert_eq!(
         diff(&before, &after),
         ["~ control a: action block -> redact; severity high -> low"]
@@ -297,4 +304,23 @@ fn cost_comes_from_the_pricing_table() {
     let cost = policy.cost_usd("m", 500_000, 100_000);
     assert!((cost - 2.0).abs() < 1e-9, "{cost}");
     assert!(policy.cost_usd("unpriced", 1_000_000, 1_000_000).abs() < f64::EPSILON);
+}
+
+#[test]
+fn requestable_tables_parse_and_may_not_also_be_granted() {
+    let src = format!(
+        "{MINIMAL}\n[resources.grants]\napp = [\"invoices\"]\n[resources.requestable]\napp = [\"customers\"]\n"
+    );
+    let policy = parse(&src).unwrap();
+    assert_eq!(policy.resources.tables_for("app"), ["invoices"]);
+    assert_eq!(policy.resources.requestable_for("app"), ["customers"]);
+    assert!(policy.resources.requestable_for("other").is_empty());
+
+    let both = format!(
+        "{MINIMAL}\n[resources.grants]\napp = [\"customers\"]\n[resources.requestable]\napp = [\"customers\"]\n"
+    );
+    assert!(matches!(
+        parse(&both),
+        Err(PolicyError::RequestableGranted { identity, table }) if identity == "app" && table == "customers"
+    ));
 }

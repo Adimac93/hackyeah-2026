@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
+use crate::mcp::native::REQUEST_ACCESS;
 use crate::mcp::resources::{DESCRIBE, QUERY};
 
 /// The value of `UPSTREAM_URL` or `OLLAMA_URL` that selects a mock.
@@ -17,7 +18,9 @@ pub const MOCK: &str = "mock";
 ///
 /// Offered the resource tools and asked a SELECT, it plays the LLM ↔ MCP flow
 /// instead: the columns of the tables the query names, then the query, then
-/// an answer that repeats what the last tool said.
+/// an answer that repeats what the last tool said. A table that needs
+/// approval is requested once with `control__request_access`; on `granted`
+/// the walk starts over.
 pub fn completion(body: &Value) -> Value {
     let messages = body
         .get("messages")
@@ -83,7 +86,13 @@ fn text(message: &Value) -> String {
 }
 
 fn script(messages: &[Value], offered: impl Fn(&str) -> bool) -> Step {
-    let role = |message: &Value| message.get("role").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let role = |message: &Value| {
+        message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
     let question = messages
         .iter()
         .rfind(|m| role(m) == "user")
@@ -108,13 +117,54 @@ fn script(messages: &[Value], offered: impl Fn(&str) -> bool) -> Step {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let result = text(last);
+    let asked_before = messages.iter().any(|m| {
+        m.get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|calls| {
+                calls.iter().any(|c| {
+                    c.pointer("/function/name").and_then(Value::as_str) == Some(REQUEST_ACCESS)
+                })
+            })
+    });
     match sql {
         Some(sql) if called == DESCRIBE && resources && !result.starts_with("refused") => {
             Step::Call(QUERY, json!({ "sql": sql }))
         }
+        // The gateway said how to get the table: ask a human, once.
+        Some(_)
+            if (called == DESCRIBE || called == QUERY)
+                && offered(REQUEST_ACCESS)
+                && !asked_before =>
+        {
+            match NEEDS_APPROVAL.captures(&result) {
+                Some(found) => Step::Call(
+                    REQUEST_ACCESS,
+                    json!({
+                        "table": &found[1],
+                        "reason": format!(
+                            "The user asked: {}",
+                            question.chars().take(120).collect::<String>()
+                        ),
+                    }),
+                ),
+                None => Step::Say(format!("[mock] {called} said: {result}")),
+            }
+        }
+        Some(sql)
+            if called == REQUEST_ACCESS
+                && resources
+                && result.contains(r#""status":"granted""#) =>
+        {
+            Step::Call(DESCRIBE, json!({ "tables": tables_in(&sql) }))
+        }
         _ => Step::Say(format!("[mock] {called} said: {result}")),
     }
 }
+
+static NEEDS_APPROVAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"needs approval: call control__request_access with \{"table": "([A-Za-z0-9_]+)""#)
+        .expect("static regex")
+});
 
 static SELECT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)\bselect\b.+?\bfrom\b.+").expect("static regex"));
@@ -193,7 +243,8 @@ mod tests {
 
     #[test]
     fn a_select_walks_describe_then_query_then_answers() {
-        let sql = "select c.full_name from resources.customers c join invoices i on i.customer_id = c.id";
+        let sql =
+            "select c.full_name from resources.customers c join invoices i on i.customer_id = c.id";
         let mut messages = vec![json!({ "role": "user", "content": format!("Run: {sql}") })];
         let mut body = json!({ "messages": messages, "tools": tools() });
 
@@ -202,14 +253,18 @@ mod tests {
         assert_eq!(arguments, json!({ "tables": ["customers", "invoices"] }));
 
         messages.push(completion(&body)["choices"][0]["message"].clone());
-        messages.push(json!({ "role": "tool", "tool_call_id": "call_1", "content": "customers(id uuid)" }));
+        messages.push(
+            json!({ "role": "tool", "tool_call_id": "call_1", "content": "customers(id uuid)" }),
+        );
         body["messages"] = json!(messages);
         let (name, arguments) = next_call(&body);
         assert_eq!(name, QUERY);
         assert_eq!(arguments, json!({ "sql": sql }));
 
         messages.push(completion(&body)["choices"][0]["message"].clone());
-        messages.push(json!({ "role": "tool", "tool_call_id": "call_3", "content": "{\"row_count\":2}" }));
+        messages.push(
+            json!({ "role": "tool", "tool_call_id": "call_3", "content": "{\"row_count\":2}" }),
+        );
         body["messages"] = json!(messages);
         let reply = completion(&body);
         assert_eq!(reply["choices"][0]["finish_reason"], "stop");
@@ -229,7 +284,75 @@ mod tests {
         let reply = completion(&body);
         assert_eq!(
             reply["choices"][0]["message"]["content"],
-            format!("[mock] {DESCRIBE} said: refused: table payroll is not granted to this identity")
+            format!(
+                "[mock] {DESCRIBE} said: refused: table payroll is not granted to this identity"
+            )
+        );
+    }
+
+    fn with_requests() -> Value {
+        json!([
+            { "type": "function", "function": { "name": DESCRIBE } },
+            { "type": "function", "function": { "name": QUERY } },
+            { "type": "function", "function": { "name": REQUEST_ACCESS } },
+        ])
+    }
+
+    fn turn(name: &str, result: &str) -> [Value; 2] {
+        [
+            json!({ "role": "assistant", "content": null,
+                    "tool_calls": [{ "function": { "name": name } }] }),
+            json!({ "role": "tool", "content": result }),
+        ]
+    }
+
+    const NEEDS: &str = r#"refused: table customers needs approval: call control__request_access with {"table": "customers", "reason": "<why the user needs it>"}, then retry"#;
+
+    #[test]
+    fn a_table_that_needs_approval_is_requested_then_described_again() {
+        let question = json!({ "role": "user", "content": "select email from customers" });
+        let mut messages = vec![question];
+        messages.extend(turn(DESCRIBE, NEEDS));
+        let mut body = json!({ "tools": with_requests(), "messages": messages });
+        let (name, arguments) = next_call(&body);
+        assert_eq!(name, REQUEST_ACCESS);
+        assert_eq!(arguments["table"], "customers");
+        assert!(
+            arguments["reason"]
+                .as_str()
+                .unwrap()
+                .contains("select email from customers")
+        );
+
+        messages.extend(turn(
+            REQUEST_ACCESS,
+            r#"{"status":"granted","expires_at_ms":1}"#,
+        ));
+        body["messages"] = json!(messages);
+        let (name, arguments) = next_call(&body);
+        assert_eq!(name, DESCRIBE);
+        assert_eq!(arguments, json!({ "tables": ["customers"] }));
+
+        // A second refusal is reported, not requested again.
+        messages.extend(turn(DESCRIBE, NEEDS));
+        body["messages"] = json!(messages);
+        assert_eq!(completion(&body)["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn a_denied_request_is_the_answer() {
+        let mut messages =
+            vec![json!({ "role": "user", "content": "select email from customers" })];
+        messages.extend(turn(DESCRIBE, NEEDS));
+        messages.extend(turn(REQUEST_ACCESS, r#"{"status":"denied","note":null}"#));
+        let body = json!({ "tools": with_requests(), "messages": messages });
+        let reply = completion(&body);
+        assert_eq!(reply["choices"][0]["finish_reason"], "stop");
+        assert!(
+            reply["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("denied")
         );
     }
 

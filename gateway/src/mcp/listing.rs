@@ -60,12 +60,13 @@ pub(crate) async fn visible_tools(
 
     // A tool the caller may not invoke is a tool they should not be shown —
     // unless a human granted it for now. Grants are deny-by-default.
-    let grants = state.approvals.active_grants(principal.id);
+    let grants = state.approvals.active_grants(principal.id, &principal.user);
     tools.retain(|tool| {
         tool.get("name")
             .and_then(Value::as_str)
             .is_some_and(|name| {
-                principal.may_call_tool(name) || grants.iter().any(|g| g.tool == name)
+                principal.may_call_tool(name)
+                    || grants.iter().any(|g| g.access.tool() == Some(name))
             })
     });
 
@@ -87,7 +88,9 @@ pub(super) async fn catalog(state: &AppState, policy: &Policy) -> (Vec<Value>, E
     }
     for server in policy.mcp.enabled_servers() {
         let listing = federation::call(&state.http, server, "tools/list", None, json!({})).await;
-        state.telemetry.dependency(&format!("mcp:{}", server.name), listing.is_ok());
+        state
+            .telemetry
+            .dependency(&format!("mcp:{}", server.name), listing.is_ok());
         let listing = match listing {
             Ok(listing) => listing,
             Err(problem) => {
@@ -107,7 +110,12 @@ pub(super) async fn catalog(state: &AppState, policy: &Policy) -> (Vec<Value>, E
             let qualified = federation::qualify(&server.name, &name);
             if let Some((control, reason)) = definition_problem(policy, server, &tool) {
                 tracing::warn!(tool = %qualified, %control, %reason, "tool hidden");
-                hidden.gate(control, Severity::High, Action::Redact, format!("{qualified}: {reason}"));
+                hidden.gate(
+                    control,
+                    Severity::High,
+                    Action::Redact,
+                    format!("{qualified}: {reason}"),
+                );
                 continue;
             }
             tool["name"] = Value::String(qualified);

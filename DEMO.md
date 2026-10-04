@@ -37,7 +37,7 @@ Console open and signed in as an analyst. `just demo` running (gateway + `mcp-de
 
 ### Beat: the model asks the database, the user gets the rows
 
-`just demo` running with `RESOURCES_DATABASE_URL` set. `DA` is `Authorization: Bearer demo-agent-dev-key`.
+`just demo` running. `DA` is `Authorization: Bearer demo-agent-dev-key`.
 
 1. `curl -s $GW/v1/chat/completions -H "$DA" -H 'content-type: application/json' -d '{"model":"llama3.1:8b","mcp":true,"messages":[{"role":"user","content":"select full_name, email from customers"}]}'`
 2. `x_control_layer.tool_calls` shows the model's two calls: `resources__describe`
@@ -93,7 +93,8 @@ Be honest with yourself here so nothing surprises you on stage.
   `20261003210000_gateway_db_policy` migration applied.
 - Concurrency budgets count per gateway instance, not across the fleet.
 - The `balanced` and `strict` profiles currently set the same defaults.
-- The resource tools need `RESOURCES_DATABASE_URL` pointing at a role with
-  `SELECT` on schema `resources` only; the gateway's own checks (single SELECT,
-  read-only transaction, planner-verified table grants) are a second line.
+- The resource tools run on the main connection, switched per transaction to
+  `resources_reader` (`SELECT` on schema `resources` only, from the
+  `20261004130000_resources_mcp` migration); the gateway's own checks (single
+  SELECT, read-only transaction, planner-verified table grants) are a second line.
 - The Vertex judge bills ~$25/day while deployed; tear it down after the demo.
