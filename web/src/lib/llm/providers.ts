@@ -233,37 +233,52 @@ function idleTimeout(ms: number) {
 }
 
 /** `timedOut`: our idle timer fired (node:http reports that abort as an AbortError). */
-function timeoutError(error: unknown, timedOut: boolean): ProviderError {
+function timeoutError(
+  error: unknown,
+  timedOut: boolean,
+  quiet = `The gateway went quiet for ${String(TIMEOUT_MS / 1000)} s. Its model may be cold-starting; try again.`,
+): ProviderError {
   const name = error instanceof Error ? error.name : "unknown";
   console.error(
     "[assistant] gateway unreachable",
     timedOut ? "TimeoutError" : name,
   );
   if (timedOut || name === "TimeoutError") {
-    return new ProviderError(
-      `The gateway went quiet for ${String(TIMEOUT_MS / 1000)} s. Its model may be cold-starting; try again.`,
-    );
+    return new ProviderError(quiet);
   }
   return new ProviderError(
     "The AI Control Layer gateway is unreachable. Is it running?",
   );
 }
 
+interface GatewayCall {
+  /** offer the model the caller's MCP tools; the gateway runs its tool calls */
+  mcp: boolean;
+  /** how long the gateway may stay silent (tool turns and pending approvals send nothing) */
+  idleMs: number;
+  /** what to say when it does */
+  quiet?: string;
+}
+
 /**
- * Through the AI Control Layer gateway, streamed. Plain fetch: we need its refusal bodies
- * and `x_control_layer`. The gateway releases only text its output controls already saw;
- * its last event (verdict or refusal) decides the stored reply.
+ * Through the AI Control Layer gateway, streamed. Our own HTTP client: we need its refusal
+ * bodies and `x_control_layer`. The gateway releases only text its output controls already
+ * saw; its last event (verdict or refusal) decides the stored reply. With `mcp`, tool turns
+ * run first and the answering turn streams; `toolCalls` is what the gateway reported.
  */
-async function callGateway(
+async function streamGateway(
   model: string,
   system: string,
   messages: ChatTurn[],
   principal: string | undefined,
   onDelta: ((text: string) => void) | undefined,
-): Promise<string> {
+  call: GatewayCall,
+): Promise<{ reply: string; toolCalls: unknown }> {
   const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
   // an idle limit, not a total one: a long answer keeps streaming
-  const idle = idleTimeout(TIMEOUT_MS);
+  const idle = idleTimeout(call.idleMs);
+  const failed = (error: unknown) =>
+    timeoutError(error, idle.signal.aborted, call.quiet);
   try {
     let response: Response;
     try {
@@ -277,12 +292,13 @@ async function callGateway(
         body: JSON.stringify({
           model,
           stream: true,
+          ...(call.mcp ? { mcp: true } : {}),
           messages: [{ role: "system", content: system }, ...messages],
         }),
         signal: idle.signal,
       });
     } catch (error) {
-      throw timeoutError(error, idle.signal.aborted);
+      throw failed(error);
     }
 
     // refusals before the answer starts (prompt_in, budgets, upstream down) are plain JSON
@@ -294,10 +310,14 @@ async function callGateway(
       )
     ) {
       const body: unknown = await response.json().catch(() => null);
-      return gatewayReply(
-        interpretGatewayResponse(response.status, body),
-        response.status,
-      );
+      return {
+        reply: gatewayReply(
+          interpretGatewayResponse(response.status, body),
+          response.status,
+        ),
+        toolCalls: (body as GatewayLayerHolder | null)?.x_control_layer
+          ?.tool_calls,
+      };
     }
 
     let text = "";
@@ -328,13 +348,43 @@ async function callGateway(
         handle(events);
       }
     } catch (error) {
-      throw timeoutError(error, idle.signal.aborted);
+      throw failed(error);
     }
     handle(decodeGatewaySse(`${buffer}\n`).events);
-    return gatewayReply(finishGatewayStream(text, ending), response.status);
+    return {
+      reply: gatewayReply(finishGatewayStream(text, ending), response.status),
+      toolCalls:
+        ending?.type === "final"
+          ? (ending.layer as GatewayLayerHolder["x_control_layer"])?.tool_calls
+          : undefined,
+    };
   } finally {
     idle.stop();
   }
+}
+
+/** The part of a gateway answer that lists the MCP tool calls it ran. */
+interface GatewayLayerHolder {
+  x_control_layer?: { tool_calls?: unknown };
+}
+
+/** Through the gateway, streamed, without tools. */
+async function callGateway(
+  model: string,
+  system: string,
+  messages: ChatTurn[],
+  principal: string | undefined,
+  onDelta: ((text: string) => void) | undefined,
+): Promise<string> {
+  const { reply } = await streamGateway(
+    model,
+    system,
+    messages,
+    principal,
+    onDelta,
+    { mcp: false, idleMs: TIMEOUT_MS },
+  );
+  return reply;
 }
 
 function gatewayHeaders(principal: string | undefined): Record<string, string> {
@@ -348,52 +398,32 @@ function gatewayHeaders(principal: string | undefined): Record<string, string> {
 
 /**
  * Through the gateway with its MCP tools (`"mcp": true`): the gateway runs the model's tool
- * calls through its gate and answers once the model is done, so this is buffered. The rows
- * of each `resources__query` never reached the model; they are fetched here, as the same
- * end user, and returned with the steps.
+ * calls through its gate, then streams the answer. The rows of each `resources__query`
+ * never reached the model; they are fetched here, as the same end user, and returned with
+ * the steps.
  */
 async function callGatewayWithTools(
   model: string,
   system: string,
   messages: ChatTurn[],
   principal: string | undefined,
+  onDelta: ((text: string) => void) | undefined,
 ): Promise<{ reply: string; steps: ToolStep[] }> {
   const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
-  const signal = AbortSignal.timeout(TOOLS_TIMEOUT_MS);
-  let response: Response;
-  let body: unknown;
-  try {
-    response = await gatewayRequest(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...gatewayHeaders(principal),
-      },
-      body: JSON.stringify({
-        model,
-        mcp: true,
-        messages: [{ role: "system", content: system }, ...messages],
-      }),
-      signal,
-    });
-    body = await response.json().catch(() => null);
-  } catch (error) {
-    if (signal.aborted) {
-      console.error("[assistant] gateway tool loop timed out");
-      throw new ProviderError(
-        `The gateway did not answer within ${String(TOOLS_TIMEOUT_MS / 1000)} s. An access request may still be waiting for the security team; try again once it is decided.`,
-      );
-    }
-    throw timeoutError(error, false);
-  }
-
-  const reply = gatewayReply(
-    interpretGatewayResponse(response.status, body),
-    response.status,
+  const { reply, toolCalls } = await streamGateway(
+    model,
+    system,
+    messages,
+    principal,
+    onDelta,
+    {
+      mcp: true,
+      // nothing arrives while tools run, or while an access request waits for a human
+      idleMs: TOOLS_TIMEOUT_MS,
+      quiet: `The gateway went quiet for ${String(TOOLS_TIMEOUT_MS / 1000)} s. An access request may still be waiting for the security team; try again once it is decided.`,
+    },
   );
-  const layer = (body as { x_control_layer?: { tool_calls?: unknown } } | null)
-    ?.x_control_layer;
-  const steps = toSteps(layer?.tool_calls);
+  const steps = toSteps(toolCalls);
   const ids = [
     ...new Set(
       steps.flatMap((s) => (s.resultId === undefined ? [] : [s.resultId])),
@@ -490,6 +520,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
           system,
           messages,
           principal,
+          onDelta,
         );
         reply = answer.reply;
         onSteps(answer.steps);
