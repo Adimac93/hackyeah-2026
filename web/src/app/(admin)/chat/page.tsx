@@ -16,6 +16,7 @@ import { deleteAllConversations, deleteConversation } from "./actions";
 import { ChatComposer } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ModelSelect } from "./model-select";
+import { ToolCalls } from "./tool-calls";
 
 const SUGGESTIONS = [
   "What are the password requirements for a new service?",
@@ -107,6 +108,7 @@ export default async function ChatPage({ searchParams }: PageProps<"/chat">) {
                   }`}
                 >
                   {m.content}
+                  <ToolCalls calls={m.tool_calls} />
                   {m.model === null ? null : (
                     <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500">
                       <ProviderIcon

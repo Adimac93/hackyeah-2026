@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   decodeGatewaySse,
   finishGatewayStream,
+  gatewayToolCalls,
   interpretGatewayResponse,
 } from "./gateway.ts";
 import type { GatewayOutcome } from "./gateway.ts";
@@ -187,4 +188,65 @@ void test("finishGatewayStream: clean, redacted, refused and broken-off endings"
     /^🛡 .*secrets\.private-key/,
   );
   assert.equal(finishGatewayStream("partial").ok, false);
+});
+
+void test("gatewayToolCalls reads the access layer's tool calls, rows never included", () => {
+  const ack = JSON.stringify({
+    result_id: "0b6f6f5e-6c5a-4c1e-9a40-3f1b2a9c8d7e",
+    columns: ["full_name", "mrr_usd"],
+    row_count: 5,
+    note: "The rows were delivered to the user.",
+  });
+  assert.deepEqual(
+    gatewayToolCalls({
+      x_control_layer: {
+        tool_calls: [
+          {
+            tool: "resources__describe",
+            status: "ok",
+            content: "customers(id, full_name)",
+          },
+          {
+            tool: "resources__query",
+            status: "ok",
+            result_id: "0b6f6f5e-6c5a-4c1e-9a40-3f1b2a9c8d7e",
+            content: ack,
+          },
+          {
+            tool: "resources__query",
+            status: "refused",
+            result_id: null,
+            content: "refused: console-chat may not read auth.users",
+          },
+          "garbage",
+          { status: "ok" },
+        ],
+      },
+    }),
+    [
+      {
+        tool: "resources__describe",
+        status: "ok",
+        resultId: null,
+        rowCount: null,
+        detail: null,
+      },
+      {
+        tool: "resources__query",
+        status: "ok",
+        resultId: "0b6f6f5e-6c5a-4c1e-9a40-3f1b2a9c8d7e",
+        rowCount: 5,
+        detail: null,
+      },
+      {
+        tool: "resources__query",
+        status: "refused",
+        resultId: null,
+        rowCount: null,
+        detail: "console-chat may not read auth.users",
+      },
+    ],
+  );
+  assert.deepEqual(gatewayToolCalls(null), []);
+  assert.deepEqual(gatewayToolCalls(completion("hi")), []);
 });

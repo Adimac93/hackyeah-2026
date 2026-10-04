@@ -5,8 +5,11 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import type { KeyboardEvent, ReactNode, SubmitEvent } from "react";
 
 import { ArrowUpIcon } from "@/components/icons";
+import type { ToolCallSummary } from "@/lib/assistant";
 import { decodeChatEvents } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
+
+import { ToolCalls } from "./tool-calls";
 
 /** Three bouncing dots in an assistant bubble while the reply is on its way. */
 function TypingBubble() {
@@ -87,6 +90,7 @@ export function ChatComposer({
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState("");
   const [reply, setReply] = useState("");
+  const [toolCalls, setToolCalls] = useState<ToolCallSummary[]>([]);
   const [hasText, setHasText] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -127,6 +131,7 @@ export function ChatComposer({
     const model = form.get("model");
     setSent(typeof message === "string" ? message.trim() : "");
     setReply("");
+    setToolCalls([]);
     setError(null);
     setStreaming(true);
     if (textarea.current !== null) {
@@ -150,6 +155,10 @@ export function ChatComposer({
             }
             case "delta": {
               setReply((text) => text + chatEvent.text);
+              break;
+            }
+            case "tool": {
+              setToolCalls((calls) => [...calls, chatEvent.call]);
               break;
             }
             case "done": {
@@ -217,6 +226,7 @@ export function ChatComposer({
                   {streaming ? (
                     <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-zinc-400 align-text-bottom" />
                   ) : null}
+                  <ToolCalls calls={toolCalls} />
                 </div>
               </div>
             )}

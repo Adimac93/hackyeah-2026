@@ -2,12 +2,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { buildSystemPrompt, mockProvider } from "@/lib/assistant";
-import type { AssistantProvider, ChatTurn } from "@/lib/assistant";
+import type {
+  AssistantProvider,
+  ChatTurn,
+  ToolCallSummary,
+} from "@/lib/assistant";
 import { gatewayRequest } from "@/lib/gateway-http";
 
 import {
   decodeGatewaySse,
   finishGatewayStream,
+  gatewayToolCalls,
   interpretGatewayResponse,
 } from "./gateway";
 import type { GatewayOutcome, GatewayStreamEvent } from "./gateway";
@@ -16,6 +21,8 @@ import type { ModelOption } from "./models";
 import { loadConnectionSecret } from "./secrets";
 
 const TIMEOUT_MS = 60_000;
+/** A tool loop answers only once the model is done: several model turns, no bytes meanwhile. */
+const GATEWAY_IDLE_MS = 180_000;
 const MAX_TOKENS = 16_000;
 
 /** Claude models that take server-side refusal fallbacks and `output_config.effort`. */
@@ -161,7 +168,7 @@ function timeoutError(error: unknown, timedOut: boolean): ProviderError {
   );
   if (timedOut || name === "TimeoutError") {
     return new ProviderError(
-      `The gateway went quiet for ${String(TIMEOUT_MS / 1000)} s. Its model may be cold-starting; try again.`,
+      `The gateway went quiet for ${String(GATEWAY_IDLE_MS / 1000)} s. Its model may be cold-starting; try again.`,
     );
   }
   return new ProviderError(
@@ -169,10 +176,19 @@ function timeoutError(error: unknown, timedOut: boolean): ProviderError {
   );
 }
 
+/** What the model is told about the tools the gateway offers it. */
+const TOOLS_PROMPT = [
+  "",
+  "You can look up company data with the resources tools: resources__describe lists the tables you may query and their columns; resources__query runs one read-only SELECT.",
+  "Query rows are delivered to the user, not to you: you get a result reference and a row count. Tell the user the results are shown below your answer; never invent values.",
+].join("\n");
+
 /**
- * Through the AI Control Layer gateway, streamed. Plain fetch: we need its refusal bodies
- * and `x_control_layer`. The gateway releases only text its output controls already saw;
- * its last event (verdict or refusal) decides the stored reply.
+ * Through the AI Control Layer gateway, with its MCP tools (`"mcp": true`): the gateway runs
+ * the model's tool calls through the access layer and reports them in `x_control_layer`.
+ * Our own HTTP client: we need its refusal bodies and `x_control_layer`. Without tool calls the
+ * gateway streams, releasing only text its output controls already saw; its last event
+ * (verdict or refusal) decides the stored reply. A tool loop is answered whole.
  */
 async function callGateway(
   model: string,
@@ -180,10 +196,11 @@ async function callGateway(
   messages: ChatTurn[],
   principal: string | undefined,
   onDelta: ((text: string) => void) | undefined,
+  onToolCall: ((call: ToolCallSummary) => void) | undefined,
 ): Promise<string> {
   const base = (process.env.GATEWAY_URL ?? "").replace(/\/+$/, "");
   // an idle limit, not a total one: a long answer keeps streaming
-  const idle = idleTimeout(TIMEOUT_MS);
+  const idle = idleTimeout(GATEWAY_IDLE_MS);
   try {
     let response: Response;
     try {
@@ -200,7 +217,11 @@ async function callGateway(
         body: JSON.stringify({
           model,
           stream: true,
-          messages: [{ role: "system", content: system }, ...messages],
+          mcp: true,
+          messages: [
+            { role: "system", content: system + TOOLS_PROMPT },
+            ...messages,
+          ],
         }),
         signal: idle.signal,
       });
@@ -217,10 +238,14 @@ async function callGateway(
       )
     ) {
       const body: unknown = await response.json().catch(() => null);
-      return gatewayReply(
+      const reply = gatewayReply(
         interpretGatewayResponse(response.status, body),
         response.status,
       );
+      for (const call of gatewayToolCalls(body)) {
+        onToolCall?.(call);
+      }
+      return reply;
     }
 
     let text = "";
@@ -293,7 +318,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
     return mockProvider;
   }
 
-  return async ({ history, policies, principal, onDelta }) => {
+  return async ({ history, policies, principal, onDelta, onToolCall }) => {
     const system = buildSystemPrompt(policies);
     const messages = normalizeHistory(history);
     try {
@@ -305,6 +330,7 @@ export function getAssistant(option: ModelOption): AssistantProvider {
           messages,
           principal,
           onDelta,
+          onToolCall,
         );
       } else {
         const credentials =

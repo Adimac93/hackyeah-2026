@@ -3,7 +3,10 @@
 //
 // The gateway speaks the OpenAI chat API, so a request is a normal completion. What it adds:
 // refusals (`{ error: { type, message }, trace_id }`) when a control blocks the prompt or the
-// answer, and an `x_control_layer` block on success saying which controls fired.
+// answer, and an `x_control_layer` block on success saying which controls fired. With
+// `"mcp": true` the gateway also runs the model's MCP tool calls and lists them in
+// `x_control_layer.tool_calls`.
+import type { ToolCallSummary } from "@/lib/assistant";
 
 interface ControlSummary {
   verdict?: string;
@@ -16,6 +19,7 @@ interface GatewayCompletion {
     trace_id?: string;
     prompt_in?: ControlSummary;
     response_out?: ControlSummary;
+    tool_calls?: unknown;
   };
 }
 
@@ -177,5 +181,43 @@ export function finishGatewayStream(
   return interpretGatewayResponse(200, {
     choices: [{ message: { content: text } }],
     x_control_layer: ending.layer,
+  });
+}
+
+/** A `resources__query` acknowledgement's row count, if `content` is one. */
+function ackRowCount(content: string): number | null {
+  try {
+    const ack = JSON.parse(content) as { row_count?: unknown };
+    return typeof ack.row_count === "number" ? ack.row_count : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The MCP tool calls the gateway ran for this answer (`x_control_layer.tool_calls`). */
+export function gatewayToolCalls(body: unknown): ToolCallSummary[] {
+  const calls = (body as GatewayCompletion | null)?.x_control_layer?.tool_calls;
+  if (!Array.isArray(calls)) {
+    return [];
+  }
+  return calls.flatMap((raw: unknown) => {
+    if (typeof raw !== "object" || raw === null) {
+      return [];
+    }
+    const call = raw as Record<string, unknown>;
+    if (typeof call.tool !== "string") {
+      return [];
+    }
+    const content = typeof call.content === "string" ? call.content : "";
+    const refused = call.status !== "ok";
+    return [
+      {
+        tool: call.tool,
+        status: refused ? "refused" : "ok",
+        resultId: typeof call.result_id === "string" ? call.result_id : null,
+        rowCount: refused ? null : ackRowCount(content),
+        detail: refused ? content.replace(/^refused:\s*/, "") || null : null,
+      },
+    ];
   });
 }

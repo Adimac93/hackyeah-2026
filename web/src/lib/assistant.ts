@@ -21,12 +21,25 @@ export interface ChatConversation {
   created_at: string;
   updated_at: string;
 }
+/** One MCP tool call behind an assistant reply, as the gateway reported it. */
+export interface ToolCallSummary {
+  tool: string;
+  status: "ok" | "refused";
+  /** rows the gateway delivered to the user (never to the model), at `/api/results/{id}` */
+  resultId: string | null;
+  rowCount: number | null;
+  /** why a refused call was refused */
+  detail: string | null;
+}
+
 export type ChatMessage = ChatTurn & {
   id: number;
   conversation_id: string;
   created_at: string;
   /** which model wrote an assistant reply; null for the user's messages */
   model: string | null;
+  /** the MCP tool calls behind an assistant reply */
+  tool_calls: ToolCallSummary[];
 };
 
 export type AssistantProvider = (input: {
@@ -36,6 +49,8 @@ export type AssistantProvider = (input: {
   principal?: string;
   /** called with each piece of the reply as the model writes it; the resolved string is the final word */
   onDelta?: (text: string) => void;
+  /** called with each MCP tool call the model made on the way to its reply */
+  onToolCall?: (call: ToolCallSummary) => void;
 }) => Promise<string>;
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };

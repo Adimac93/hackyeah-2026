@@ -33,3 +33,19 @@ void test("decodeChatEvents skips garbled and unknown lines", () => {
     { type: "error", error: "boom" },
   ]);
 });
+
+void test("decodeChatEvents carries tool calls and drops malformed ones", () => {
+  const call = {
+    tool: "resources__query",
+    status: "ok" as const,
+    resultId: "r1",
+    rowCount: 3,
+    detail: null,
+  };
+  const wire = [
+    encodeChatEvent({ type: "tool", call }),
+    `${JSON.stringify({ type: "tool", call: { ...call, status: "maybe" } })}\n`,
+    `${JSON.stringify({ type: "tool", call: { ...call, rowCount: "3" } })}\n`,
+  ].join("");
+  assert.deepEqual(decodeChatEvents(wire).events, [{ type: "tool", call }]);
+});

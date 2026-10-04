@@ -1,5 +1,5 @@
 import { conversationTitle, parseChatMessage } from "@/lib/assistant";
-import type { ChatTurn, PolicySnippet } from "@/lib/assistant";
+import type { ChatTurn, PolicySnippet, ToolCallSummary } from "@/lib/assistant";
 import { requireChatUser } from "@/lib/auth";
 import { encodeChatEvent } from "@/lib/chat-stream";
 import type { ChatStreamEvent } from "@/lib/chat-stream";
@@ -108,6 +108,7 @@ export async function POST(request: Request) {
 
       send({ type: "conversation", id: conversationId });
 
+      const toolCalls: ToolCallSummary[] = [];
       let reply: string;
       try {
         reply = await getAssistant(model)({
@@ -116,6 +117,10 @@ export async function POST(request: Request) {
           policies: (policies ?? []) as PolicySnippet[],
           onDelta: (text) => {
             send({ type: "delta", text });
+          },
+          onToolCall: (call) => {
+            toolCalls.push(call);
+            send({ type: "tool", call });
           },
         });
       } catch (error) {
@@ -137,6 +142,7 @@ export async function POST(request: Request) {
           role: "assistant",
           content: reply.slice(0, MAX_STORED_LENGTH),
           model: model.id,
+          tool_calls: toolCalls,
         });
       if (replyError === null) {
         await supabase
