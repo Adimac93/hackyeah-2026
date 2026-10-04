@@ -33,8 +33,13 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": DESCRIBE,
-            "description": "List the tables you may query and their columns. Returns structure only, never data.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "description": "Structure of the protected SQL database, never data. With no arguments, \
+                            lists the tables you may query. With `tables`, returns their columns \
+                            from information_schema.columns. Call it before resources__query.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "tables": { "type": "array", "items": { "type": "string" } } },
+            },
         }),
         json!({
             "name": QUERY,
@@ -50,15 +55,27 @@ pub fn tools() -> Vec<Value> {
     ]
 }
 
-/// The structure of the tables this identity may query.
-pub async fn describe(pool: &PgPool, tables: &[String]) -> Result<String, String> {
+/// The tables this identity may query, or the columns of the ones it asked
+/// for. Asking for a table outside the grant is refused, whether or not it
+/// exists.
+pub async fn describe(pool: &PgPool, granted: &[String], wanted: &[String]) -> Result<String, String> {
+    if wanted.is_empty() {
+        return Ok(if granted.is_empty() {
+            "no tables are available to this identity\n".to_owned()
+        } else {
+            format!("tables: {}\n", granted.join(", "))
+        });
+    }
+    if let Some(table) = wanted.iter().find(|table| !granted.contains(table)) {
+        return Err(format!("table {table} is not granted to this identity"));
+    }
     let columns = sqlx::query_as::<_, (String, String, String)>(
         "select table_name::text, column_name::text, data_type::text
          from information_schema.columns
          where table_schema = 'resources' and table_name = any($1)
          order by table_name, ordinal_position",
     )
-    .bind(tables)
+    .bind(wanted)
     .fetch_all(pool)
     .await
     .map_err(|error| format!("could not read the resource schema: {error}"))?;
@@ -81,7 +98,7 @@ pub async fn describe(pool: &PgPool, tables: &[String]) -> Result<String, String
         out.push_str(")\n");
     }
     if out.is_empty() {
-        out.push_str("no tables are available to this identity\n");
+        out.push_str("none of these tables exist\n");
     }
     Ok(out)
 }
@@ -315,6 +332,25 @@ mod tests {
         assert!(validate_sql("select * from auth.users").is_err());
         assert!(validate_sql("select * into stolen from customers").is_err());
         assert!(validate_sql("").is_err());
+    }
+
+    #[tokio::test]
+    async fn describe_lists_the_grant_and_refuses_tables_outside_it() {
+        // Neither answer needs the database, so the pool never connects.
+        let pool = PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+        let granted = vec!["customers".to_owned(), "invoices".to_owned()];
+        assert_eq!(
+            describe(&pool, &granted, &[]).await.unwrap(),
+            "tables: customers, invoices\n"
+        );
+        assert_eq!(
+            describe(&pool, &[], &[]).await.unwrap(),
+            "no tables are available to this identity\n"
+        );
+        let refused = describe(&pool, &granted, &["customers".to_owned(), "payroll".to_owned()])
+            .await
+            .unwrap_err();
+        assert_eq!(refused, "table payroll is not granted to this identity");
     }
 
     #[test]

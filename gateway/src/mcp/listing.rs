@@ -20,6 +20,27 @@ pub(super) async fn tools_list(
     principal: &Principal,
     id: &Value,
 ) -> Response {
+    let tools = visible_tools(state, policy, principal).await;
+    result(
+        id,
+        json!({
+            "resultType": "complete",
+            "tools": tools,
+            "ttlMs": 30_000,
+            // The listing is filtered per principal, so a shared intermediary
+            // must never serve one caller's list to another.
+            "cacheScope": "private",
+        }),
+    )
+}
+
+/// The tools this caller is shown, as MCP definitions. The chat endpoint's
+/// tool loop offers the model exactly this list.
+pub(crate) async fn visible_tools(
+    state: &AppState,
+    policy: &Policy,
+    principal: &Principal,
+) -> Vec<Value> {
     let (mut tools, hidden) = catalog(state, policy).await;
 
     if !hidden.detections.is_empty() {
@@ -51,18 +72,7 @@ pub(super) async fn tools_list(
     // The gateway's own tools are always listed: an agent must be able to see
     // its policy and ask for more.
     tools.extend(native::descriptors());
-
-    result(
-        id,
-        json!({
-            "resultType": "complete",
-            "tools": tools,
-            "ttlMs": 30_000,
-            // The listing is filtered per principal, so a shared intermediary
-            // must never serve one caller's list to another.
-            "cacheScope": "private",
-        }),
-    )
+    tools
 }
 
 /// Every tool the gateway serves under its qualified name, whoever asks, and

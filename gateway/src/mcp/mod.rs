@@ -38,6 +38,7 @@ use crate::proxy::{bearer_principal, summarise, verdict_name};
 use crate::risk;
 use crate::state::AppState;
 
+pub(crate) use listing::visible_tools;
 use federation::PROTOCOL_VERSION;
 
 /// Reserved by the spec for transport-level header/body disagreement.
@@ -156,7 +157,6 @@ async fn runaway_counts(
     })
 }
 
-#[expect(clippy::too_many_lines, reason = "one hook after another, in order")]
 async fn tools_call(
     state: &AppState,
     policy: &Arc<Policy>,
@@ -164,17 +164,32 @@ async fn tools_call(
     id: &Value,
     params: &Value,
 ) -> Response {
+    match call_tool(state, policy, principal, params).await {
+        Ok(payload) => result(id, payload),
+        Err((code, message)) => error(id, code, &message),
+    }
+}
+
+/// One `tools/call`, through every hook, for the MCP endpoint and for the
+/// chat endpoint's tool loop alike: whoever drives the model, the gate is the
+/// same. The error is a JSON-RPC code and a message for the caller.
+#[expect(clippy::too_many_lines, reason = "one hook after another, in order")]
+pub(crate) async fn call_tool(
+    state: &AppState,
+    policy: &Arc<Policy>,
+    principal: &Principal,
+    params: &Value,
+) -> Result<Value, (i64, String)> {
     let trace_id = Uuid::new_v4();
     let Some(qualified) = params.get("name").and_then(Value::as_str) else {
-        return error(id, POLICY_DENIED, "tools/call requires a tool name");
+        return Err((POLICY_DENIED, "tools/call requires a tool name".to_owned()));
     };
 
     if native::is_native(qualified) {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-        return match native::call(state, policy, principal, qualified, &arguments).await {
-            Ok(payload) => result(id, payload),
-            Err(message) => error(id, POLICY_DENIED, &message),
-        };
+        return native::call(state, policy, principal, qualified, &arguments)
+            .await
+            .map_err(|message| (POLICY_DENIED, message));
     }
 
     // --- hook 3: tool_call ------------------------------------------------
@@ -234,7 +249,7 @@ async fn tools_call(
         } else {
             POLICY_DENIED
         };
-        return error(id, code, &format!("tool call blocked by {}", blocker.control_id));
+        return Err((code, format!("tool call blocked by {}", blocker.control_id)));
     }
     background::analyse(state, &outbound, job(policy, Hook::ToolCall, &rendered, trace_id, principal, qualified));
 
@@ -245,11 +260,10 @@ async fn tools_call(
             Ok(value) => value,
             Err(error_) => {
                 tracing::error!(%error_, "redaction produced invalid JSON arguments");
-                return error(
-                    id,
+                return Err((
                     POLICY_DENIED,
-                    "redaction could not be applied safely to the tool arguments",
-                );
+                    "redaction could not be applied safely to the tool arguments".to_owned(),
+                ));
             }
         }
     } else {
@@ -282,7 +296,7 @@ async fn tools_call(
         Ok(value) => value,
         Err(problem) => {
             tracing::error!(%problem, "tool call failed");
-            return error(id, UPSTREAM_ERROR, &problem);
+            return Err((UPSTREAM_ERROR, problem));
         }
     };
 
@@ -316,11 +330,7 @@ async fn tools_call(
             .blocked_by()
             .map_or("policy", |d| d.control_id.as_str());
         tracing::warn!(tool = %qualified, control, "tool result blocked");
-        return error(
-            id,
-            POLICY_DENIED,
-            &format!("tool result blocked by {control}"),
-        );
+        return Err((POLICY_DENIED, format!("tool result blocked by {control}")));
     }
     background::analyse(state, &inbound, job(policy, Hook::ToolResult, &text, trace_id, principal, qualified));
 
@@ -339,7 +349,7 @@ async fn tools_call(
         },
     });
 
-    result(id, payload)
+    Ok(payload)
 }
 
 fn job(
@@ -379,7 +389,12 @@ async fn resource_call(
     let tables = policy.resources.tables_for(&principal.slug);
 
     if tool == resources::DESCRIBE {
-        return resources::describe(pool, tables)
+        let wanted = match arguments.get("tables") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(value) => serde_json::from_value::<Vec<String>>(value.clone())
+                .map_err(|_| "resources__describe takes `tables` as a list of table names")?,
+        };
+        return resources::describe(pool, tables, &wanted)
             .await
             .map(resources::as_tool_result);
     }

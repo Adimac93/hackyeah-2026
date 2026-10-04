@@ -3,7 +3,8 @@
 //! This is the integration surface: point any OpenAI client at the gateway and
 //! every call is policed. Two of the four enforcement points are wired here —
 //! `prompt_in` on the way out and `response_out` on the way back. `tool_call`
-//! and `tool_result` are the same engine at the MCP boundary.
+//! and `tool_result` are the same engine at the MCP boundary, which the model
+//! reaches from here through [`agent`] when a request asks for tools.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,7 +25,7 @@ use crate::helper::{self, Help};
 use crate::policy::{Action, Hook, Policy, Severity};
 use crate::risk::{self, RISK_CONTROL};
 use crate::state::AppState;
-use crate::{mock, telemetry::Telemetry};
+use crate::telemetry::Telemetry;
 
 /// Detection id for a model outside the allow lists.
 pub const MODEL_NOT_ALLOWED: &str = "model.not-allowed";
@@ -205,23 +206,21 @@ pub async fn chat_completions(
         inbound,
         event_id,
     };
-    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+    // The tool loop needs each turn whole, so an `"mcp": true` request is
+    // answered buffered even when it asks to stream.
+    let with_tools = body.get("mcp").and_then(Value::as_bool) == Some(true);
+    if !with_tools && body.get("stream").and_then(Value::as_bool) == Some(true) {
         return stream::respond(state, exchange, upstream_body, inflight).await;
     }
     upstream_body["stream"] = json!(false);
 
-    // --- upstream ---------------------------------------------------------
+    // --- upstream, and the MCP tools the model calls on the way -------------
     let upstream_started = Instant::now();
-    let (status, mut completion) = if state.upstream == mock::MOCK {
-        (StatusCode::OK, mock::completion(&upstream_body))
-    } else {
-        let reply = forward(&state, trace_id, &upstream_body).await;
-        state.telemetry.dependency("upstream", reply.is_ok());
-        match reply {
+    let agent::Reply { status, mut completion, tool_calls } =
+        match agent::complete(&state, &exchange.policy, &exchange.principal, trace_id, upstream_body).await {
             Ok(reply) => reply,
             Err(refused) => return refused,
-        }
-    };
+        };
     let upstream_us = micros(upstream_started);
     state.telemetry.observe("upstream", upstream_us);
 
@@ -245,6 +244,7 @@ pub async fn chat_completions(
     // Make the layer's work visible to the caller rather than silently
     // rewriting their data.
     completion["x_control_layer"] = control_layer(&exchange, &outbound);
+    completion["x_control_layer"]["tool_calls"] = json!(tool_calls);
 
     (StatusCode::OK, Json(completion)).into_response()
 }
@@ -412,37 +412,6 @@ pub const fn verdict_name(verdict: Verdict) -> &'static str {
     }
 }
 
-async fn forward(
-    state: &AppState,
-    trace_id: Uuid,
-    body: &Value,
-) -> Result<(StatusCode, Value), Response> {
-    let upstream = state
-        .http
-        .post(format!("{}/v1/chat/completions", state.upstream))
-        .json(body)
-        .send()
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "upstream request failed");
-            refusal(
-                trace_id,
-                StatusCode::BAD_GATEWAY,
-                json!({ "type": "upstream_unavailable", "message": "the upstream model is unreachable" }),
-            )
-        })?;
-
-    let status = upstream.status();
-    let completion = upstream.json::<Value>().await.map_err(|_| {
-        refusal(
-            trace_id,
-            StatusCode::BAD_GATEWAY,
-            json!({ "type": "upstream_unreadable", "message": "the upstream response was not JSON" }),
-        )
-    })?;
-    Ok((status, completion))
-}
-
 pub fn summarise(evaluation: &Evaluation) -> Value {
     json!({
         "verdict": evaluation.verdict,
@@ -547,6 +516,7 @@ fn usage(completion: &Value) -> (i32, i32) {
     (field("prompt_tokens"), field("completion_tokens"))
 }
 
+mod agent;
 mod stream;
 #[cfg(test)]
 mod tests;
