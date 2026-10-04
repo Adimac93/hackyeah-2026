@@ -7,10 +7,12 @@ import {
   tdClass,
   thClass,
 } from "@/components/ui";
-import type { ControlRow } from "@/lib/catalog";
+import type { ControlFields, ControlRow } from "@/lib/catalog";
 import { budgetSpend, fmtWindow } from "@/lib/gateway";
 import type { Budget, UsageRow } from "@/lib/gateway";
 import type { LiveControl, LivePolicy } from "@/lib/gateway-live";
+
+import { ControlEditor } from "./control-editor";
 
 export function Chips({ items, empty }: { items: string[]; empty: string }) {
   if (items.length === 0) {
@@ -67,7 +69,7 @@ const ROW_NOTE: Record<"disabled" | "missing", string> = {
   missing: "in the catalog, but the gateway doesn't enforce it",
 };
 
-function ControlsHead() {
+function ControlsHead({ editable = false }: { editable?: boolean }) {
   return (
     <thead className="border-b border-zinc-800">
       <tr>
@@ -75,6 +77,11 @@ function ControlsHead() {
         <th className={thClass}>Hooks</th>
         <th className={thClass}>Severity</th>
         <th className={`${thClass} text-right`}>Action</th>
+        {editable ? (
+          <th className={thClass}>
+            <span className="sr-only">Edit</span>
+          </th>
+        ) : null}
       </tr>
     </thead>
   );
@@ -84,14 +91,39 @@ function ControlsHead() {
  * The catalog's controls in file order, each joined with what the gateway
  * enforces (`GET /policy`), so the table matches the TOML above it 1:1.
  */
-export function ControlsTable({ rows }: { rows: ControlRow[] }) {
+export function ControlsTable({
+  rows,
+  editing,
+}: {
+  rows: ControlRow[];
+  /** admins: the catalog version and each control's settings, to edit them */
+  editing: {
+    baseSha: string;
+    fields: Partial<Record<string, ControlFields>>;
+  } | null;
+}) {
+  const editCell = (id: string) => {
+    if (editing === null) {
+      return null;
+    }
+    const fields = editing.fields[id];
+    return (
+      <td className={`${tdClass} text-right`}>
+        {fields === undefined ? null : (
+          <ControlEditor id={id} baseSha={editing.baseSha} fields={fields} />
+        )}
+      </td>
+    );
+  };
   return (
     <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/60">
       <table className={tableClass}>
-        <ControlsHead />
+        <ControlsHead editable={editing !== null} />
         <tbody className="divide-y divide-zinc-800">
           {rows.length === 0 && (
-            <EmptyRow cols={4}>The catalog declares no controls.</EmptyRow>
+            <EmptyRow cols={editing === null ? 4 : 5}>
+              The catalog declares no controls.
+            </EmptyRow>
           )}
           {rows.map((row) =>
             row.status === "active" || row.status === "extra" ? (
@@ -105,6 +137,7 @@ export function ControlsTable({ rows }: { rows: ControlRow[] }) {
                 }
               >
                 <ControlCells control={row.control} />
+                {editCell(row.id)}
               </tr>
             ) : (
               <tr key={row.id} className="opacity-60">
@@ -116,6 +149,7 @@ export function ControlsTable({ rows }: { rows: ControlRow[] }) {
                     {row.kind} · {ROW_NOTE[row.status]}
                   </p>
                 </td>
+                {editCell(row.id)}
               </tr>
             ),
           )}

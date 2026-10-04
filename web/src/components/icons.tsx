@@ -124,3 +124,12 @@ export function PaperclipIcon(p: IconProps) {
     />
   );
 }
+
+export function PencilIcon(p: IconProps) {
+  return (
+    <Icon
+      {...p}
+      d="M16.9 3.6a2 2 0 012.8 2.8L8 18l-4 1 1-4L16.9 3.6zM14 6.5l3.5 3.5"
+    />
+  );
+}

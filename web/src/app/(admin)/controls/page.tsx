@@ -1,6 +1,11 @@
 import { Card, ControlSeverityBadge, PageHeader } from "@/components/ui";
 import { requireMember } from "@/lib/auth";
-import { parseCatalogControls, reconcileControls } from "@/lib/catalog";
+import {
+  parseCatalogControls,
+  readControlFields,
+  reconcileControls,
+} from "@/lib/catalog";
+import type { ControlFields } from "@/lib/catalog";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import type {
   AttackSignature,
@@ -75,6 +80,19 @@ export default async function ControlsPage() {
     parseCatalogControls(catalogToml),
     liveControls,
   );
+  // admins edit catalog controls in place; each row gets its settings from the TOML
+  const editing =
+    member.role === "admin" && activeRow !== null && catalogToml !== ""
+      ? {
+          baseSha: activeRow.sha256,
+          fields: Object.fromEntries(
+            rows.flatMap((row) => {
+              const fields = readControlFields(catalogToml, row.id);
+              return fields === null ? [] : [[row.id, fields]];
+            }),
+          ) as Record<string, ControlFields>,
+        }
+      : null;
   // the editor shows the stored active version; warn if the gateway runs another
   const drift =
     live.ok && activeRow !== null && live.data.version !== activeRow.sha256
@@ -145,7 +163,7 @@ export default async function ControlsPage() {
           )}
           {live.ok ? (
             <>
-              <ControlsTable rows={rows} />
+              <ControlsTable rows={rows} editing={editing} />
               {feed.length === 0 ? null : (
                 <div className="space-y-2 pt-2">
                   <h3 className="text-xs font-semibold text-zinc-400">
