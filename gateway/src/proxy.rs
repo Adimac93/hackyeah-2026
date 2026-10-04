@@ -206,10 +206,9 @@ pub async fn chat_completions(
         inbound,
         event_id,
     };
-    // The tool loop needs each turn whole, so an `"mcp": true` request is
-    // answered buffered even when it asks to stream.
-    let with_tools = body.get("mcp").and_then(Value::as_bool) == Some(true);
-    if !with_tools && body.get("stream").and_then(Value::as_bool) == Some(true) {
+    // Streamed with or without tools: `stream::respond` runs the tool loop
+    // turn by turn and streams the answering turn.
+    if body.get("stream").and_then(Value::as_bool) == Some(true) {
         return stream::respond(state, exchange, upstream_body, inflight).await;
     }
     upstream_body["stream"] = json!(false);
