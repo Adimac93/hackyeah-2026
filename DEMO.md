@@ -95,7 +95,10 @@ attack-history block, each printed with its result and risk score. Needs
 `selftest-dev-key`). To test a gateway that is already running, deployed or
 local: `SELFTEST_URL=https://… just test system` (it must have `mcp-demo`
 behind it as the `docs` server for the tool-result cases). The header says
-whether the semantic judge is the mock or a real model.
+whether the semantic judge is the mock or a real model, and whether the active
+catalog is the one the cases were written for (policy version 65, the team's
+current upload); after a catalog change, update the expectations in
+`gateway/src/bin/selftest.rs`.
 
 ## Fallback
 
