@@ -6,6 +6,7 @@ import {
   previewKind,
   resourceDisplayName,
   resourceObjectName,
+  uploadContentType,
 } from "./resources.ts";
 
 void test("previewKind picks a viewer from the MIME type, then the extension", () => {
@@ -45,4 +46,16 @@ void test("fmtBytes", () => {
   assert.equal(fmtBytes(1536), "1.5 KB");
   assert.equal(fmtBytes(52_428_800), "50 MB");
   assert.equal(fmtBytes(null), "—");
+});
+
+void test("uploadContentType allows only pptx, images and txt", () => {
+  assert.equal(
+    uploadContentType("Deck.PPTX"),
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  );
+  assert.equal(uploadContentType("photo.jpg"), "image/jpeg");
+  assert.equal(uploadContentType("notes.txt"), "text/plain");
+  assert.equal(uploadContentType("logo.svg"), null);
+  assert.equal(uploadContentType("report.pdf"), null);
+  assert.equal(uploadContentType("noextension"), null);
 });

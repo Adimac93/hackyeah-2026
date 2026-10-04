@@ -7,8 +7,10 @@ import { useRef, useState } from "react";
 import {
   MAX_RESOURCE_BYTES,
   RESOURCES_BUCKET,
+  UPLOAD_ACCEPT,
   fmtBytes,
   resourceObjectName,
+  uploadContentType,
 } from "@/lib/resources";
 import { supabaseEnv } from "@/lib/supabase/env";
 
@@ -35,6 +37,14 @@ export function Uploader() {
     );
     const results: { tone: "ok" | "error"; text: string }[] = [];
     for (const file of files) {
+      const contentType = uploadContentType(file.name);
+      if (contentType === null) {
+        results.push({
+          tone: "error",
+          text: `${file.name}: only PPTX, images (PNG, JPG, GIF, WebP, AVIF) and TXT can be uploaded.`,
+        });
+        continue;
+      }
       if (file.size > MAX_RESOURCE_BYTES) {
         results.push({
           tone: "error",
@@ -46,7 +56,7 @@ export function Uploader() {
       const { error } = await storage.upload(
         resourceObjectName(file.name, new Date()),
         file,
-        { contentType: file.type || undefined, upsert: false },
+        { contentType, upsert: false },
       );
       results.push(
         error === null
@@ -89,12 +99,13 @@ export function Uploader() {
             : `Uploading ${busy}…`}
         </span>
         <span className="text-xs text-zinc-500">
-          Up to {fmtBytes(MAX_RESOURCE_BYTES)} per file
+          PPTX, images or TXT · up to {fmtBytes(MAX_RESOURCE_BYTES)} per file
         </span>
         <input
           ref={input}
           type="file"
           multiple
+          accept={UPLOAD_ACCEPT}
           className="sr-only"
           disabled={busy !== null}
           onChange={(event) => {

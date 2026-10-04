@@ -7,6 +7,35 @@ export const MAX_RESOURCE_BYTES = 50 * 1024 * 1024;
 /** Text previews read at most this much of a file. */
 export const MAX_TEXT_PREVIEW_BYTES = 512 * 1024;
 
+/**
+ * What may be uploaded, by extension → the Content-Type we send. Keep in step
+ * with the bucket's allowed_mime_types (…_resources_allowed_types.sql), which
+ * Storage enforces server-side. No SVG: it can carry script.
+ */
+export const UPLOAD_TYPES: Record<string, string> = {
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  txt: "text/plain",
+};
+
+/** For the file input's `accept`. */
+export const UPLOAD_ACCEPT = Object.keys(UPLOAD_TYPES)
+  .map((suffix) => `.${suffix}`)
+  .join(",");
+
+/**
+ * The Content-Type to upload a file with, or null when its type isn't allowed.
+ * Decided by extension: browsers report PPTX types inconsistently (often "").
+ */
+export function uploadContentType(fileName: string): string | null {
+  return UPLOAD_TYPES[extension(fileName)] ?? null;
+}
+
 export type PreviewKind = "image" | "pdf" | "video" | "audio" | "text" | "none";
 
 const TEXT_EXTENSIONS = new Set([
