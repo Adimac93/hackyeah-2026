@@ -8,6 +8,7 @@
 #![recursion_limit = "256"]
 
 pub mod admin;
+pub mod app;
 pub mod approvals;
 pub mod audit;
 pub mod background;

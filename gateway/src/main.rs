@@ -12,7 +12,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::get,
 };
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
@@ -20,12 +20,10 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use gateway::admin::{self, auth::AdminAuth};
-use gateway::approvals::{self, Approvals};
+use gateway::approvals::Approvals;
 use gateway::audit::Auditor;
 use gateway::budget::Budgets;
-use gateway::mcp;
 use gateway::policy::{PolicyHandle, store};
-use gateway::proxy;
 use gateway::semantic::Registry;
 use gateway::state::AppState;
 use gateway::telemetry::Telemetry;
@@ -137,22 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/openapi.json", get(openapi))
         .route("/admin/docs", get(swagger_ui))
         .route("/metrics/prometheus", get(prometheus))
-        .route("/v1/chat/completions", post(proxy::chat_completions))
-        .route("/v1/results/{id}", get(mcp::resources::result))
-        .route("/mcp", post(mcp::endpoint))
-        .route("/policy", get(admin::active_policy))
-        .route("/metrics", get(admin::metrics))
-        .route("/admin/policy", post(admin::upload_policy))
-        .route("/admin/policy/versions", get(admin::policy_versions))
-        .route(
-            "/admin/budgets",
-            get(admin::budgets::list).put(admin::budgets::put),
-        )
-        .route("/admin/budgets/{id}", delete(admin::budgets::delete))
-        .route("/admin/audit/export", get(admin::export::export))
-        .route("/admin/risk", get(admin::risk::list))
-        .route("/admin/approvals/stream", get(approvals::http::stream))
-        .route("/admin/approvals/{id}", post(approvals::http::decide))
+        .merge(gateway::app::routes())
         .with_state(state)
         .layer(cors(&environment));
 

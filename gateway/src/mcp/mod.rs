@@ -168,7 +168,30 @@ async fn tools_call(
 ) -> Response {
     match call_tool(state, policy, principal, params).await {
         Ok(payload) => result(id, payload),
-        Err((code, message)) => error(id, code, &message),
+        Err(refused) => Json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": refused.code,
+                "message": refused.message,
+                "data": { "risk_score": refused.risk_score },
+            },
+        }))
+        .into_response(),
+    }
+}
+
+/// Why a `tools/call` was not answered: the JSON-RPC code, a message for the
+/// caller and what the call added to its user's risk score.
+pub(crate) struct Refused {
+    pub code: i64,
+    pub message: String,
+    pub risk_score: f32,
+}
+
+impl Refused {
+    fn new(code: i64, message: String) -> Self {
+        Self { code, message, risk_score: 0.0 }
     }
 }
 
@@ -181,17 +204,17 @@ pub(crate) async fn call_tool(
     policy: &Arc<Policy>,
     principal: &Principal,
     params: &Value,
-) -> Result<Value, (i64, String)> {
+) -> Result<Value, Refused> {
     let trace_id = Uuid::new_v4();
     let Some(qualified) = params.get("name").and_then(Value::as_str) else {
-        return Err((POLICY_DENIED, "tools/call requires a tool name".to_owned()));
+        return Err(Refused::new(POLICY_DENIED, "tools/call requires a tool name".to_owned()));
     };
 
     if native::is_native(qualified) {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
         return native::call(state, policy, principal, qualified, &arguments)
             .await
-            .map_err(|message| (POLICY_DENIED, message));
+            .map_err(|message| Refused::new(POLICY_DENIED, message));
     }
 
     // --- hook 3: tool_call ------------------------------------------------
@@ -271,7 +294,11 @@ pub(crate) async fn call_tool(
         } else {
             POLICY_DENIED
         };
-        return Err((code, format!("tool call blocked by {}", blocker.control_id)));
+        return Err(Refused {
+            code,
+            message: format!("tool call blocked by {}", blocker.control_id),
+            risk_score: risk::of(&outbound),
+        });
     }
     background::analyse(
         state,
@@ -293,7 +320,7 @@ pub(crate) async fn call_tool(
             Ok(value) => value,
             Err(error_) => {
                 tracing::error!(%error_, "redaction produced invalid JSON arguments");
-                return Err((
+                return Err(Refused::new(
                     POLICY_DENIED,
                     "redaction could not be applied safely to the tool arguments".to_owned(),
                 ));
@@ -331,7 +358,7 @@ pub(crate) async fn call_tool(
         Ok(value) => value,
         Err(problem) => {
             tracing::error!(%problem, "tool call failed");
-            return Err((UPSTREAM_ERROR, problem));
+            return Err(Refused::new(UPSTREAM_ERROR, problem));
         }
     };
 
@@ -367,7 +394,11 @@ pub(crate) async fn call_tool(
             .blocked_by()
             .map_or("policy", |d| d.control_id.as_str());
         tracing::warn!(tool = %qualified, control, "tool result blocked");
-        return Err((POLICY_DENIED, format!("tool result blocked by {control}")));
+        return Err(Refused {
+            code: POLICY_DENIED,
+            message: format!("tool result blocked by {control}"),
+            risk_score: risk::of(&outbound) + risk::of(&inbound),
+        });
     }
     background::analyse(
         state,

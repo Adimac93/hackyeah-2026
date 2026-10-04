@@ -4,12 +4,44 @@
 //! catalog's `[risk]` window.
 
 use sqlx::PgPool;
-use crate::engine::Evaluation;
+use crate::budget::BUDGET_PREFIX;
+use crate::engine::{Detection, Evaluation};
 use crate::policy::{Action, Risk, Severity};
 
 /// Detection id for a decision taken on history rather than on content. Not
 /// written back to the history itself, so a refusal does not feed on itself.
 pub const RISK_CONTROL: &str = "risk.history";
+
+/// Blocked and flagged content feeds the risk score. Refusals on spend or on
+/// the score itself do not: an exhausted budget is not an attack, and a
+/// history refusal that raised the history would never expire.
+pub fn counts(detection: &Detection) -> bool {
+    matches!(detection.action, Action::Block | Action::Flag)
+        && !detection.control_id.starts_with(BUDGET_PREFIX)
+        && detection.control_id != RISK_CONTROL
+}
+
+/// What one counted detection adds to the score.
+pub const fn weight(severity: Severity) -> f32 {
+    match severity {
+        Severity::Info => 0.05,
+        Severity::Low => 0.15,
+        Severity::Medium => 0.35,
+        Severity::High => 0.65,
+        Severity::Critical => 1.0,
+    }
+}
+
+/// What one evaluated piece of traffic adds to its user's score: the sum the
+/// audit log writes to `attack_history` for it.
+pub fn of(evaluation: &Evaluation) -> f32 {
+    evaluation
+        .detections
+        .iter()
+        .filter(|d| counts(d))
+        .map(|d| weight(d.severity))
+        .fold(0.0, |total, weight| total + weight)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -77,6 +109,14 @@ pub async fn apply(pool: &PgPool, risk: &Risk, user: &str, evaluation: &mut Eval
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Iterator::sum` over floats starts at -0.0, which reaches the API as
+    /// `-0.0` for a clean request.
+    #[test]
+    fn clean_traffic_adds_exactly_zero() {
+        let clean = crate::engine::evaluate(&crate::policy::Policy::builtin().unwrap(), crate::policy::Hook::PromptIn, "hi");
+        assert!(of(&clean).to_bits() == 0.0_f32.to_bits());
+    }
 
     #[test]
     fn thresholds_tighten_then_block() {

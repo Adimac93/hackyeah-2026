@@ -113,7 +113,7 @@ fn only_a_delegating_principal_may_name_an_end_user() {
 }
 
 async fn refusal_error(hook: Hook, blocker: &Detection) -> (StatusCode, Value) {
-    let response = refusal_for(Uuid::nil(), hook, blocker, None);
+    let response = refusal_for(Uuid::nil(), hook, blocker, None, 0.0);
     let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice::<Value>(&body).unwrap()["error"].clone())

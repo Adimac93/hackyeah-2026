@@ -106,7 +106,7 @@ pub async fn complete(
             let outcome = mcp::call_tool(state, policy, principal, &params).await;
             let content = match &outcome {
                 Ok(payload) => federation::result_text(payload),
-                Err((_, message)) => format!("refused: {message}"),
+                Err(refused) => format!("refused: {}", refused.message),
             };
             tool_calls.push(json!({
                 "tool": call.name,
