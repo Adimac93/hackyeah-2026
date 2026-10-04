@@ -185,8 +185,8 @@ function readString(value: string): string | undefined {
   if (single !== null) {
     return single[1];
   }
-  const basic = /^"((?:[^"\\]|\\.)*)"/.exec(value);
-  return basic === null ? undefined : basic[1].replaceAll(/\\(["\\])/g, "$1");
+  const quoted = /^"((?:[^"\\]|\\.)*)"/.exec(value);
+  return quoted === null ? undefined : quoted[1].replaceAll(/\\(["\\])/g, "$1");
 }
 
 function keyLine(line: string): { key: string; value: string } | null {
@@ -246,6 +246,10 @@ export function readControlFields(
         break;
       }
     }
+  }
+  // the gateway's default when a semantic control leaves it out
+  if (fields.kind === "semantic" && fields.escalateWhen === undefined) {
+    fields.escalateWhen = "suspicious";
   }
   return fields;
 }
@@ -474,4 +478,128 @@ export function diffCatalogs(current: string, next: string): CatalogDiff {
     }
   }
   return diff;
+}
+
+// ---------------------------------------------------------------- adding
+
+export const DETECTOR_VALUES = ["llm_judge", "presidio"] as const;
+
+/** Control ids as the catalog writes them: lowercase, dots for namespaces. */
+const CONTROL_ID = /^[a-z\d][\w.-]{1,79}$/;
+
+export interface NewControl extends ControlFields {
+  id: string;
+  /** semantic only: which detector scores it */
+  detector?: string;
+  /** semantic only: what the detector looks for, in plain language */
+  describes?: string;
+}
+
+/** A TOML basic string ("…"), escaped. */
+function basic(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`)}"`;
+}
+
+/** Why a new control can't be added to this catalog, or null when it can. */
+export function newControlProblem(
+  toml: string,
+  control: NewControl,
+): string | null {
+  if (!CONTROL_ID.test(control.id)) {
+    return "Use an id like secret.stripe-key: lowercase letters, digits, dots, dashes or underscores.";
+  }
+  if (parseCatalogControls(toml).some((c) => c.id === control.id)) {
+    return `The catalog already has a control "${control.id}".`;
+  }
+  const problem = controlFieldsProblem(control);
+  if (problem !== null) {
+    return problem;
+  }
+  if (control.kind === "semantic") {
+    if (
+      !(DETECTOR_VALUES as readonly string[]).includes(control.detector ?? "")
+    ) {
+      return "Pick a detector.";
+    }
+    if ((control.describes ?? "").trim() === "") {
+      return "Describe what the detector should look for.";
+    }
+    if (/[\r\n]/.test(control.describes ?? "")) {
+      return "Keep the description on one line.";
+    }
+  }
+  return null;
+}
+
+/** The TOML block for a new control. */
+function controlBlock(control: NewControl): string[] {
+  const lines = [
+    `[[controls.${control.kind}]]`,
+    `id = ${basic(control.id)}`,
+    ...(control.enabled ? [] : ["enabled = false"]),
+    `hooks = [${control.hooks.map((h) => `"${h}"`).join(", ")}]`,
+    `severity = "${control.severity}"`,
+    `action = "${control.action}"`,
+  ];
+  if (control.kind === "deterministic") {
+    lines.push(`pattern = ${literal(control.pattern ?? "")}`);
+  } else {
+    lines.push(
+      `detector = "${control.detector ?? "llm_judge"}"`,
+      `describes = ${basic((control.describes ?? "").trim())}`,
+      `threshold = ${(control.threshold ?? 0.8).toFixed(2)}`,
+      `escalate_when = "${control.escalateWhen ?? "suspicious"}"`,
+    );
+  }
+  return lines;
+}
+
+/**
+ * The catalog with a new control added after the last control of its kind
+ * (or at the end when there is none), so the file keeps its sections and
+ * every other line stays as written.
+ */
+export function addControl(
+  toml: string,
+  control: NewControl,
+): { ok: true; value: string } | { ok: false; error: string } {
+  const problem = newControlProblem(toml, control);
+  if (problem !== null) {
+    return { ok: false, error: problem };
+  }
+  const eol = toml.includes("\r\n") ? "\r\n" : "\n";
+  const lines = toml.split(/\r?\n/);
+
+  // the last content line (not blank, not a comment) of the last block of this kind
+  let insertAfter = -1;
+  let inKind = false;
+  for (const [index, raw] of lines.entries()) {
+    const line = raw.trim();
+    const block = BLOCK.exec(line);
+    if (block !== null) {
+      inKind = block[1] === control.kind;
+    } else if (line.startsWith("[")) {
+      inKind = false;
+      continue;
+    }
+    if (inKind && line !== "" && !line.startsWith("#")) {
+      insertAfter = index;
+    }
+  }
+
+  const block = controlBlock(control);
+  if (insertAfter === -1) {
+    const trimmed = [...lines];
+    while (trimmed.length > 0 && trimmed.at(-1)?.trim() === "") {
+      trimmed.pop();
+    }
+    return { ok: true, value: [...trimmed, "", ...block, ""].join(eol) };
+  }
+  const result = [
+    ...lines.slice(0, insertAfter + 1),
+    "",
+    ...block,
+    ...lines.slice(insertAfter + 1),
+  ];
+  return { ok: true, value: result.join(eol) };
 }

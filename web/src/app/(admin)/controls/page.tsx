@@ -17,6 +17,7 @@ import type { LivePolicy } from "@/lib/gateway-live";
 import { gatewayFetch } from "@/lib/gateway-live-fetch";
 
 import { CatalogUpload } from "./catalog-upload";
+import { ControlCreator } from "./control-creator";
 import {
   Budgets,
   ControlsTable,
@@ -157,18 +158,23 @@ export default async function ControlsPage() {
         </Card>
 
         <section className="space-y-3">
-          <h2 className="font-serif text-2xl text-zinc-100">
-            Active controls
-            <span className="ml-2 text-xs font-normal text-zinc-500">
-              {rows.length} in the catalog
-            </span>
-            {live.ok && typeof live.data.profile === "string" ? (
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="font-serif text-2xl text-zinc-100">
+              Active controls
               <span className="ml-2 text-xs font-normal text-zinc-500">
-                profile {live.data.profile} · on detect {live.data.on_detect} ·
-                fail {live.data.fail_mode}
+                {rows.length} in the catalog
               </span>
-            ) : null}
-          </h2>
+              {live.ok && typeof live.data.profile === "string" ? (
+                <span className="ml-2 text-xs font-normal text-zinc-500">
+                  profile {live.data.profile} · on detect {live.data.on_detect}{" "}
+                  · fail {live.data.fail_mode}
+                </span>
+              ) : null}
+            </h2>
+            {editing === null ? null : (
+              <ControlCreator baseSha={editing.baseSha} />
+            )}
+          </div>
           {drift === null ? null : (
             <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
               The gateway enforces version{" "}

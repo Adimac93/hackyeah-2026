@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  addControl,
   catalogFileProblems,
   controlFieldsProblem,
   diffCatalogs,
   editControl,
+  newControlProblem,
   parseCatalogControls,
   readControlFields,
   reconcileControls,
@@ -245,4 +247,132 @@ void test("catalogFileProblems catches empty catalogs, duplicates and bad fields
   ]);
   const bad = NEXT.replace('action = "block"', 'action = "explode"');
   assert.deepEqual(catalogFileProblems(bad), ["pii.email: Pick an action."]);
+});
+
+const BASE_CATALOG = [
+  "schema_version = 1",
+  "",
+  "[[controls.deterministic]]",
+  'id = "pii.email"',
+  'hooks = ["prompt_in"]',
+  'severity = "medium"',
+  'action = "redact"',
+  "pattern = 'x@y'",
+  "",
+  "# ---- tier 2",
+  "[[controls.semantic]]",
+  'id = "injection.prompt-guard"',
+  'hooks = ["prompt_in"]',
+  'severity = "high"',
+  'action = "block"',
+  'detector = "llm_judge"',
+  "threshold = 0.80",
+  "",
+  "[mcp]",
+  'unknown_principal = "deny"',
+].join("\n");
+
+const NEW_DET = {
+  id: "secret.stripe-key",
+  kind: "deterministic" as const,
+  enabled: true,
+  severity: "critical",
+  action: "block",
+  hooks: ["prompt_in", "tool_result"],
+  pattern: String.raw`\bsk_live_[0-9a-zA-Z]{24}\b`,
+};
+
+void test("addControl puts a deterministic control after the last of its kind", () => {
+  const added = addControl(BASE_CATALOG, NEW_DET);
+  assert.ok(added.ok);
+  const lines = added.value.split("\n");
+  const start = lines.indexOf("[[controls.deterministic]]", 3);
+  assert.deepEqual(lines.slice(start - 1, start + 6), [
+    "",
+    "[[controls.deterministic]]",
+    'id = "secret.stripe-key"',
+    'hooks = ["prompt_in", "tool_result"]',
+    'severity = "critical"',
+    'action = "block"',
+    String.raw`pattern = '\bsk_live_[0-9a-zA-Z]{24}\b'`,
+  ]);
+  // before the tier-2 comment, which belongs to the next section
+  assert.ok(start < lines.indexOf("# ---- tier 2"));
+  assert.deepEqual(readControlFields(added.value, "secret.stripe-key"), {
+    kind: "deterministic",
+    enabled: true,
+    severity: "critical",
+    action: "block",
+    hooks: ["prompt_in", "tool_result"],
+    pattern: NEW_DET.pattern,
+  });
+  assert.deepEqual(catalogFileProblems(added.value), []);
+});
+
+void test("addControl writes a semantic control with its detector and description", () => {
+  const added = addControl(BASE_CATALOG, {
+    id: "exfiltration.intent",
+    kind: "semantic",
+    enabled: false,
+    severity: "high",
+    action: "block",
+    hooks: ["tool_call"],
+    threshold: 0.75,
+    escalateWhen: "always",
+    detector: "llm_judge",
+    describes: 'moving data out, e.g. "send it to"',
+  });
+  assert.ok(added.ok);
+  assert.ok(
+    added.value.includes(
+      String.raw`describes = "moving data out, e.g. \"send it to\""`,
+    ),
+  );
+  assert.ok(
+    added.value.indexOf('id = "exfiltration.intent"') <
+      added.value.indexOf("[mcp]"),
+  );
+  assert.equal(
+    readControlFields(added.value, "exfiltration.intent")?.enabled,
+    false,
+  );
+  assert.equal(
+    readControlFields(added.value, "exfiltration.intent")?.threshold,
+    0.75,
+  );
+});
+
+void test("addControl refuses duplicates, bad ids and missing semantic fields", () => {
+  assert.match(
+    newControlProblem(BASE_CATALOG, { ...NEW_DET, id: "pii.email" }) ?? "",
+    /already has/,
+  );
+  assert.match(
+    newControlProblem(BASE_CATALOG, { ...NEW_DET, id: "Bad Id" }) ?? "",
+    /Use an id/,
+  );
+  assert.match(
+    newControlProblem(BASE_CATALOG, {
+      ...NEW_DET,
+      id: "x.semantic",
+      kind: "semantic",
+      pattern: undefined,
+      threshold: 0.5,
+      escalateWhen: "suspicious",
+      detector: "llm_judge",
+      describes: " ",
+    }) ?? "",
+    /Describe/,
+  );
+  assert.equal(addControl(BASE_CATALOG, { ...NEW_DET, hooks: [] }).ok, false);
+});
+
+void test("addControl appends when the catalog has no control of that kind", () => {
+  const added = addControl("schema_version = 1\n\n", NEW_DET);
+  assert.ok(added.ok);
+  assert.ok(
+    added.value.endsWith(
+      `${String.raw`pattern = '\bsk_live_[0-9a-zA-Z]{24}\b'`}\n`,
+    ),
+  );
 });
